@@ -1,0 +1,28 @@
+# VS/Build
+.vs/
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.cache
+*.log
+*.pdb
+
+# NuGet
+packages/
+*.nupkg
+# (si usas PackageReference, no habrá carpeta packages/)
+
+# Publicaciones/instaladores
+publish/
+artifacts/
+*.msi
+*.exe
+*.zip
+
+# Config privados / locales
+appsettings.*.json
+*.Secrets.json
+
+# Si tu proyecto usa un archivo local, sube solo un ejemplo:
+serial.sample.txt

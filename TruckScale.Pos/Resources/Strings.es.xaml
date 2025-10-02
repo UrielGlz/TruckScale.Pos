@@ -1,0 +1,82 @@
+﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+    <!-- App / Shell -->
+    <sys:String x:Key="App.Title">TruckScale POS</sys:String>
+    <sys:String x:Key="Theme.Toggle">Tema</sys:String>
+    <sys:String x:Key="Menu.Title">Menú</sys:String>
+    <sys:String x:Key="Menu.NewTicket">Nuevo ticket</sys:String>
+    <sys:String x:Key="Menu.ScaleMonitor">Monitor de báscula</sys:String>
+    <sys:String x:Key="Menu.Tickets">Tickets</sys:String>
+
+    <!-- Monitor -->
+    <sys:String x:Key="LiveWeight">Peso en vivo</sys:String>
+    <sys:String x:Key="Zero">Zero</sys:String>
+    <sys:String x:Key="Tare">Tara</sys:String>
+    <sys:String x:Key="Unit.Kg">kg</sys:String>
+    <sys:String x:Key="Unit.Lb">lb</sys:String>
+
+    <!-- Resumen / Pagos -->
+    <sys:String x:Key="Payment.Options">Opciones de pago</sys:String>
+    <sys:String x:Key="Payment.Total">Monto total</sys:String>
+    <sys:String x:Key="Payment.Received">Pagos recibidos</sys:String>
+    <sys:String x:Key="Payment.Empty">(Se mostrarán aquí los pagos agregados…)</sys:String>
+    <sys:String x:Key="Payment.ReceivedKpi">Pago recibido $</sys:String>
+    <sys:String x:Key="Payment.BalanceKpi">Balance $</sys:String>
+
+    <!-- Teclado -->
+    <sys:String x:Key="Denominations">Denominaciones</sys:String>
+    <sys:String x:Key="Keypad.Clear">Limpiar</sys:String>
+    <sys:String x:Key="Keypad.Add">Agregar</sys:String>
+
+    <!-- Métodos de pago (visibles) -->
+    <sys:String x:Key="Payment.MethodTitle">Método de pago</sys:String>
+    <sys:String x:Key="Pay.Cash">Efectivo</sys:String>
+    <sys:String x:Key="Pay.Credit">Crédito</sys:String>
+    <sys:String x:Key="Pay.Debit">Débito</sys:String>
+    <sys:String x:Key="Pay.Wire">Transferencia</sys:String>
+    <sys:String x:Key="Pay.USD">Dólares</sys:String>
+    <sys:String x:Key="Reference">Referencia</sys:String>
+
+    <!-- Lateral derecho -->
+    <sys:String x:Key="QuickActions">Acciones rápidas</sys:String>
+    <sys:String x:Key="Driver.Register">Registrar chofer</sys:String>
+    <sys:String x:Key="Ticket.New">Nuevo ticket</sys:String>
+    <sys:String x:Key="Reprint">Reimprimir</sys:String>
+    <sys:String x:Key="Search">Buscar</sys:String>
+    <sys:String x:Key="Recent">Recientes</sys:String>
+
+    <!-- Barra de estado -->
+    <sys:String x:Key="Scale.Connected">Báscula: Conectada</sys:String>
+    <sys:String x:Key="Scale.Simulated">Báscula: Simulada</sys:String>
+    <sys:String x:Key="Operator">Operador</sys:String>
+
+    <!-- Modal Registrar Chofer -->
+    <sys:String x:Key="Driver.Dialog.Title">Registrar chofer</sys:String>
+    <sys:String x:Key="Service.Data">Datos del servicio</sys:String>
+    <sys:String x:Key="Client">Cliente</sys:String>
+    <sys:String x:Key="Product">Producto</sys:String>
+    <sys:String x:Key="Driver.Section">Chofer</sys:String>
+    <sys:String x:Key="FirstName">Nombre(s)</sys:String>
+    <sys:String x:Key="LastName">Apellidos</sys:String>
+    <sys:String x:Key="Phone">Teléfono</sys:String>
+    <sys:String x:Key="LicenseNo">No. licencia</sys:String>
+    <sys:String x:Key="LicenseExpiry">Vigencia de licencia</sys:String>
+    <sys:String x:Key="Unit.Section">Unidad</sys:String>
+    <sys:String x:Key="Plates">Placas</sys:String>
+    <sys:String x:Key="UnitType">Tipo de unidad</sys:String>
+    <sys:String x:Key="UnitType.Tractor">Tracto</sys:String>
+    <sys:String x:Key="UnitType.Torton">Torton</sys:String>
+    <sys:String x:Key="UnitType.Truck35">Camión 3.5t</sys:String>
+    <sys:String x:Key="UnitType.Pickup">Pickup</sys:String>
+    <sys:String x:Key="Brand">Marca</sys:String>
+    <sys:String x:Key="Model">Modelo</sys:String>
+    <sys:String x:Key="Notes">Observaciones</sys:String>
+    <sys:String x:Key="Cancel">Cancelar</sys:String>
+    <sys:String x:Key="Save">Guardar</sys:String>
+
+    <!-- Validaciones -->
+    <sys:String x:Key="Validation.MissingFields.Title">Validación</sys:String>
+    <sys:String x:Key="Validation.MissingFields.Body">Faltan datos obligatorios: Nombre, Apellidos y Placas.</sys:String>
+</ResourceDictionary>
