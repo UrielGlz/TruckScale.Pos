@@ -7,6 +7,7 @@ using System.Globalization;
 using System.IO;
 using System.IO.Ports;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -65,27 +66,36 @@ namespace TruckScale.Pos
         // Config mínima (se lee de C:\TruckScale\serial.txt)
         private string _portName = "COM3";
         private int _baud = 9600;
-        private double _minValidWeightLb = 300;
+        private double _minValidWeightLb = 0;
 
         // Últimos valores por canal (0,1,2 = ejes; 3 = total)
-        private readonly Dictionary<int, double> _last = new() { { 0, 0 }, { 1, 0 }, { 2, 0 }, { 3, 0 } };
-        private readonly Dictionary<int, string> _lastTail = new() { { 0, "" }, { 1, "" }, { 2, "" }, { 3, "" } };
-        // Guardamos también la línea cruda por canal para usarla como raw_line en detalle
-        private readonly Dictionary<int, string> _lastRaw = new() { { 0, "" }, { 1, "" }, { 2, "" }, { 3, "" } };
+        readonly Dictionary<int, double> _last = new() { { 0, 0 }, { 1, 0 }, { 2, 0 }, { 3, 0 } };
+        readonly Dictionary<int, string> _lastTail = new() { { 0, "" }, { 1, "" }, { 2, "" }, { 3, "" } };
+       
 
         private double _ultimoTotalGuardado = 0;
 
-        // Tolerancias/umbral 
-        private const double MAX_ERROR_LB = 100;
-        private const double MIN_CHANGE_LB = 200;
 
         // Regex EXACTA de tu prueba (solo enteros)
-        private static readonly System.Text.RegularExpressions.Regex rx =
-        new(@"^%(?<ch>\d)\s*(?<w>\d+)\s*lbG(?<tail>[GR]+)$",
-        System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        //Registro, GG Peso estable, GR El camion esta subiendo y no esta estable
+        static readonly Regex rx = new(@"^%(?<ch>\d)\s*(?<w>\d+)\s*lbG(?<tail>[GR]+)$",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private const double MAX_ERROR = 100;   // |(e0+e1+e2) - total|
         private const double MIN_CAMBIO = 200;  // umbral para registrar una nueva sesión
+
+        // Último timestamp por canal
+        private readonly Dictionary<int, DateTime> _lastSeen = new()
+        {
+            { 0, DateTime.MinValue },
+            { 1, DateTime.MinValue },
+            { 2, DateTime.MinValue },
+            { 3, DateTime.MinValue }
+        };
+
+        private const int AXLE_SYNC_WINDOW_MS = 2000;
+
+
 
         public MainWindow()
         {
@@ -100,8 +110,9 @@ namespace TruckScale.Pos
 
             LoadKeypadConfig();
             BuildKeypadUI();
-            AxlesList.ItemsSource = _currentAxles;
-            RecientesList.ItemsSource = _recentSessions;
+
+            //AxlesList.ItemsSource = _currentAxles;
+            //RecientesList.ItemsSource = _recentSessions;
         }
 
         // ===== Localización / UI básica =====
@@ -291,12 +302,21 @@ namespace TruckScale.Pos
             try { using var _ = await factory.CreateOpenConnectionAsync(); }
             catch (Exception ex)
             {
-                MessageBox.Show($"No se pudo abrir MySQL:\n{ex.Message}", "TruckScale POS", MessageBoxButton.OK, MessageBoxImage.Warning);
+                WarnAndLog("UI_BIND_ERROR",
+               "No se pudo preparar la lista de recientes.",
+               ex.ToString(),
+               "RecientesList.ItemsSource");
             }
             InitSummaryUi();
-            try { RecientesList.ItemsSource = _recentSessions; } catch { }
+            
         }
+        private void WarnAndLog(string kind, string userMessage, string? detail = null, string? raw = null)
+        {
+            _ = (_logger?.LogEventAsync(kind, rawLine: raw, note: detail ?? userMessage)) ?? Task.CompletedTask;
 
+            // Estamos en UI thread en Window_Loaded; si no, usa Dispatcher.BeginInvoke
+            MessageBox.Show(userMessage, "TruckScale POS", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
         // ===== SERIAL: lee C:\TruckScale\serial.txt y abre puerto =====
         private void StartSerialFromConfig()
         {
@@ -321,8 +341,13 @@ namespace TruckScale.Pos
                             _minValidWeightLb = mv;
                     }
                 }
+               
             }
-            catch { /* usa defaults */ }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[CONFIG] Error leyendo serial.txt: {ex.Message}");
+                // seguimos con defaults
+            }
 
             OpenSerial(_portName, _baud);
         }
@@ -410,8 +435,9 @@ namespace TruckScale.Pos
             var m = rx.Match(compact);
             if (!m.Success)
             {
-                // si quieres log local:
-                Debug.WriteLine($"No coincide: {line}");
+                _ = Task.Run(() => _logger?.LogEventAsync(
+                   kind: "NOMATCH",
+                   rawLine: line));
                 return;
             }
 
@@ -421,9 +447,9 @@ namespace TruckScale.Pos
 
             _last[ch] = w;
             _lastTail[ch] = tail;
+            _lastSeen[ch] = DateTime.UtcNow;
 
-            // Live (si quieres actualizar el display con el último canal)
-            _ = Dispatcher.BeginInvoke(new Action(() => UpdateWeightText(w)));
+            //_ = Dispatcher.BeginInvoke(new Action(() => UpdateWeightText(w)));
 
             // 2) Sólo cuando TOTAL (ch=3) viene estable (GG)
             if (ch == 3 && tail == "GG")
@@ -431,32 +457,126 @@ namespace TruckScale.Pos
                 double e0 = _last[0], e1 = _last[1], e2 = _last[2], tot = _last[3];
                 double suma = e0 + e1 + e2;
 
-                // reset visual si TOTAL==0
-                if (tot == 0)
-                {
-                    _ultimoTotalGuardado = 0;
-                    _sessionActive = false; _sessionTotalLb = 0; _axleCount = 0;
-                    _ = Dispatcher.BeginInvoke(new Action(() =>
-                    {
-                        _currentAxles.Clear();
-                        UpdateWeightText(0);
-                    }));
-                    return;
-                }
+                const double MAX_ERROR = 100;
+                const double MIN_CAMBIO = 200;
 
                 bool sumaCuadra = Math.Abs(suma - tot) <= MAX_ERROR;
                 bool cambioOk = Math.Abs(tot - _ultimoTotalGuardado) >= MIN_CAMBIO;
 
                 if (sumaCuadra && cambioOk)
                 {
+                    // (opcional) log a BD tipo "ACCEPT"
                     _ultimoTotalGuardado = tot;
-                    AcceptSnapshot(e0, e1, e2, tot, line);   // <— guardamos y pintamos
+
+                    // equivalente a AppendCsvAxles(...)
+                    _ = AcceptSnapshot(e0, e1, e2, tot, line)
+                     .ContinueWith(t =>
+                     {
+                         var ex = t.Exception?.GetBaseException()?.ToString();
+                         _ = _logger?.LogEventAsync("ACCEPT_EX", rawLine: line, note: ex);
+                     }, TaskContinuationOptions.OnlyOnFaulted);
                 }
                 else
                 {
-                    Debug.WriteLine($"Descartado: sum={suma:0} vs total={tot:0}  Δ={Math.Abs(suma - tot):0} lb");
+                    // (opcional) log "Descartado"
+                    _ = _logger?.LogEventAsync(sumaCuadra ? "DISCARD_DELTA" : "DISCARD_SUM",
+                                               ch: 3, w: tot, tail: tail,
+                                               e0: e0, e1: e1, e2: e2, total: tot,
+                                               sumAxles: suma,
+                                               deltaSumTot: Math.Abs(suma - tot),
+                                               deltaVsLast: Math.Abs(tot - _ultimoTotalGuardado),
+                                               rawLine: line);
                 }
             }
+
+            //if (ch == 3 && tail == "GG")
+            //{
+            //    double e0 = _last[0], e1 = _last[1], e2 = _last[2], tot = _last[3];
+            //    double suma = e0 + e1 + e2;
+
+            //    // 3.1 Reset automático cuando TOTAL vuelve a cero estable
+            //    if (tot == 0)
+            //    {
+            //        _ = Task.Run(() => _logger?.LogEventAsync(
+            //            kind: "RESET_ZERO",
+            //            ch: 3, w: 0, tail: tail, rawLine: line));
+            //        //_ultimoTotalGuardado = 0;
+            //        //_sessionActive = false; _sessionTotalLb = 0; _axleCount = 0;
+            //        //_ = Dispatcher.BeginInvoke(new Action(() =>
+            //        //{
+            //        //    _currentAxles.Clear();
+            //        //    UpdateWeightText(0);
+            //        //}));
+            //        //// No aceptamos una “sesión” de 0
+            //        //return;
+            //    }
+
+            //    // 3.2 Umbral mínimo para evitar ruido (usa lo que leíste de serial.txt)
+            //    if (tot < _minValidWeightLb)
+            //    {
+
+            //         _ = Task.Run(() => _logger?.LogEventAsync(
+            //           kind: "DISCARD_MIN",
+            //           ch: 3, w: tot, tail: tail, rawLine: line,
+            //           note: $"min={_minValidWeightLb:0}"));
+            //        return;
+            //    }
+
+            //    // 3.3 Ventana de sincronía: ejes recientes respecto al TOTAL
+            //    var now = DateTime.UtcNow;
+            //    int freshMaxMs = (int)Math.Max(
+            //    Math.Max((now - _lastSeen[0]).TotalMilliseconds, (now - _lastSeen[1]).TotalMilliseconds),
+            //    (now - _lastSeen[2]).TotalMilliseconds);
+
+            //    bool axlesFresh =
+            //        (now - _lastSeen[0]).TotalMilliseconds <= AXLE_SYNC_WINDOW_MS &&
+            //        (now - _lastSeen[1]).TotalMilliseconds <= AXLE_SYNC_WINDOW_MS &&
+            //        (now - _lastSeen[2]).TotalMilliseconds <= AXLE_SYNC_WINDOW_MS;
+
+            //    //if (!axlesFresh)
+            //    //{
+            //    //    _ = Task.Run(() => _logger?.LogEventAsync(
+            //    //    kind: "DISCARD_SYNC",
+            //    //    ch: 3, w: tot, tail: tail, rawLine: line,
+            //    //    axlesFreshMs: freshMaxMs,
+            //    //    note: $"> {AXLE_SYNC_WINDOW_MS} ms"));
+
+            //    //}
+
+            //    double dSum = Math.Abs(suma - tot);
+            //    double dLast = Math.Abs(tot - _ultimoTotalGuardado);
+
+
+            //    // 3.4 Reglas originales
+            //    bool sumaCuadra = Math.Abs(suma - tot) <= MAX_ERROR;
+            //    bool cambioOk = Math.Abs(tot - _ultimoTotalGuardado) >= MIN_CAMBIO;
+
+            //    if (sumaCuadra && cambioOk)
+            //    {
+            //        _ = Task.Run(() => _logger?.LogEventAsync(
+            //        kind: "ACCEPT",
+            //        ch: 3, w: tot, tail: tail, e0: e0, e1: e1, e2: e2, total: tot,
+            //        sumAxles: suma, deltaSumTot: dSum, deltaVsLast: dLast,
+            //        axlesFreshMs: freshMaxMs, rawLine: line));
+
+            //        _ultimoTotalGuardado = tot;
+            //        _ = AcceptSnapshot(e0, e1, e2, tot, line)
+            //        .ContinueWith(t =>
+            //        {
+            //            var ex = t.Exception?.GetBaseException()?.ToString();
+            //            _ = _logger?.LogEventAsync("ACCEPT_EX", rawLine: line, note: ex);
+            //        }, TaskContinuationOptions.OnlyOnFaulted);
+            //    }
+            //    else
+            //    {
+
+            //        _ = Task.Run(() => _logger?.LogEventAsync(
+            //            kind: sumaCuadra ? "DISCARD_DELTA" : "DISCARD_SUM",
+            //            ch: 3, w: tot, tail: tail, e0: e0, e1: e1, e2: e2, total: tot,
+            //            sumAxles: suma, deltaSumTot: dSum, deltaVsLast: dLast,
+            //            axlesFreshMs: freshMaxMs, rawLine: line));
+            //    }
+            //}
         }
 
 
@@ -465,7 +585,7 @@ namespace TruckScale.Pos
         ///   1) sp_scale_session_insert  -> crea cabecera (una por camión) y regresa session_id/uuid10
         ///   2) sp_scale_axle_insert     -> tres veces (una por eje) usando ese session_id/uuid10
         /// </summary>
-        private async void AcceptSnapshot(double e0, double e1, double e2, double total, string rawLine)
+        private async Task AcceptSnapshot(double e0, double e1, double e2, double total, string rawLine)
         {
             // 1) Congela label + lista de ejes (UI)
             _sessionActive = true; _sessionTotalLb = total; _axleCount = 3;
@@ -493,34 +613,15 @@ namespace TruckScale.Pos
             {
                 if (_logger != null)
                 {
-                    // Encabezado: sp_scale_session_insert (regresa sessionId y leemos uuid10)
-                    var (sessionId, uuid10) =
-                        await _logger.InsertSessionAsync((decimal)Math.Round(total, 3)).ConfigureAwait(false);
+                        var axless = new[]
+                        {
+                    new WeightLogger.AxleSpec(1, (decimal)Math.Round(e0, 3), rawLine),
+                    new WeightLogger.AxleSpec(2, (decimal)Math.Round(e1, 3), rawLine),
+                    new WeightLogger.AxleSpec(3, (decimal)Math.Round(e2, 3), rawLine),
+                };
 
-                    // Detalles: sp_scale_axle_insert por cada eje (pasamos id y uuid10)
-                    await _logger.InsertAxleAsync(
-                        axleIndex: 1,
-                        weightLb: (decimal)Math.Round(e0, 3),
-                        rawLine: rawLine,
-                        sessionId: sessionId,
-                        sessionUuid10: uuid10
-                    ).ConfigureAwait(false);
-
-                    await _logger.InsertAxleAsync(
-                        axleIndex: 2,
-                        weightLb: (decimal)Math.Round(e1, 3),
-                        rawLine: rawLine,
-                        sessionId: sessionId,
-                        sessionUuid10: uuid10
-                    ).ConfigureAwait(false);
-
-                    await _logger.InsertAxleAsync(
-                        axleIndex: 3,
-                        weightLb: (decimal)Math.Round(e2, 3),
-                        rawLine: rawLine,
-                        sessionId: sessionId,
-                        sessionUuid10: uuid10
-                    ).ConfigureAwait(false);
+                    await _logger.InsertFullSessionAsync((decimal)Math.Round(total, 3), axless)
+                                 .ConfigureAwait(false);
                 }
             }
             catch (Exception ex)

@@ -204,5 +204,29 @@ namespace TruckScale.Pos.Domain
             await tx.CommitAsync(ct).ConfigureAwait(false);
             return (session, results);
         }
+        public async Task LogEventAsync(
+        string kind,
+        int? ch = null, double? w = null, string? tail = null,
+        double? e0 = null, double? e1 = null, double? e2 = null, double? total = null,
+        double? sumAxles = null, double? deltaSumTot = null, double? deltaVsLast = null,
+        int? axlesFreshMs = null, string? rawLine = null, string? note = null)
+        {
+            using var conn = await _factory.CreateOpenConnectionAsync().ConfigureAwait(false);
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"
+        INSERT INTO scale_debug
+        (kind,ch,w,tail,e0,e1,e2,total,sum_axles,delta_sum_tot,delta_vs_last,axles_fresh_ms,raw_line,note)
+        VALUES
+        (@kind,@ch,@w,@tail,@e0,@e1,@e2,@total,@sum,@deltasum,@deltalast,@fresh,@raw,@note)";
+            void P(string n, object? v) { var p = cmd.CreateParameter(); p.ParameterName = n; p.Value = v ?? DBNull.Value; cmd.Parameters.Add(p); }
+            P("@kind", kind); P("@ch", ch); P("@w", w); P("@tail", tail);
+            P("@e0", e0); P("@e1", e1); P("@e2", e2); P("@total", total);
+            P("@sum", sumAxles); P("@deltasum", deltaSumTot); P("@deltalast", deltaVsLast);
+            P("@fresh", axlesFreshMs); P("@raw", rawLine); P("@note", note);
+            await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+
     }
+
 }
