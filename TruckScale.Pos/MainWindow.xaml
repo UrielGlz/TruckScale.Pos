@@ -4,7 +4,7 @@
         xmlns:md="http://materialdesigninxaml.net/winfx/xaml/themes"
         Title="{DynamicResource App.Title}" Height="720" Width="1200"
         WindowStartupLocation="CenterScreen"
-        UseLayoutRounding="True" SnapsToDevicePixels="True"
+        UseLayoutRounding="True" SnapsToDevicePixels="True" 
         TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="Auto"
         Style="{StaticResource MaterialDesignWindow}"
         FontFamily="{DynamicResource MaterialDesignFont}"
@@ -130,6 +130,70 @@
         <Style x:Key="DialogSecondaryButton" TargetType="Button" BasedOn="{StaticResource PrimaryOutlined}">
             <Setter Property="MinWidth" Value="96"/>
         </Style>
+        <SolidColorBrush x:Key="StartCtaBg"   Color="#2E7D32"/>
+        <!-- green 800 -->
+        <SolidColorBrush x:Key="StartCtaBgHv" Color="#1B5E20"/>
+        <!-- green 900 -->
+        <SolidColorBrush x:Key="StartCtaFg"   Color="#FFFFFF"/>
+        <!-- Estilo del botón Start -->
+        <Style x:Key="StartCTA" TargetType="Button" BasedOn="{StaticResource PrimaryRaised}">
+            <Setter Property="Foreground" Value="{StaticResource StartCtaFg}"/>
+            <Setter Property="Background" Value="{StaticResource StartCtaBg}"/>
+            <Setter Property="FontSize" Value="18"/>
+            <Setter Property="MinHeight" Value="48"/>
+            <Setter Property="Padding" Value="22,12"/>
+            <!-- Ojo: quitamos ShadowAssist.ShadowDepth -->
+            <Setter Property="md:ButtonAssist.CornerRadius" Value="8"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource StartCtaBgHv}"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#184C1A"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.6"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="ProductOption" TargetType="ToggleButton" BasedOn="{StaticResource MaterialDesignOutlinedButton}">
+            <Setter Property="MinHeight" Value="64"/>
+            <Setter Property="Padding"   Value="14,10"/>
+            <Setter Property="Margin"    Value="0,8,12,0"/>
+            <Setter Property="FontSize"  Value="16"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="md:ButtonAssist.CornerRadius" Value="10"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource MaterialDesignDivider}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Style.Triggers>
+                <!-- Seleccionado -->
+                <Trigger Property="IsChecked" Value="True">
+                    <Setter Property="Background"  Value="{DynamicResource PrimaryHueMidBrush}"/>
+                    <Setter Property="Foreground"  Value="{DynamicResource PrimaryHueMidForegroundBrush}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource PrimaryHueMidBrush}"/>
+                </Trigger>
+                <!-- Deshabilitado -->
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.6"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="PaymentButton" TargetType="Button" BasedOn="{StaticResource PrimaryOutlined}">
+            <Setter Property="Margin" Value="6,0,0,0"/>
+            <Style.Triggers>
+                <!-- Cuando esté seleccionado, “parece” Raised cambiando colores -->
+                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource PrimaryHueMidBrush}"/>
+                    <Setter Property="Foreground" Value="{DynamicResource PrimaryHueMidForegroundBrush}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource PrimaryHueMidBrush}"/>
+                    <!-- Quitar cualquier md:ShadowAssist.ShadowDepth -->
+                </DataTrigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.6"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
     </Window.Resources>
 
     <md:DialogHost x:Name="RootDialog">
@@ -147,9 +211,17 @@
 
             <!-- ===== CONTENIDO ===== -->
             <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="47"/>
+                    <RowDefinition/>
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="73*"/>
+                    <ColumnDefinition Width="1127*"/>
+                </Grid.ColumnDefinitions>
                 <!-- Top bar -->
-                <md:ColorZone Mode="Standard" Padding="12" Height="56" VerticalAlignment="Top"
-                              Background="{DynamicResource MaterialDesignPaper}">
+                <md:ColorZone Mode="Standard" Padding="12" Height="56"
+                              Background="{DynamicResource MaterialDesignPaper}" Grid.ColumnSpan="2" Grid.RowSpan="2">
                     <DockPanel LastChildFill="True">
                         <Button Content="☰" Width="40" Height="32" Margin="0,0,8,0" Click="ToggleDrawer_Click"/>
                         <TextBlock Text="{DynamicResource App.Title}" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/>
@@ -160,7 +232,7 @@
                 </md:ColorZone>
 
                 <!-- Layout principal -->
-                <Grid Margin="16,72,16,32">
+                <Grid Margin="16,25,16,32" Grid.ColumnSpan="2" Grid.Row="1">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="320"/>
                         <ColumnDefinition Width="*"/>
@@ -168,20 +240,20 @@
                     </Grid.ColumnDefinitions>
 
                     <!-- ===== COLUMNA IZQUIERDA ===== -->
-                    <Grid Grid.Column="0" Margin="0,0,16,0">
+                    <Grid Grid.Column="0" Margin="0,0,16,0" RenderTransformOrigin="0.509,0.562">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto" MinHeight="491"/>
+                            <RowDefinition Height="Auto" MinHeight="61"/>
                         </Grid.RowDefinitions>
 
                         <!-- MONITOR -->
-                        <md:Card Grid.Row="0">
-                            <StackPanel>
+                        <md:Card Grid.Row="0" Grid.RowSpan="2" Margin="0,0,0,58">
+                            <StackPanel Margin="0,-2,0,2">
                                 <TextBlock Text="{DynamicResource LiveWeight}" Style="{StaticResource TitleLarge}"/>
                                 <Border Margin="0,8,0,12" Padding="12" CornerRadius="10"
-                                        Background="{DynamicResource MaterialDesignCardBackground}">
-                                    <Viewbox Stretch="Uniform" StretchDirection="DownOnly" MaxHeight="120">
+                                        Background="{DynamicResource MaterialDesignCardBackground}" Height="125">
+                                    <Viewbox Stretch="Uniform" StretchDirection="DownOnly" MaxHeight="120" Margin="0,0,0,20">
                                         <TextBlock x:Name="WeightText"
                                                    Text="0.0 kg"
                                                    FontSize="72"
@@ -189,22 +261,133 @@
                                                    HorizontalAlignment="Center"/>
                                     </Viewbox>
                                 </Border>
-                                <UniformGrid Columns="2" Margin="0,8,0,0">
-                                    <Button Style="{StaticResource PrimaryRaised}" Content="{DynamicResource Zero}" Margin="0,0,8,0" Click="Zero_Click"/>
-                                    <Button Style="{StaticResource PrimaryRaised}" Content="{DynamicResource Tare}" Margin="8,0,0,0" Click="Tara_Click"/>
-                                </UniformGrid>
+                                <Grid Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="2*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <Button Grid.Column="0" Style="{StaticResource StartCTA}" Click="Start_Click">
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                            <md:PackIcon Kind="PlayCircle" Width="18" Height="18" Margin="0,0,8,0"/>
+                                            <TextBlock Text="{DynamicResource Start}"/>
+                                        </StackPanel>
+                                    </Button>
+
+                                    <Button Grid.Column="1" Style="{StaticResource PrimaryOutlined}" Content="{DynamicResource Zero}" Margin="8,0,0,0" Click="Zero_Click"/>
+                                </Grid>
+
+
                                 <!-- Ejes por sesión (se congela hasta próximo camión) -->
                                 <StackPanel Margin="0,12,0,0">
                                     <TextBlock Text="Ejes por sesión" Style="{StaticResource TitleLarge}" />
-                                    <ListBox x:Name="AxlesList" Height="120" ItemsSource="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=_currentAxles}" />
+                                    <ListBox x:Name="AxlesList" Height="7" ItemsSource="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=_currentAxles}" />
                                 </StackPanel>
+                                <Label x:Name="lblEje1" Content="Label" Height="42" Width="237" FontSize="24"/>
+                                <Label x:Name="lblEje2" Content="Label" Height="42" Width="237" FontSize="24"/>
+                                <Label x:Name="lblEje3" Content="Label" Height="42" Width="237" FontSize="24"/>
+                                <Label x:Name="lblUUID" Content="Label2" Height="42" Width="237" FontSize="24"/>
+                                <!--<Label x:Name="lblTemp" Content="Label2" Height="42" Width="237" FontSize="24"/>-->
 
                             </StackPanel>
                         </md:Card>
+                        
+                        <!-- STATUS CARD -->
+                        <md:Card Grid.Row="2" x:Name="StatusCard" Padding="40" Margin="0,8,0,0">
+
+                            <md:Card.Resources>
+                                <!-- Idle / Waiting -->
+                                <SolidColorBrush x:Key="StIdleBg" Color="#ECEFF1"/>
+                                <!-- blue-grey 50 -->
+                                <SolidColorBrush x:Key="StIdleBr" Color="#90A4AE"/>
+                                <!-- blue-grey 300 -->
+                                <SolidColorBrush x:Key="StIdleFg" Color="#37474F"/>
+                                <!-- blue-grey 800 -->
+
+                                <!-- Connected / Connecting / Error (ya las tienes) -->
+                                <SolidColorBrush x:Key="StConnectedBg" Color="#E8F5E9"/>
+                                <SolidColorBrush x:Key="StConnectedBr" Color="#2E7D32"/>
+                                <SolidColorBrush x:Key="StConnectedFg" Color="#1B5E20"/>
+
+                                <SolidColorBrush x:Key="StConnectingBg" Color="#FFF8E1"/>
+                                <SolidColorBrush x:Key="StConnectingBr" Color="#F9A825"/>
+                                <SolidColorBrush x:Key="StConnectingFg" Color="#5D4037"/>
+
+                                <SolidColorBrush x:Key="StErrorBg" Color="#FFEBEE"/>
+                                <SolidColorBrush x:Key="StErrorBr" Color="#C62828"/>
+                                <SolidColorBrush x:Key="StErrorFg" Color="#B71C1C"/>
+
+
+                               
+                            </md:Card.Resources>
+
+                            <!-- Estilo del card con disparadores por estado -->
+                            <md:Card.Style>
+                                <Style TargetType="{x:Type md:Card}">
+                                    <Setter Property="Background" Value="{DynamicResource MaterialDesignCardBackground}"/>
+                                    <Setter Property="BorderBrush" Value="{DynamicResource MaterialDesignDivider}"/>
+                                    <Setter Property="BorderThickness" Value="1"/>
+                                    <Setter Property="md:ElevationAssist.Elevation" Value="Dp2"/>
+
+                                    <Style.Triggers>
+                                        <!-- Waiting -->
+                                        <DataTrigger Binding="{Binding ElementName=lblTemp, Path=Content}" Value="Waiting">
+                                            <Setter Property="Background"  Value="{StaticResource StIdleBg}"/>
+                                            <Setter Property="BorderBrush" Value="{StaticResource StIdleBr}"/>
+                                        </DataTrigger>
+
+                                        <!-- Connected -->
+                                        <DataTrigger Binding="{Binding ElementName=lblTemp, Path=Content}" Value="Connected">
+                                            <Setter Property="Background"  Value="{StaticResource StConnectedBg}"/>
+                                            <Setter Property="BorderBrush" Value="{StaticResource StConnectedBr}"/>
+                                        </DataTrigger>
+
+                                        <!-- Connecting -->
+                                        <DataTrigger Binding="{Binding ElementName=lblTemp, Path=Content}" Value="Connecting">
+                                            <Setter Property="Background"  Value="{StaticResource StConnectingBg}"/>
+                                            <Setter Property="BorderBrush" Value="{StaticResource StConnectingBr}"/>
+                                        </DataTrigger>
+
+                                        <!-- Error -->
+                                        <DataTrigger Binding="{Binding ElementName=lblTemp, Path=Content}" Value="Error">
+                                            <Setter Property="Background"  Value="{StaticResource StErrorBg}"/>
+                                            <Setter Property="BorderBrush" Value="{StaticResource StErrorBr}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </md:Card.Style>
+
+                            <!-- Contenido: SOLO el label del estado -->
+                            <Label x:Name="lblTemp"  Grid.Row="0" Content="Waiting"   HorizontalContentAlignment="Center" FontSize="24" FontWeight="SemiBold">
+                                <Label.Style>
+                                    <Style TargetType="Label">
+                                        <Setter Property="Foreground" Value="{DynamicResource Foreground}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Content, RelativeSource={RelativeSource Self}}" Value="Waiting">
+                                                <Setter Property="Foreground" Value="{StaticResource StIdleFg}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Content, RelativeSource={RelativeSource Self}}" Value="Connected">
+                                                <Setter Property="Foreground" Value="{StaticResource StConnectedFg}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Content, RelativeSource={RelativeSource Self}}" Value="Connecting">
+                                                <Setter Property="Foreground" Value="{StaticResource StConnectingFg}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Content, RelativeSource={RelativeSource Self}}" Value="Error">
+                                                <Setter Property="Foreground" Value="{StaticResource StErrorFg}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Label.Style>
+                            </Label>
+                        </md:Card>
+
+                        <Label x:Name="lblEstado" Content="Label" HorizontalAlignment="Center" Margin="0,466,0,0"  Opacity="0.7" FontStyle="Italic" Grid.Row="1" VerticalAlignment="Top" RenderTransformOrigin="0.662,2.549" Height="88" Grid.RowSpan="2" Width="284"/>
+                        <!--<TextBlock x:Name="lblEstado" Margin="0,6,0,0" Opacity="0.7" FontStyle="Italic"    Text="Press Start to begin."/>-->
+
                     </Grid>
 
                     <!-- ===== COLUMNA CENTRAL ===== -->
-                    <Grid Grid.Column="1" Margin="0,0,16,0">
+                    <Grid Grid.Column="1" x:Name="MidCol" Margin="0,0,16,0">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
@@ -229,23 +412,17 @@
                                 </Grid.ColumnDefinitions>
 
                                 <!-- ===== Ledger (izquierda) ===== -->
+                                <!-- ===== Ledger (izquierda) ===== -->
                                 <StackPanel Grid.Column="0">
-                                    <TextBlock Text="{DynamicResource Payment.Options}" Style="{StaticResource TitleLarge}" Margin="0,0,0,6"/>
+                                    <!-- Encabezado -->
+                                    <TextBlock Text="Order total" Style="{StaticResource TitleLarge}" Margin="0,0,0,6"/>
 
-                                    <!-- KPI GRANDE: Monto total -->
-                                    <Border CornerRadius="12" Padding="12" Margin="0,0,12,12"
-                                            Background="{DynamicResource MaterialDesignCardBackground}"
-                                            BorderBrush="{DynamicResource MaterialDesignDivider}" BorderThickness="1">
-                                        <StackPanel>
-                                            <TextBlock Text="{DynamicResource Payment.Total}" Style="{StaticResource KpiCaption}"/>
-                                            <Viewbox Stretch="Uniform" Height="44">
-                                                <TextBlock x:Name="TotalVentaBigText"
-                                                           Text="$0.00" FontWeight="SemiBold"
-                                                           Typography.NumeralAlignment="Tabular"/>
-                                            </Viewbox>
-                                        </StackPanel>
+                                    <!-- KPI GRANDE: Monto total (sin Viewbox) -->
+                                    <Border CornerRadius="12" Padding="16" Margin="0,0,12,12" Background="{DynamicResource MaterialDesignCardBackground}" BorderBrush="{DynamicResource MaterialDesignDivider}" BorderThickness="1" SnapsToDevicePixels="True">
+                                        <TextBlock x:Name="TotalVentaBigText" Text="$0.00" HorizontalAlignment="Stretch" TextAlignment="Center" FontSize="42" FontWeight="SemiBold" TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType" TextOptions.TextHintingMode="Fixed" Typography.NumeralAlignment="Tabular" Typography.NumeralStyle="Lining"/>
                                     </Border>
                                 </StackPanel>
+
 
                                 <!-- Separador 1 -->
                                 <Border Grid.Column="1" Background="{DynamicResource MaterialDesignDivider}"/>
@@ -330,8 +507,65 @@
                                 </Grid.ColumnDefinitions>
 
                                 <Border Grid.Column="0" BorderBrush="{DynamicResource MaterialDesignDivider}"
-                                        BorderThickness="0,0,1,0" Padding="0,0,12,0">
+        BorderThickness="0,0,1,0" Padding="0,0,12,0">
+                                    <!-- Estilos locales SOLO para esta columna -->
+                                    <Border.Resources>
+                                        <!-- Toggle tipo card -->
+                                        <Style x:Key="ProductOption" TargetType="ToggleButton"
+               BasedOn="{StaticResource MaterialDesignOutlinedButton}">
+                                            <Setter Property="MinHeight" Value="64"/>
+                                            <Setter Property="Padding"   Value="14,10"/>
+                                            <Setter Property="Margin"    Value="0,0,12,8"/>
+                                            <Setter Property="FontSize"  Value="16"/>
+                                            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                                            <Setter Property="md:ButtonAssist.CornerRadius" Value="10"/>
+                                            <Setter Property="BorderBrush" Value="{DynamicResource MaterialDesignDivider}"/>
+                                            <Setter Property="BorderThickness" Value="1"/>
+                                            <Style.Triggers>
+                                                <Trigger Property="IsChecked" Value="True">
+                                                    <Setter Property="Background"  Value="{DynamicResource PrimaryHueMidBrush}"/>
+                                                    <Setter Property="Foreground"  Value="{DynamicResource PrimaryHueMidForegroundBrush}"/>
+                                                    <Setter Property="BorderBrush" Value="{DynamicResource PrimaryHueMidBrush}"/>
+                                                </Trigger>
+                                                <Trigger Property="IsEnabled" Value="False">
+                                                    <Setter Property="Opacity" Value="0.6"/>
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Resources>
+
                                     <StackPanel>
+                                        
+                                        <!-- === NUEVO: selección de servicio (side-by-side) === -->
+                                        <TextBlock Text="Service" Style="{StaticResource TitleLarge}" Margin="0,0,0,6"/>
+
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <!-- Weigh -->
+                                            <ToggleButton x:Name="WeighToggle" Grid.Column="0" Style="{StaticResource ProductOption}"  Margin="0,0,8,0" Checked="WeighToggle_Checked">
+                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <md:PackIcon Kind="Scale" Width="20" Height="20" Margin="0,0,10,0"/>
+                                                    <TextBlock Text="Weigh" FontWeight="SemiBold"/>
+                                                </StackPanel>
+                                            </ToggleButton>
+
+                                            <!-- Reweigh -->
+                                            <ToggleButton x:Name="ReweighToggle" Grid.Column="1" Style="{StaticResource ProductOption}" Margin="8,0,0,0" Checked="ReweighToggle_Checked">
+                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <md:PackIcon Kind="History" Width="20" Height="20" Margin="0,0,2,0"/>
+                                                    <TextBlock Text="Reweigh" FontWeight="SemiBold"/>
+                                                </StackPanel>
+                                            </ToggleButton>
+                                        </Grid>
+
+
+                                        <Separator Margin="0,8,0,8"/>
+
+                                        <!-- === EXISTENTE: Denominations === -->
                                         <TextBlock Text="{DynamicResource Denominations}" Margin="0,0,0,6" Opacity="0.7"/>
                                         <ItemsControl x:Name="DenomsHost">
                                             <ItemsControl.ItemsPanel>
@@ -341,15 +575,13 @@
                                             </ItemsControl.ItemsPanel>
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
-                                                    <Button Style="{StaticResource QuickAmountButton}"
-                                                            Content="{Binding}"
-                                                            Tag="{Binding}"
-                                                            Click="Denom_Click"/>
+                                                    <Button Style="{StaticResource QuickAmountButton}" Content="{Binding}" Tag="{Binding}" Click="Denom_Click"/>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
                                     </StackPanel>
                                 </Border>
+
 
                                 <Grid Grid.Column="2">
                                     <Grid.RowDefinitions>
@@ -393,39 +625,27 @@
                         <md:Card Grid.Row="2">
                             <StackPanel>
                                 <TextBlock Text="{DynamicResource Payment.MethodTitle}" Style="{StaticResource TitleLarge}" Margin="0,0,0,8"/>
-                                <WrapPanel HorizontalAlignment="Right">
-                                    <Button x:Name="PayCashBtn"   Tag="cash"   Style="{StaticResource PrimaryOutlined}" Click="PayButton_Click" Margin="6,0,0,0">
-                                        <StackPanel Orientation="Horizontal">
-                                            <md:PackIcon Kind="Cash" Width="18" Height="18" Margin="0,0,8,0"/>
-                                            <TextBlock Text="{DynamicResource Pay.Cash}"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <Button x:Name="PayCreditBtn" Tag="credit" Style="{StaticResource PrimaryOutlined}" Click="PayButton_Click" Margin="6,0,0,0">
-                                        <StackPanel Orientation="Horizontal">
-                                            <md:PackIcon Kind="CreditCardOutline" Width="18" Height="18" Margin="0,0,8,0"/>
-                                            <TextBlock Text="{DynamicResource Pay.Credit}"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <Button x:Name="PayDebitBtn"  Tag="debit"  Style="{StaticResource PrimaryOutlined}" Click="PayButton_Click" Margin="6,0,0,0">
-                                        <StackPanel Orientation="Horizontal">
-                                            <md:PackIcon Kind="CreditCard" Width="18" Height="18" Margin="0,0,8,0"/>
-                                            <TextBlock Text="{DynamicResource Pay.Debit}"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <Button x:Name="PayWireBtn"   Tag="wire"   Style="{StaticResource PrimaryOutlined}" Click="PayButton_Click" Margin="6,0,0,0">
-                                        <StackPanel Orientation="Horizontal">
-                                            <md:PackIcon Kind="BankTransfer" Width="18" Height="18" Margin="0,0,8,0"/>
-                                            <TextBlock Text="{DynamicResource Pay.Wire}"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <Button x:Name="PayDollarsBtn" Tag="usd"  Style="{StaticResource PrimaryOutlined}" Click="PayButton_Click" Margin="6,0,0,0">
-                                        <StackPanel Orientation="Horizontal">
-                                            <md:PackIcon Kind="CurrencyUsd" Width="18" Height="18" Margin="0,0,8,0"/>
-                                            <TextBlock Text="{DynamicResource Pay.USD}"/>
-                                        </StackPanel>
-                                    </Button>
-                                </WrapPanel>
+                                <!-- Lista dinámica de métodos de pago -->
+                                <ItemsControl x:Name="PaymentMethodsItems" ItemsSource="{Binding PaymentMethods, RelativeSource={RelativeSource AncestorType=Window}}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel HorizontalAlignment="Right"/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <!-- Estilo con selección visual -->
+                                            <Button Click="PaymentMethod_Click" Style="{StaticResource PaymentButton}">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <md:PackIcon Kind="{Binding IconKind}" Width="18" Height="18" Margin="0,0,8,0"/>
+                                                    <TextBlock Text="{Binding Name}"/>
+                                                </StackPanel>
+                                            </Button>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
 
+                                <!-- Referencia (se muestra sólo si el método lo permite) -->
                                 <StackPanel x:Name="RefPanel" Margin="0,12,0,0" Visibility="Collapsed">
                                     <TextBlock Text="{DynamicResource Reference}" Opacity="0.7"/>
                                     <TextBox x:Name="RefText" Style="{StaticResource FieldBox}" />
@@ -435,7 +655,7 @@
                     </Grid>
 
                     <!-- ===== COLUMNA DERECHA ===== -->
-                    <StackPanel Grid.Column="2">
+                    <StackPanel Grid.Column="2" x:Name="RightCol">
                         <md:Card Padding="20" Margin="0,0,0,16">
                             <StackPanel>
                                 <TextBlock Text="{DynamicResource QuickActions}" FontWeight="SemiBold"/>
@@ -446,21 +666,59 @@
                             </StackPanel>
                         </md:Card>
 
-                        <md:Card Padding="20">
+                        <!-- ===== DRIVER SUMMARY ===== -->
+                        <md:Card x:Name="DriverCard" Padding="16" Margin="0,0,0,16" Visibility="Collapsed">
                             <StackPanel>
-                                <TextBlock Text="{DynamicResource Recent}" FontWeight="SemiBold"/>
-                                
-                                <ListBox x:Name="RecientesList" Height="180" Margin="0,12,0,0"
-                                    ItemsSource="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=_recentSessions}"/>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,8">
+                                    <md:PackIcon Kind="AccountTie" Width="20" Height="20" Opacity="0.85" Margin="0,0,8,0"/>
+                                    <TextBlock Text="Driver summary" FontWeight="SemiBold" FontSize="14"/>
+                                </StackPanel>
 
+                                <!-- Nombre -->
+                                <TextBlock x:Name="DriverNameText" Text="—" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,4"/>
+
+                                <!-- Placas / Licencia -->
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                                    <md:PackIcon Kind="License" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
+                                    <TextBlock x:Name="DriverLicenseText" Text="—" Opacity="0.85"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                                    <md:PackIcon Kind="Car" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
+                                    <TextBlock x:Name="DriverPlatesText" Text="—" Opacity="0.85"/>
+                                </StackPanel>
+
+                                <!-- Teléfono / Unidad -->
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                                    <md:PackIcon Kind="Phone" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
+                                    <TextBlock x:Name="DriverPhoneText" Text="—" Opacity="0.85"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                                    <md:PackIcon Kind="Truck" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
+                                    <TextBlock x:Name="DriverVehicleText" Text="—" Opacity="0.85"/>
+                                </StackPanel>
                             </StackPanel>
-                            
                         </md:Card>
+
+                        <TextBox x:Name="txtLogTemp" TextWrapping="Wrap" Text="TextBox" Width="304" Height="309"
+                                 VerticalScrollBarVisibility="Auto"
+                                 />
+
                     </StackPanel>
+                    <!-- BLOQUEO UI (cubre columnas 1 y 2) -->
+                    <Grid Grid.Column="1" Grid.ColumnSpan="2" x:Name="UiBlocker" Visibility="Visible" IsHitTestVisible="True">
+                        <Border CornerRadius="12" Background="#80FFFFFF" BorderBrush="{DynamicResource MaterialDesignDivider}" BorderThickness="1">
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <md:PackIcon Kind="Lock" Width="28" Height="28" Opacity="0.7" Margin="0,0,0,6"/>
+                                <TextBlock Text="{Binding ElementName=lblTemp, Path=Content}" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                                <TextBlock Text="Press Start to enable" Opacity="0.7" HorizontalAlignment="Center"/>                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+
                 </Grid>
 
                 <!-- Barra de estado -->
-                <DockPanel Height="28" VerticalAlignment="Bottom" Margin="8,0" Opacity="0.8">
+                <DockPanel Height="28" VerticalAlignment="Bottom" Margin="8,0" Opacity="0.8" Grid.ColumnSpan="2" Grid.Row="1">
                     <TextBlock x:Name="ScaleStateText" Text="{DynamicResource Scale.Simulated}"/>
                     <TextBlock Text="   |   " />
                     <TextBlock>
@@ -555,12 +813,9 @@
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <TextBox x:Name="ChoferTelefonoText" Grid.Column="0"
-                                     Style="{StaticResource FieldBox}" md:HintAssist.Hint="{DynamicResource Phone}"
-                                     Margin="0,0,8,12"/>
-                            <TextBox x:Name="LicenciaNumeroText" Grid.Column="1"
-                                     Style="{StaticResource FieldBox}" md:HintAssist.Hint="{DynamicResource LicenseNo}"
-                                     Margin="8,0,0,12"/>
+                            <TextBox x:Name="ChoferTelefonoText" Grid.Column="0" Style="{StaticResource FieldBox}" md:HintAssist.Hint="{DynamicResource Phone}" Margin="0,0,8,12" MaxLength="10" PreviewTextInput="DigitsOnly_PreviewTextInput" DataObject.Pasting="DigitsOnly_Pasting"/>
+
+                            <TextBox x:Name="LicenciaNumeroText" Grid.Column="1" Style="{StaticResource FieldBox}" md:HintAssist.Hint="{DynamicResource LicenseNo}" Margin="8,0,0,12"/>
                         </Grid>
 
                         <DatePicker x:Name="LicenciaVigenciaPicker" Grid.Row="5" Grid.ColumnSpan="2"
@@ -581,14 +836,7 @@
                             <TextBox x:Name="PlacasRegText" Grid.Column="0"
                                      Style="{StaticResource FieldBox}" md:HintAssist.Hint="{DynamicResource Plates}"
                                      Margin="0,0,8,12"/>
-                            <ComboBox x:Name="TipoUnidadCombo" Grid.Column="1"
-                                      md:HintAssist.Hint="{DynamicResource UnitType}" MinHeight="44"
-                                      Margin="8,0,0,12">
-                                <ComboBoxItem Content="{DynamicResource UnitType.Tractor}" />
-                                <ComboBoxItem Content="{DynamicResource UnitType.Torton}" />
-                                <ComboBoxItem Content="{DynamicResource UnitType.Truck35}" />
-                                <ComboBoxItem Content="{DynamicResource UnitType.Pickup}" />
-                            </ComboBox>
+                            <ComboBox x:Name="TipoUnidadCombo" Grid.Column="1" md:HintAssist.Hint="{DynamicResource UnitType}" MinHeight="44" Margin="8,0,0,12"/>
                         </Grid>
 
                         <Grid Grid.Row="8" Grid.ColumnSpan="2">
@@ -615,7 +863,9 @@
                             <Button Content="{DynamicResource Cancel}" Style="{StaticResource PrimaryOutlined}" Margin="0,0,8,0" Click="RegisterCancel_Click"/>
                             <Button Content="{DynamicResource Save}"    Style="{StaticResource PrimaryRaised}" Click="RegisterSave_Click" MinWidth="92"/>
                         </StackPanel>
+                        
                     </Border>
+                    
                 </StackPanel>
             </md:Card>
         </md:DialogHost.DialogContent>

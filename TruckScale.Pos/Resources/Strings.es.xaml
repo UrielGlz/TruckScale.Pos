@@ -13,7 +13,8 @@
     <!-- Monitor -->
     <sys:String x:Key="LiveWeight">Peso en vivo</sys:String>
     <sys:String x:Key="Zero">Zero</sys:String>
-    <sys:String x:Key="Tare">Tara</sys:String>
+    <sys:String x:Key="Start">Iniciar</sys:String>
+
     <sys:String x:Key="Unit.Kg">kg</sys:String>
     <sys:String x:Key="Unit.Lb">lb</sys:String>
 
