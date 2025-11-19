@@ -59,9 +59,12 @@ namespace TruckScale.Pos
     }
     public class PaymentEntry
     {
-        public string Metodo { get; set; } = "";
+        public string Metodo { get; set; } = "";   // Texto para UI
+        public string Code { get; set; } = "";   // <-- NUEVO: code real (cash, credit, etc.)
+        public string? Ref { get; set; }         // <-- NUEVO: referencia opcional
         public decimal Monto { get; set; }
     }
+
 
     public partial class MainWindow : Window
     {
@@ -100,6 +103,9 @@ namespace TruckScale.Pos
         // Últimos valores por canal (0,1,2 = ejes; 3 = total)
         readonly Dictionary<int, double> _last = new() { { 0, 0 }, { 1, 0 }, { 2, 0 }, { 3, 0 } };
         readonly Dictionary<int, string> _lastTail = new() { { 0, "" }, { 1, "" }, { 2, "" }, { 3, "" } };
+        //Para activar los botones de servicio
+        private bool _driverLinked = false;
+
 
         public MainWindow()
         {
@@ -570,7 +576,78 @@ namespace TruckScale.Pos
             UpdateWeightText(0);
             lblTemp.Content = "Waiting";
             lblEstado.Content = "Press Start to begin.";
+            ResetDriverContext();
+
         }
+        private void ResetDriverContext()
+        {
+            // 1) Estado de chofer y toggles
+            _driverLinked = false;
+
+            _simSavedOnce = false;
+            _autoStable = false;
+            _winTotals.Clear();
+
+            HideDriverCard();
+            UpdateProductButtonsEnabled();
+            try { WeighToggle.IsChecked = false; ReweighToggle.IsChecked = false; } catch { }
+
+            // 2) Limpia modal
+            try { ChoferNombreText.Text = ""; } catch { }
+            try { ChoferApellidosText.Text = ""; } catch { }
+            try { ChoferTelefonoText.Text = ""; } catch { }
+            try { LicenciaNumeroText.Text = ""; } catch { }
+            try { LicenciaVigenciaPicker.SelectedDate = null; } catch { }
+            try { PlacasRegText.Text = ""; } catch { }
+            try { TipoUnidadCombo.SelectedIndex = -1; } catch { }
+            try { MarcaText.Text = ""; } catch { }
+            try { ModeloText.Text = ""; } catch { }
+            try { ObsText.Text = ""; } catch { }
+            try { ClienteRegCombo.SelectedIndex = -1; } catch { }
+            try { ProductoRegText.Text = ""; } catch { }
+            try { RootDialog.IsOpen = false; } catch { }
+
+            // ** 3) Totales y producto seleccionado — RESETEA PRIMERO **
+            _ventaTotal = 0m;
+            _descuento = 0m;
+            _impuestos = 0m;
+            _comisiones = 0m;
+            _selectedProductId = 0;
+            _selectedProductCode = "";
+            _selectedProductName = "";
+            _selectedProductPrice = 0m;
+            _selectedCurrency = "USD";
+            try { TotalVentaBigText.Text = _ventaTotal.ToString("C", _moneyCulture); } catch { }
+
+            // 4) Pagos / referencia / teclado — AHORA sí limpia y refresca
+            try { RefText.Text = ""; } catch { }
+            try { RefPanel.Visibility = Visibility.Collapsed; } catch { }
+            _pagos.Clear();
+            _selectedPaymentId = "cash";
+            SelectPaymentByCode("cash");
+            _keypadBuffer = "";
+            RefreshKeypadDisplay();
+            RefreshSummary(); // → ahora mostrará $0 recibido y $0 de balance
+
+            // 5) Báscula / UUID
+            _currentAxles.Clear();
+            _ax1 = _ax2 = _ax3 = _total = 0;
+            _tAx1 = _tAx2 = _tAx3 = _tTotal = DateTime.MinValue;
+            _lastPersistedTotal = double.NaN;
+            _currentWeightUuid = null;
+            try { lblEje1.Content = ""; lblEje2.Content = ""; lblEje3.Content = ""; lblUUID.Content = ""; } catch { }
+            UpdateWeightText(0);
+
+            // 6) UI “Waiting”
+            try
+            {
+                lblTemp.Content = "Waiting";
+                lblEstado.Content = "Press Start to begin.";
+                SetUiReady(false, "Waiting");
+            }
+            catch { }
+        }
+
 
         // ===== Keypad / pagos  =====
         private void ToggleDrawer_Click(object sender, RoutedEventArgs e) => RootDrawerHost.IsLeftDrawerOpen = !RootDrawerHost.IsLeftDrawerOpen;
@@ -604,16 +681,59 @@ namespace TruckScale.Pos
         }
         private void RefreshKeypadDisplay() { try { KeypadDisplay.Text = KeypadText; } catch { } }
         private void KeypadClear_Click(object sender, RoutedEventArgs e) { _keypadBuffer = ""; RefreshKeypadDisplay(); }
-        private void KeypadCommit_Click(object sender, RoutedEventArgs e)
+        
+        private bool _isCompletingSale = false; // evita doble clic
+
+        private async void KeypadCommit_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                if (decimal.TryParse(KeypadDisplay.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out var importe) && importe > 0)
+                if (decimal.TryParse(KeypadDisplay.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out var importe)
+                    && importe > 0)
+                {
                     AddPayment(_selectedPaymentId, importe);
+                }
                 _keypadBuffer = "";
                 RefreshKeypadDisplay();
+                RefreshSummary();
+
+                await TryAutoCompleteSaleAsync();
             }
             catch { }
+        }
+        private async Task TryAutoCompleteSaleAsync()
+        {
+            if (_isCompletingSale) return;
+
+            // Debe haber chofer y servicio seleccionado
+            if (!_driverLinked || _selectedProductId <= 0) return;
+
+            var (subtotal, tax, total) = ComputeTotals();
+            var recibido = SumReceived();
+            if (recibido < total) return; // todavía falta pagar
+
+            _isCompletingSale = true;
+            try
+            {
+                var saleUid = await SaveSaleAsync(); // tu función de persistencia ya hecha
+                var change = recibido - total;
+
+                AppendLog($"[Sale] Completed sale_uid={saleUid} Total={total:0.00} Received={recibido:0.00} Change={change:0.00}");
+               
+                await ShowSaleCompletedDialogAsync(total, recibido, change, saleUid);
+
+                // Limpiar TODO para la siguiente operación
+                ResetDriverContext();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error completing sale: " + ex.Message, "TruckScale POS",
+                                MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                _isCompletingSale = false;
+            }
         }
         private void Key_Click(object sender, RoutedEventArgs e)
         {
@@ -626,7 +746,7 @@ namespace TruckScale.Pos
             }
             RefreshKeypadDisplay();
         }
-        private void Denom_Click(object sender, RoutedEventArgs e)
+        async private void Denom_Click(object sender, RoutedEventArgs e)
         {
             var tag = ((Button)sender).Tag?.ToString();
             if (decimal.TryParse(tag, NumberStyles.Any, CultureInfo.InvariantCulture, out var add))
@@ -634,6 +754,7 @@ namespace TruckScale.Pos
                 decimal.TryParse(KeypadDisplay.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out var current);
                 _keypadBuffer = (current + add).ToString("0.##", CultureInfo.InvariantCulture);
                 RefreshKeypadDisplay();
+                await TryAutoCompleteSaleAsync();
             }
         }
         private string PaymentName(string id) => id switch
@@ -651,7 +772,7 @@ namespace TruckScale.Pos
             try { RootDialog.IsOpen = true; } catch { }
         }
 
-        async private void Button_Click(object sender, RoutedEventArgs e)
+        async private void Button_Click(object sender, RoutedEventArgs e)//UG NO SE USA
         {
             string uid = GenerateUid10();
             try
@@ -680,12 +801,13 @@ namespace TruckScale.Pos
             try { RootDialog.IsOpen = false; } catch { }
         }
 
+        //UG save driver *sale_driver_info*
         private async void RegisterSave_Click(object sender, RoutedEventArgs e)
         {
             try
             {
                 // 1) Necesitamos la llave temporal
-                var uuid = await GetWeightUuidForLinkAsync();
+                var uuid = _currentWeightUuid;
                 if (string.IsNullOrWhiteSpace(uuid))
                 {
                     MessageBox.Show("No weight captured yet. Press Start and accept a stable weight before saving driver.",
@@ -748,16 +870,30 @@ namespace TruckScale.Pos
                 {
                     ShowDriverCard(info);
                     lblEstado.Content = "Driver linked to current weight.";
+                    _driverLinked = true;
+                    UpdateProductButtonsEnabled();
+                    // Si queremos marcar Weigh por defecto cuando ya hay chofer:
+                    //if (WeighToggle.IsEnabled && WeighToggle.IsChecked != true)
+                    //    WeighToggle.IsChecked = true;
                 }
                 else
                 {
+                    _driverLinked = false;
+                    UpdateProductButtonsEnabled();
                     AppendLog("[Driver] Warning: driver not found right after insert.");
                 }
 
 
                 RootDialog.IsOpen = false;
-                MessageBox.Show("Driver saved.", "TruckScale POS",
-                                MessageBoxButton.OK, MessageBoxImage.Information);
+                //MessageBox.Show("Driver saved.", "TruckScale POS",
+                //                MessageBoxButton.OK, MessageBoxImage.Information);
+                RootDialog.IsOpen = false;
+
+                await ShowDriverSavedDialogAsync(
+                    $"{first} {last}".Trim(),
+                    string.IsNullOrWhiteSpace(plates) ? null : plates,
+                    string.IsNullOrWhiteSpace(licNo) ? null : licNo
+                );
             }
             catch (Exception ex)
             {
@@ -788,12 +924,43 @@ namespace TruckScale.Pos
         private readonly ObservableCollection<PaymentEntry> _pagos = new();
 
 
-        private void AddPayment(string methodId, decimal monto)
+        private void AddPayment(string methodCode, decimal monto)
         {
             if (monto <= 0) return;
-            _pagos.Add(new PaymentEntry { Metodo = PaymentName(methodId), Monto = monto });
+            var refTxt = "";
+            try { refTxt = RefPanel.Visibility == Visibility.Visible ? (RefText?.Text ?? "") : ""; } catch { }
+
+            _pagos.Add(new PaymentEntry
+            {
+                Metodo = PaymentName(methodCode),
+                Code = methodCode,
+                Ref = string.IsNullOrWhiteSpace(refTxt) ? null : refTxt,
+                Monto = monto
+            });
             RefreshSummary();
         }
+        private (decimal subtotal, decimal tax, decimal total) ComputeTotals()
+        {
+            // Ajusta si después aplicas impuestos/comisiones
+            var subtotal = _selectedProductPrice;
+            var tax = 0m;
+            var total = subtotal + tax;
+            return (subtotal, tax, total);
+        }
+        private decimal SumReceived()
+        {
+            decimal s = 0m;
+            foreach (var p in _pagos) s += p.Monto;
+            return s;
+        }
+        private int? FindPaymentMethodIdByCode(string code)
+        {
+            foreach (var m in PaymentMethods)
+                if (string.Equals(m.Code, code, StringComparison.OrdinalIgnoreCase))
+                    return m.Id;
+            return null;
+        }
+
         private decimal _ventaTotal = 0m, _descuento = 0m, _impuestos = 0m, _comisiones = 0m;
 
         // === Simulación de báscula UG TODO  quitar ===
@@ -805,8 +972,11 @@ namespace TruckScale.Pos
 
         private void Start_Click(object sender, RoutedEventArgs e)
         {
+
             try
             {
+                _simSavedOnce = false;
+
                 // Estado inicial visible para el operador
                 lblTemp.Content = "Connecting";
                 lblEstado.Content = "Opening serial port…";
@@ -899,7 +1069,12 @@ namespace TruckScale.Pos
             lblEstado.Content = _isSimulated ? "Stable set accepted (sim)." : "Stable set accepted.";
 
             if (_isSimulated)
+            {
                 _simSavedOnce = true;   // ← bloquea nuevas inserciones en simulado
+
+                lblUUID.Content = $"{(_ax1 + _ax2 + _ax3):0} lb (Σ ejes)";
+
+            }
         }
 
 
@@ -911,7 +1086,8 @@ namespace TruckScale.Pos
             _simCts?.Cancel();
             _simCts = new CancellationTokenSource();
             var token = _simCts.Token;
-
+            _simSavedOnce = false;  // <-- MUY IMPORTANTE: permite un nuevo guardado
+            _currentWeightUuid = null; // (opcional, para forzar nuevo UUID de chofer)
             _ = Task.Run(async () =>
             {
                 double a1 = _rand.Next(6000, 12000);
@@ -939,25 +1115,35 @@ namespace TruckScale.Pos
 
         // === Simulación de báscula UG TODO  quitar hasta aqui ===
 
-
         private void InitSummaryUi() { try { PagosList.ItemsSource = _pagos; RefreshSummary(); } catch { } }
         private void RefreshSummary()
         {
             try
             {
                 TotalVentaBigText.Text = _ventaTotal.ToString("C", _moneyCulture);
+
                 var recibido = 0m; foreach (var p in _pagos) recibido += p.Monto;
                 var totalCalculado = _ventaTotal - _descuento + _impuestos + _comisiones;
-                var balance = totalCalculado - recibido;
+
+                // diff >= 0 => cambio a devolver; diff < 0 => saldo pendiente
+                var diff = recibido - totalCalculado;
+
                 PagoRecibidoText.Text = recibido.ToString("N2", _moneyCulture);
-                BalanceText.Text = balance.ToString("N2", _moneyCulture);
+                BalanceText.Text = Math.Abs(diff).ToString("N2", _moneyCulture);
+
                 var rojo = (Brush)(TryFindResource("MaterialDesignValidationErrorBrush") ?? Brushes.IndianRed);
                 var ok = (Brush)(TryFindResource("PrimaryHueMidBrush") ?? TryFindResource("PrimaryBrush") ?? Brushes.SeaGreen);
-                BalanceText.Foreground = balance > 0 ? rojo : ok;
-                if (PagosEmpty != null) PagosEmpty.Visibility = _pagos.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+                BalanceText.Foreground = diff >= 0 ? ok : rojo;
+
+                if (PagosEmpty != null)
+                    PagosEmpty.Visibility = _pagos.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+                //UG para cuando se tenga que dar cambio, se modifica la leyenda
+                BalanceCaption.Text = diff >= 0 ? "Change" : T("Payment.BalanceKpi");
+
             }
             catch { }
         }
+
 
         // ===== DB init en Window_Loaded =====
         private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -1036,7 +1222,7 @@ namespace TruckScale.Pos
             new(StringComparer.OrdinalIgnoreCase);
 
 
-        private string GetPrimaryConn() => GetConnectionString(); // la que ya tienes
+        private string GetPrimaryConn() => GetConnectionString(); 
         private string GetLocalConn()
         {
             // TODO: llévalo a app.config / secrets
@@ -1060,14 +1246,15 @@ namespace TruckScale.Pos
                     return;
                 }
             }
+            UpdateProductButtonsEnabled();
 
             // Habilita UI si llegaron productos
-            WeighToggle.IsEnabled = _products.ContainsKey("WEIGH");
-            ReweighToggle.IsEnabled = _products.ContainsKey("REWEIGH");
+            //WeighToggle.IsEnabled = _products.ContainsKey("WEIGH");
+            //ReweighToggle.IsEnabled = _products.ContainsKey("REWEIGH");
 
             // Selección por defecto
-            if (WeighToggle.IsEnabled)
-                WeighToggle.IsChecked = true; // dispara el handler y setea el precio
+            //if (WeighToggle.IsEnabled)
+            //    WeighToggle.IsChecked = true; // dispara el handler y setea el precio
         }
 
         private async Task<bool> TryLoadProductsAsync(string connStr)
@@ -1119,12 +1306,15 @@ namespace TruckScale.Pos
             _selectedProductPrice = price;
             _selectedCurrency = currency;
 
-            // Refleja en el KPI de total
+            _ventaTotal = price; // <-- importante para KPIs
             TotalVentaBigText.Text = string.Format(
-                _selectedCurrency == "USD" ? System.Globalization.CultureInfo.GetCultureInfo("en-US")
-                                           : System.Globalization.CultureInfo.GetCultureInfo("es-MX"),
+                _selectedCurrency == "USD" ? CultureInfo.GetCultureInfo("en-US")
+                                           : CultureInfo.GetCultureInfo("es-MX"),
                 "{0:C}", _selectedProductPrice);
+
+            RefreshSummary(); // <-- recalcula recibido/balance
         }
+
 
         private void ApplySelected(string code)
         {
@@ -1168,16 +1358,17 @@ namespace TruckScale.Pos
             catch { return null; }
         }
 
-        private async Task<string?> GetWeightUuidForLinkAsync()
+        private Task<string?> GetWeightUuidForLinkAsync()
         {
-            if (!string.IsNullOrWhiteSpace(_currentWeightUuid))
-                return _currentWeightUuid;
+            //if (!string.IsNullOrWhiteSpace(_currentWeightUuid))
+            //    return _currentWeightUuid;
 
-            // intenta principal → local
-            var uuid = await TryGetLastWeightUuidAsync(GetPrimaryConn());
-            if (string.IsNullOrWhiteSpace(uuid))
-                uuid = await TryGetLastWeightUuidAsync(GetLocalConn());
-            return uuid;
+            //// intenta principal → local
+            //var uuid = await TryGetLastWeightUuidAsync(GetPrimaryConn());
+            //if (string.IsNullOrWhiteSpace(uuid))
+            //    uuid = await TryGetLastWeightUuidAsync(GetLocalConn());
+            //return uuid;
+            return Task.FromResult(_currentWeightUuid);
         }
         /// <DriverInfo>
         /// UG Apartado de DriverInfo
@@ -1197,32 +1388,33 @@ namespace TruckScale.Pos
             public string VehicleTypeName { get; init; } = "";
         }
 
-        private async Task<long> InsertDriverInfoAsync(string? saleUid,string firstName,string lastName,string phone,string licenseNo,DateTime? licenseExpiry,string plates,int? vehicleTypeId,string brand,string model,string identifyBy,string matchKey,string? notes)
+        private async Task<long> InsertDriverInfoAsync(string? saleUid, string firstName, string lastName, string phone,string licenseNo, DateTime? licenseExpiry, string plates, int? vehicleTypeId,string brand, string model, string identifyBy, string matchKey, string? notes)
         {
-            // == MISMA CONEXIÓN QUE saveScaleData ==
             string connStr = GetConnectionString();
 
-            const string SQL = @"INSERT INTO sale_driver_info (sale_uid, driver_first_name, driver_last_name, driver_phone, license_number, license_expiry,
-                    vehicle_plates, vehicle_type_id, vehicle_brand, vehicle_model, identify_by, match_key, notes, created_at)
-                    VALUES
-                    (@sale_uid, @first, @last, @phone, @lic, @exp,@plates, @vtid, @brand, @model, @idby, @mkey, @notes, NOW())
-                      ON DUPLICATE KEY UPDATE
-                      sale_uid         = COALESCE(sale_driver_info.sale_uid, VALUES(sale_uid)),
-                      driver_first_name= VALUES(driver_first_name),
-                      driver_last_name = VALUES(driver_last_name),
-                      driver_phone     = VALUES(driver_phone),
-                      license_number   = VALUES(license_number),
-                      license_expiry   = VALUES(license_expiry),
-                      vehicle_plates   = VALUES(vehicle_plates),
-                      vehicle_type_id  = VALUES(vehicle_type_id),
-                      vehicle_brand    = VALUES(vehicle_brand),
-                      vehicle_model    = VALUES(vehicle_model),
-                      notes            = VALUES(notes);";
+            const string SQL = @"INSERT INTO sale_driver_info
+                                (sale_uid, driver_first_name, driver_last_name, driver_phone, license_number, license_expiry,vehicle_plates, vehicle_type_id, vehicle_brand, vehicle_model,identify_by, match_key, notes, created_at)
+                                VALUES
+                                (@sale_uid, @first, @last, @phone, @lic, @exp,@plates, @vtid, @brand, @model,@idby, @mkey, @notes, NOW())
+                                ON DUPLICATE KEY UPDATE
+                                -- Nunca pisar sale_uid si ya existe
+                                sale_uid = COALESCE(sale_driver_info.sale_uid, VALUES(sale_uid)),
+                                -- Solo actualizar datos del chofer si AÚN no está ligado a una venta
+                                driver_first_name = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_first_name), sale_driver_info.driver_first_name),
+                                driver_last_name  = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_last_name),  sale_driver_info.driver_last_name),
+                                driver_phone      = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_phone),      sale_driver_info.driver_phone),
+                                license_number    = IF(sale_driver_info.sale_uid IS NULL, VALUES(license_number),    sale_driver_info.license_number),
+                                license_expiry    = IF(sale_driver_info.sale_uid IS NULL, VALUES(license_expiry),    sale_driver_info.license_expiry),
+                                vehicle_plates    = IF(sale_driver_info.sale_uid IS NULL, VALUES(vehicle_plates),    sale_driver_info.vehicle_plates),
+                                vehicle_type_id   = IF(sale_driver_info.sale_uid IS NULL, VALUES(vehicle_type_id),   sale_driver_info.vehicle_type_id),
+                                vehicle_brand     = IF(sale_driver_info.sale_uid IS NULL, VALUES(vehicle_brand),     sale_driver_info.vehicle_brand),
+                                vehicle_model     = IF(sale_driver_info.sale_uid IS NULL, VALUES(vehicle_model),     sale_driver_info.vehicle_model),
+                                notes             = IF(sale_driver_info.sale_uid IS NULL, VALUES(notes),             sale_driver_info.notes);";
 
             await using var conn = new MySqlConnection(connStr);
             await conn.OpenAsync();
-
             await using var cmd = new MySqlCommand(SQL, conn);
+
             cmd.Parameters.AddWithValue("@sale_uid", (object?)saleUid ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@first", firstName);
             cmd.Parameters.AddWithValue("@last", lastName);
@@ -1238,24 +1430,34 @@ namespace TruckScale.Pos
             cmd.Parameters.AddWithValue("@notes", (object?)notes ?? DBNull.Value);
 
             await cmd.ExecuteNonQueryAsync();
-            return (long)cmd.LastInsertedId;   // igual que en saveScaleData
+            return (long)cmd.LastInsertedId;
         }
 
-        /* UG Asi lo vamos a usar 
-         if (!string.IsNullOrWhiteSpace(_currentWeightUuid))
-            await LinkDriverToSaleAsync(saleUid, _currentWeightUuid);
-         */
-        public async Task<int> LinkDriverToSaleAsync(string weightUuid, string saleUid)
+        public async Task<int> LinkDriverToSaleAsync(MySqlConnection conn, MySqlTransaction tx, string weightUuid, string saleUid)
         {
             const string SQL = @"UPDATE sale_driver_info SET sale_uid = @sale WHERE identify_by = 'weight_uuid' AND match_key = @uuid;";
 
-            await using var conn = new MySqlConnection(GetConnectionString());
-            await conn.OpenAsync();
-            await using var cmd = new MySqlCommand(SQL, conn);
-            cmd.Parameters.AddWithValue("@sale", saleUid);
-            cmd.Parameters.AddWithValue("@uuid", weightUuid);
-            return await cmd.ExecuteNonQueryAsync(); 
+            try
+            {
+                await using var cmd = new MySqlCommand(SQL, conn, tx);
+                cmd.CommandTimeout = 10;
+                cmd.Parameters.AddWithValue("@sale", saleUid);
+                cmd.Parameters.AddWithValue("@uuid", weightUuid);
+
+                var rows = await cmd.ExecuteNonQueryAsync();
+                if (rows == 0)
+                    throw new InvalidOperationException(
+                        $"No rows updated for weight_uuid='{weightUuid}'. ¿Existe el registro previo?");
+                return rows;
+            }
+            catch (Exception ex)
+            {
+                var msg = $"LinkDriverToSaleAsync(tx) failed. uuid='{weightUuid}', sale='{saleUid}'. {ex.Message}";
+                try { Dispatcher?.Invoke(() => txtLogTemp.AppendText(msg + Environment.NewLine)); } catch { }
+                throw new Exception(msg, ex);
+            }
         }
+
         private async Task<DriverInfo?> GetDriverByWeightUuidAsync(string uuid)
         {
             const string SQL = @"SELECT sdi.id_driver_info,sdi.driver_first_name, sdi.driver_last_name,sdi.driver_phone, sdi.license_number, sdi.license_expiry,sdi.vehicle_plates, sdi.vehicle_type_id,sdi.vehicle_brand, sdi.vehicle_model,
@@ -1526,8 +1728,264 @@ namespace TruckScale.Pos
             if ((sender as FrameworkElement)?.DataContext is PaymentMethod pm)
                 SelectPaymentByCode(pm.Code);
         }
+    
+        /// <Servicios>
+        /// UG BOTONES DE PRODCTOS
+        /// </Servicios> 
+        private void UpdateProductButtonsEnabled()
+        {
+            bool hasWeigh = _products.ContainsKey("WEIGH");
+            bool hasReweigh = _products.ContainsKey("REWEIGH");
+
+            // Actívalos SOLO si ya hay chofer ligado
+            WeighToggle.IsEnabled = _driverLinked && hasWeigh;
+            ReweighToggle.IsEnabled = _driverLinked && hasReweigh;
+
+            // Si se deshabilitan, quita la selección visual
+            if (!WeighToggle.IsEnabled) WeighToggle.IsChecked = false;
+            if (!ReweighToggle.IsEnabled) ReweighToggle.IsChecked = false;
+        }
+
+        /// <sales>
+        /// UG section save sales
+        /// </sales> 
+        /// 
+        // En tu clase MainWindow (campos de contexto)
+        private int _siteId = 0;       // setéalo al arrancar (ej. 1)
+        private int _terminalId = 0;   // setéalo al arrancar (ej. 1)
+        private int _operatorId = 1;   // por ahora 'admin' = 1
+        private async Task<int> GetDefaultSiteIdAsync(MySqlConnection conn, MySqlTransaction tx)
+        {
+            const string Q = "SELECT site_id FROM sites ORDER BY site_id LIMIT 1;";
+            using var cmd = new MySqlCommand(Q, conn, tx);
+            var obj = await cmd.ExecuteScalarAsync();
+            return (obj == null || obj == DBNull.Value) ? 1 : Convert.ToInt32(obj);
+        }
+        private async Task<int> GetDefaultTerminalIdAsync(MySqlConnection conn, MySqlTransaction tx)
+        {
+            const string Q = "SELECT terminal_id FROM pos_terminals ORDER BY terminal_id LIMIT 1;";
+            using var cmd = new MySqlCommand(Q, conn, tx);
+            var obj = await cmd.ExecuteScalarAsync();
+            return (obj == null || obj == DBNull.Value) ? 1 : Convert.ToInt32(obj);
+        }
+        private int GetCurrentOperatorId() => _operatorId > 0 ? _operatorId : 1;
 
 
+        private async Task<string> SaveSaleAsync()
+        {
+            if (!_driverLinked) throw new InvalidOperationException("Driver not linked.");
+            if (_selectedProductId <= 0) throw new InvalidOperationException("No service selected.");
+
+            var (subtotal, tax, total) = ComputeTotals();
+            var recibido = SumReceived();
+            if (recibido < total) throw new InvalidOperationException("Received amount is less than order total.");
+
+            var saleUid = Guid.NewGuid().ToString();
+
+            const int STATUS_SALE_COMPLETED = 2; // SALES.COMPLETED
+            const int STATUS_PAY_RECEIVED = 6; // PAYMENTS.RECEIVED
+
+            await using var conn = new MySqlConnection(GetConnectionString());
+            await conn.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+
+            try
+            {
+                // Contexto (usa campos si ya los setearon; si no, toma el primero de BD)
+                int siteId = _siteId > 0 ? _siteId : await GetDefaultSiteIdAsync(conn, (MySqlTransaction)tx);
+                int terminalId = _terminalId > 0 ? _terminalId : await GetDefaultTerminalIdAsync(conn, (MySqlTransaction)tx);
+                int operatorId = GetCurrentOperatorId();
+
+                // 1) sales (cabecera)
+                const string SQL_SALE = @"INSERT INTO sales
+                         (sale_uid, site_id, terminal_id, operator_id, sale_status_id, currency, subtotal, tax_total, total, created_at)
+                         VALUES
+                         (@uid, @site, @term, @op, @st, @ccy, @sub, @tax, @tot, NOW());";
+
+                await using (var cmd = new MySqlCommand(SQL_SALE, conn, (MySqlTransaction)tx))
+                {
+                    cmd.Parameters.AddWithValue("@uid", saleUid);
+                    cmd.Parameters.AddWithValue("@site", siteId);
+                    cmd.Parameters.AddWithValue("@term", terminalId);
+                    cmd.Parameters.AddWithValue("@op", operatorId);
+                    cmd.Parameters.AddWithValue("@st", STATUS_SALE_COMPLETED);
+                    cmd.Parameters.AddWithValue("@ccy", _selectedCurrency ?? "USD");
+                    cmd.Parameters.AddWithValue("@sub", subtotal);
+                    cmd.Parameters.AddWithValue("@tax", tax);
+                    cmd.Parameters.AddWithValue("@tot", total);
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                // === 2) sale_lines (encaja con tus columnas reales) ===
+                // Valores por defecto razonables para una línea de servicio sin impuestos/desc.
+                var qty = 1m;
+                var unit = "EA";              // ajusta si manejas otra unidad
+                var lineSubtotal = _selectedProductPrice * qty;
+                var discount = 0m;
+                var taxable = 0;         // 0 = no gravable; 1 = gravable
+                var taxRatePct = 0m;
+                var taxAmount = 0m;
+                var lineTotal = lineSubtotal - discount + taxAmount;
+
+                const string SQL_LINE = @"INSERT INTO sale_lines
+                                            (sale_uid, seq, product_id, description, qty, unit, unit_price,line_subtotal, discount_amount, taxable, tax_rate_percent, tax_amount, line_total)
+                                        VALUES
+                                            (@uid, @seq, @pid, @desc, @qty, @unit, @price,@lsub, @disc, @taxable, @trate, @tamt, @ltot);";
+
+                await using (var cmd = new MySqlCommand(SQL_LINE, conn, (MySqlTransaction)tx))
+                {
+                    cmd.Parameters.AddWithValue("@uid", saleUid);
+                    cmd.Parameters.AddWithValue("@seq", 1);
+                    cmd.Parameters.AddWithValue("@pid", _selectedProductId);
+                    cmd.Parameters.AddWithValue("@desc", _selectedProductName ?? "Service");
+                    cmd.Parameters.AddWithValue("@qty", qty);
+                    cmd.Parameters.AddWithValue("@unit", unit);
+                    cmd.Parameters.AddWithValue("@price", _selectedProductPrice);
+                    cmd.Parameters.AddWithValue("@lsub", lineSubtotal);
+                    cmd.Parameters.AddWithValue("@disc", discount);
+                    cmd.Parameters.AddWithValue("@taxable", taxable);
+                    cmd.Parameters.AddWithValue("@trate", taxRatePct);
+                    cmd.Parameters.AddWithValue("@tamt", taxAmount);
+                    cmd.Parameters.AddWithValue("@ltot", lineTotal);
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                // === 3) payments (encaja con tus columnas reales) ===
+                const string SQL_PAY = @"INSERT INTO payments
+                                            (payment_uid, sale_uid, method_id, payment_status_id, amount, currency,exchange_rate, reference_number, received_by, received_at)
+                                        VALUES
+                                            (@puid, @uid, @mid, @st, @amt, @ccy,@rate, @ref, @rcvby, NOW());";
+
+                foreach (var p in _pagos)
+                {
+                    int? methodId = FindPaymentMethodIdByCode(p.Code);
+                    if (methodId == null)
+                        throw new InvalidOperationException($"Payment method '{p.Code}' not found/mapped.");
+
+                    await using var cmd = new MySqlCommand(SQL_PAY, conn, (MySqlTransaction)tx);
+                    cmd.Parameters.AddWithValue("@puid", Guid.NewGuid().ToString());
+                    cmd.Parameters.AddWithValue("@uid", saleUid);
+                    cmd.Parameters.AddWithValue("@mid", methodId.Value);
+                    cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
+                    cmd.Parameters.AddWithValue("@amt", p.Monto);
+                    cmd.Parameters.AddWithValue("@ccy", _selectedCurrency ?? "USD");
+                    cmd.Parameters.AddWithValue("@rate", 1m); // TODO: usa tipo de cambio real si manejas multi-moneda
+                    cmd.Parameters.AddWithValue("@ref", (object?)p.Ref ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                // === 4) Link driver (weight_uuid → sale_uid) ===                
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(_currentWeightUuid))
+                        await LinkDriverToSaleAsync(conn, (MySqlTransaction)tx, _currentWeightUuid!, saleUid);
+                }
+                catch (Exception ex)
+                {
+                    throw new Exception(
+                        $"Error linking driver (weight_uuid='{_currentWeightUuid}', sale_uid='{saleUid}'). {ex.Message}", ex);
+                }
+                // === 3.5) Actualiza sales.amount_paid y sales.balance_due ===
+                var amountPaid = recibido; // ya lo tienes calculado arriba
+                var balanceDue = Math.Max(total - amountPaid, 0m);
+
+                const string SQL_SALE_UPDATE = @"UPDATE sales
+                                                    SET amount_paid = @paid,
+                                                    balance_due = @bal,
+                                                    occurred_at = COALESCE(occurred_at, NOW())
+                                                WHERE sale_uid = @uid;";
+
+                await using (var up = new MySqlCommand(SQL_SALE_UPDATE, conn, (MySqlTransaction)tx))
+                {
+                    up.Parameters.AddWithValue("@paid", amountPaid);
+                    up.Parameters.AddWithValue("@bal", balanceDue);
+                    up.Parameters.AddWithValue("@uid", saleUid);
+                    await up.ExecuteNonQueryAsync();
+
+                    await tx.CommitAsync();
+                    return saleUid;
+                }
+                //await tx.CommitAsync();
+                //return saleUid;
+            }
+            catch
+            {
+                await tx.RollbackAsync();
+                throw;
+            }
+        }
+
+        // Campos para señales de cierre
+        private TaskCompletionSource<bool>? _saleDialogTcs;
+        private TaskCompletionSource<bool>? _drvDialogTcs;
+
+        // === Modal: Sale completed ===
+        private async Task ShowSaleCompletedDialogAsync(decimal total, decimal recibido, decimal change, string saleUid)
+        {
+            // llena textos
+            DlgSaleTotal.Text = total.ToString("C", _moneyCulture);
+            DlgSaleReceived.Text = recibido.ToString("C", _moneyCulture);
+            DlgSaleChange.Text = change.ToString("C", _moneyCulture);
+            DlgSaleUid.Text = $"Ticket: {saleUid}";
+
+            // botones
+            _saleDialogTcs = new TaskCompletionSource<bool>();
+            DlgCloseBtn.Click += CloseSaleDlg_Click;
+            DlgReprintBtn.Click += (s, e) => { _ = ReprintTicketAsync(saleUid); };
+
+            // (opcional) simular impresión en background
+            DlgTicketProgress.IsIndeterminate = true;
+            _ = Task.Run(async () =>
+            {
+                try { await PrintTicketAsync(saleUid); } // tu función real de impresión
+                catch { /* log si aplica */ }
+                finally
+                {
+                    Dispatcher.Invoke(() => DlgTicketProgress.IsIndeterminate = false);
+                }
+            });
+
+            SaleCompletedHost.IsOpen = true;
+            await _saleDialogTcs.Task;
+        }
+
+        private void CloseSaleDlg_Click(object? sender, RoutedEventArgs e)
+        {
+            SaleCompletedHost.IsOpen = false;
+            DlgCloseBtn.Click -= CloseSaleDlg_Click;
+            _saleDialogTcs?.TrySetResult(true);
+        }
+
+        // Stub opcional
+        private Task PrintTicketAsync(string saleUid)
+        {
+            // integra aquí tu impresión real; por ahora solo una pequeña espera
+            return Task.Delay(900);
+        }
+        private Task ReprintTicketAsync(string saleUid)
+        {
+            return PrintTicketAsync(saleUid);
+        }
+
+        // === Modal: Driver saved ===
+        private async Task ShowDriverSavedDialogAsync(string fullName, string? plates, string? license)
+        {
+            DlgDrvName.Text = fullName;
+            DlgDrvExtra.Text = $"{(string.IsNullOrWhiteSpace(plates) ? "" : $"Plates: {plates}   ")}{(string.IsNullOrWhiteSpace(license) ? "" : $"License: {license}")}".Trim();
+
+            _drvDialogTcs = new TaskCompletionSource<bool>();
+            DlgDrvOkBtn.Click += CloseDrvDlg_Click;
+
+            DriverSavedHost.IsOpen = true;
+            await _drvDialogTcs.Task;
+        }
+        private void CloseDrvDlg_Click(object? sender, RoutedEventArgs e)
+        {
+            DriverSavedHost.IsOpen = false;
+            DlgDrvOkBtn.Click -= CloseDrvDlg_Click;
+            _drvDialogTcs?.TrySetResult(true);
+        }
 
     }
 }

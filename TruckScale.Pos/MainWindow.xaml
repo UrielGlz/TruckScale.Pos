@@ -476,7 +476,7 @@
                                 <StackPanel Grid.Column="4" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
                                     <Border Style="{StaticResource KpiChip}">
                                         <StackPanel>
-                                            <TextBlock Text="{DynamicResource Payment.ReceivedKpi}" Style="{StaticResource KpiCaption}"/>
+                                            <TextBlock  Text="{DynamicResource Payment.ReceivedKpi}" Style="{StaticResource KpiCaption}"/>
                                             <TextBlock x:Name="PagoRecibidoText"
                                                        Style="{StaticResource AmountText}"
                                                        Foreground="{DynamicResource PrimaryHueMidBrush}"
@@ -486,7 +486,7 @@
 
                                     <Border Style="{StaticResource KpiChip}">
                                         <StackPanel>
-                                            <TextBlock Text="{DynamicResource Payment.BalanceKpi}" Style="{StaticResource KpiCaption}"/>
+                                            <TextBlock x:Name="BalanceCaption"  Text="{DynamicResource Payment.BalanceKpi}" Style="{StaticResource KpiCaption}"/>
                                             <TextBlock x:Name="BalanceText"
                                                        Style="{StaticResource AmountText}"
                                                        Foreground="{DynamicResource MaterialDesignValidationErrorBrush}"
@@ -728,7 +728,102 @@
                     <TextBlock Text="   |   " />
                     <TextBlock Text="{Binding ElementName=WeightText, Path=Text}" />
                 </DockPanel>
+
+                <!-- === SALE COMPLETED DIALOG === -->
+                <md:DialogHost x:Name="SaleCompletedHost" Grid.RowSpan="99" Grid.ColumnSpan="99"  Panel.ZIndex="100">
+                    <md:DialogHost.DialogContent>
+                        <Grid Width="520" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <md:Card Padding="18" md:ElevationAssist.Elevation="Dp3" UniformCornerRadius="16">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Header -->
+                                    <StackPanel Orientation="Horizontal">
+                                        <md:PackIcon Kind="CheckCircle" Width="28" Height="28"
+                         Foreground="{DynamicResource PrimaryHueMidBrush}"
+                         Margin="0,0,8,0"/>
+                                        <TextBlock Text="Sale completed" FontSize="20" FontWeight="SemiBold"/>
+                                    </StackPanel>
+
+                                    <!-- KPI row -->
+                                    <Grid Grid.Row="1" Margin="0,14,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <StackPanel Grid.Column="0" HorizontalAlignment="Center">
+                                            <TextBlock Text="Total" Opacity=".7"/>
+                                            <TextBlock x:Name="DlgSaleTotal" FontSize="20" FontWeight="Bold"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" HorizontalAlignment="Center">
+                                            <TextBlock Text="Received" Opacity=".7"/>
+                                            <TextBlock x:Name="DlgSaleReceived" FontSize="20" FontWeight="Bold"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" HorizontalAlignment="Center">
+                                            <TextBlock Text="Change" Opacity=".7"/>
+                                            <TextBlock x:Name="DlgSaleChange" FontSize="20" FontWeight="Bold"
+                         Foreground="{DynamicResource PrimaryHueMidBrush}"/>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <!-- Ticket + spinner -->
+                                    <StackPanel Grid.Row="2" Margin="0,16,0,0" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <md:PackIcon Kind="ReceiptText" Width="22" Height="22" Margin="0,0,8,0"/>
+                                        <TextBlock Text="Printing ticket…" VerticalAlignment="Center"/>
+                                        <ProgressBar x:Name="DlgTicketProgress" IsIndeterminate="True" Width="140" Height="4" Margin="10,0,0,0"/>
+                                    </StackPanel>
+
+                                    <!-- Footer -->
+                                    <DockPanel Grid.Row="3" Margin="0,18,0,0">
+                                        <TextBlock x:Name="DlgSaleUid" DockPanel.Dock="Left" Opacity=".7" TextWrapping="Wrap"/>
+                                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                            <Button x:Name="DlgReprintBtn" Content="Reprint"
+                      Style="{StaticResource MaterialDesignOutlinedButton}" Margin="0,0,8,0"/>
+                                            <Button x:Name="DlgCloseBtn" Content="Close" IsDefault="True"/>
+                                        </StackPanel>
+                                    </DockPanel>
+                                </Grid>
+                            </md:Card>
+                        </Grid>
+                    </md:DialogHost.DialogContent>
+                </md:DialogHost>
+
+
+                <!-- === DRIVER SAVED DIALOG === -->
+                <md:DialogHost x:Name="DriverSavedHost" Grid.RowSpan="99" Grid.ColumnSpan="99" Panel.ZIndex="100">
+                    <md:DialogHost.DialogContent>
+                        <Grid Width="480" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <md:Card Padding="18" md:ElevationAssist.Elevation="Dp2" UniformCornerRadius="16">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal">
+                                        <md:PackIcon Kind="BadgeAccount" Width="26" Height="26"  Foreground="{DynamicResource PrimaryHueMidBrush}"  Margin="0,0,8,0"/>
+                                        <TextBlock Text="Driver saved" FontSize="20" FontWeight="SemiBold"/>
+                                    </StackPanel>
+
+                                    <StackPanel Margin="0,10,0,0">
+                                        <TextBlock x:Name="DlgDrvName"  FontSize="16" FontWeight="SemiBold"/>
+                                        <TextBlock x:Name="DlgDrvExtra" Opacity=".8"/>
+                                    </StackPanel>
+
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                                        <Button x:Name="DlgDrvOkBtn" Content="OK" IsDefault="True"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </md:Card>
+                        </Grid>
+                    </md:DialogHost.DialogContent>
+                </md:DialogHost>
+
+
             </Grid>
+            
         </md:DrawerHost>
 
         <!-- ===== MODAL: Registrar chofer ===== -->
