@@ -135,6 +135,12 @@
         <SolidColorBrush x:Key="StartCtaBgHv" Color="#1B5E20"/>
         <!-- green 900 -->
         <SolidColorBrush x:Key="StartCtaFg"   Color="#FFFFFF"/>
+        <!-- Colores para WAIT (rojo) -->
+        <SolidColorBrush x:Key="WaitCtaBg"   Color="#C62828"/>
+        <!-- red 800 -->
+        <SolidColorBrush x:Key="WaitCtaBgHv" Color="#B71C1C"/>
+        <!-- red 900 -->
+
         <!-- Estilo del botón Start -->
         <Style x:Key="StartCTA" TargetType="Button" BasedOn="{StaticResource PrimaryRaised}">
             <Setter Property="Foreground" Value="{StaticResource StartCtaFg}"/>
@@ -267,12 +273,16 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
 
-                                    <Button Grid.Column="0" Style="{StaticResource StartCTA}" Click="Start_Click">
+                                    <!-- Botón WAIT / OK (semáforo) -->
+                                    <Button x:Name="OkButton" Grid.Column="0" Style="{StaticResource StartCTA}" Click="OkButton_Click">
                                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                            <md:PackIcon Kind="PlayCircle" Width="18" Height="18" Margin="0,0,8,0"/>
-                                            <TextBlock Text="{DynamicResource Start}"/>
+                                            <!-- Icono también lo vamos a cambiar desde code-behind -->
+                                            <md:PackIcon x:Name="OkButtonIcon" Kind="TimerSand" Width="18" Height="18" Margin="0,0,8,0"/>
+                                            <!-- Texto inicial: WAIT -->
+                                            <TextBlock x:Name="OkButtonLabel" Text="WAIT"/>
                                         </StackPanel>
                                     </Button>
+
 
                                     <Button Grid.Column="1" Style="{StaticResource PrimaryOutlined}" Content="{DynamicResource Zero}" Margin="8,0,0,0" Click="Zero_Click"/>
                                 </Grid>
@@ -710,7 +720,9 @@
                             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <md:PackIcon Kind="Lock" Width="28" Height="28" Opacity="0.7" Margin="0,0,0,6"/>
                                 <TextBlock Text="{Binding ElementName=lblTemp, Path=Content}" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                                <TextBlock Text="Press Start to enable" Opacity="0.7" HorizontalAlignment="Center"/>                            </StackPanel>
+                                <TextBlock Text="Scale is controlled automatically" Opacity="0.7" HorizontalAlignment="Center"/>
+
+                            </StackPanel>
                         </Border>
                     </Grid>
 

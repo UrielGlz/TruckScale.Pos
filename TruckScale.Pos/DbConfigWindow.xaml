@@ -1,0 +1,129 @@
+﻿<Window x:Class="TruckScale.Pos.DbConfigWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
+        Title="Database configuration"
+        Height="560"
+        Width="960"
+        MinHeight="520"
+        MinWidth="900"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource MaterialDesignPaper}">
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- CARD PRINCIPAL -->
+        <Border Grid.Row="0"
+                Background="{DynamicResource MaterialDesignCardBackground}"
+                CornerRadius="16"
+                Padding="24"
+                SnapsToDevicePixels="True">
+
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <!-- título -->
+                    <RowDefinition Height="8"/>
+                    <!-- espacio -->
+                    <RowDefinition Height="Auto"/>
+                    <!-- label main -->
+                    <RowDefinition Height="Auto"/>
+                    <!-- textbox main -->
+                    <RowDefinition Height="Auto"/>
+                    <!-- test main -->
+                    <RowDefinition Height="12"/>
+                    <!-- espacio -->
+                    <RowDefinition Height="Auto"/>
+                    <!-- label local -->
+                    <RowDefinition Height="Auto"/>
+                    <!-- textbox local -->
+                    <RowDefinition Height="Auto"/>
+                    <!-- test local -->
+                    <RowDefinition />
+                    <!-- relleno -->
+                </Grid.RowDefinitions>
+
+                <!-- TÍTULO -->
+                <StackPanel Grid.Row="0" Margin="0 0 0 4">
+                    <TextBlock Text="Database configuration"
+                               FontSize="22"
+                               FontWeight="SemiBold" />
+                    <TextBlock Text="Set the main and local connection strings used by TruckScale POS."
+                               FontSize="13"
+                               Foreground="{DynamicResource MaterialDesignBodySecondary}" />
+                </StackPanel>
+
+                <!-- MAIN DB -->
+                <TextBlock Grid.Row="2"
+                           Text="Main DB connection string:"
+                           FontWeight="SemiBold"
+                           Margin="0 8 0 2" />
+
+                <TextBox x:Name="MainConnText"
+                         Grid.Row="3"
+                         Height="30"
+                         Margin="0 0 0 4"
+                         materialDesign:TextFieldAssist.DecorationVisibility="Collapsed" />
+
+                <StackPanel Grid.Row="4"
+                            Orientation="Horizontal"
+                            Margin="0 4 0 0">
+                    <Button Content="Test main"
+                            Width="110"
+                            Click="TestMain_Click"
+                            Style="{StaticResource MaterialDesignRaisedButton}" />
+                    <TextBlock x:Name="MainTestResult"
+                               Margin="8 6 0 0"
+                               FontSize="12"
+                               Foreground="{DynamicResource MaterialDesignBodySecondary}" />
+                </StackPanel>
+
+                <!-- LOCAL DB -->
+                <TextBlock Grid.Row="6"
+                           Text="Local DB connection string:"
+                           FontWeight="SemiBold"
+                           Margin="0 12 0 2" />
+
+                <TextBox x:Name="LocalConnText"
+                         Grid.Row="7"
+                         Height="30"
+                         Margin="0 0 0 4"
+                         materialDesign:TextFieldAssist.DecorationVisibility="Collapsed" />
+
+                <StackPanel Grid.Row="8"
+                            Orientation="Horizontal"
+                            Margin="0 4 0 0">
+                    <Button Content="Test local"
+                            Width="110"
+                            Click="TestLocal_Click"
+                            Style="{StaticResource MaterialDesignRaisedButton}" />
+                    <TextBlock x:Name="LocalTestResult"
+                               Margin="8 6 0 0"
+                               FontSize="12"
+                               Foreground="{DynamicResource MaterialDesignBodySecondary}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- BOTONES ABAJO -->
+        <StackPanel Grid.Row="1"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Margin="0 16 0 0">
+            <Button Content="Cancel"
+                    Width="90"
+                    Margin="0 0 8 0"
+                    Click="Cancel_Click"
+                    Style="{StaticResource MaterialDesignFlatButton}" />
+            <Button Content="Save"
+                    Width="110"
+                    IsDefault="True"
+                    Click="Save_Click"
+                    Style="{StaticResource MaterialDesignRaisedButton}" />
+        </StackPanel>
+    </Grid>
+</Window>

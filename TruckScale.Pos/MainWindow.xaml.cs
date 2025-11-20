@@ -15,6 +15,7 @@ using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -22,7 +23,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using TruckScale.Pos.Data;
 using TruckScale.Pos.Domain;
-
+using TruckScale.Pos.Config;
 namespace TruckScale.Pos
 {
     // ===== Teclado / pagos (UI) =====
@@ -32,8 +33,9 @@ namespace TruckScale.Pos
         public string[] Keys { get; set; } = new[] { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "00", "←" };
         public decimal[] Denominations { get; set; } = new decimal[] { 1, 5, 10, 20, 50, 100, 200, 500 };
     }
-    
+
     public enum UnitSystem { Metric, Imperial }
+
     public sealed class PaymentMethod : INotifyPropertyChanged
     {
         public int Id { get; init; }
@@ -57,55 +59,61 @@ namespace TruckScale.Pos
         private void OnPropertyChanged([CallerMemberName] string? p = null)
             => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(p));
     }
+
     public class PaymentEntry
     {
         public string Metodo { get; set; } = "";   // Texto para UI
-        public string Code { get; set; } = "";   // <-- NUEVO: code real (cash, credit, etc.)
-        public string? Ref { get; set; }         // <-- NUEVO: referencia opcional
+        public string Code { get; set; } = "";     // code real (cash, credit, etc.)
+        public string? Ref { get; set; }           // referencia opcional
         public decimal Monto { get; set; }
     }
 
-
     public partial class MainWindow : Window
     {
-        // Tema
+        // ===== Tema =====
         private readonly PaletteHelper _palette = new();
         private bool _dark = false;
 
-        // Cultura / unidades 
+        // ===== Cultura / unidades =====
         private readonly CultureInfo _moneyCulture = new("en-US");
         private UnitSystem _units = UnitSystem.Imperial;
 
-        // UI: keypad / pagos
+        // ===== UI: keypad / pagos =====
         private KeypadConfig _kp = new();
         private string _keypadBuffer = "";
         public string KeypadText => string.IsNullOrEmpty(_keypadBuffer) ? "0" : _keypadBuffer;
         private string _selectedPaymentId = "cash";
 
-        //readonly ObservableCollection<PaymentRow> _pagos = new();
         public ObservableCollection<PaymentMethod> PaymentMethods { get; } = new();
 
-        // DB / estado (usa tu clase nueva Domain/WeightLogger.cs)
+        // ===== DB / logger =====
         private WeightLogger? _logger;
 
-
-        // Estado de sesión mostrada en UI
+        // ===== Estado de sesión (peso / ejes) =====
         private int _axleCount = 0;
         private double _sessionTotalLb = 0;
         private bool _sessionActive = false;
         private readonly ObservableCollection<string> _recentSessions = new();
         private readonly ObservableCollection<string> _currentAxles = new();
 
-        // === Serial simple al estilo "ScaleTesting" ===
+        // === Serial al estilo "ScaleTesting" ===
         private SerialPort? _port;
-
 
         // Últimos valores por canal (0,1,2 = ejes; 3 = total)
         readonly Dictionary<int, double> _last = new() { { 0, 0 }, { 1, 0 }, { 2, 0 }, { 3, 0 } };
         readonly Dictionary<int, string> _lastTail = new() { { 0, "" }, { 1, "" }, { 2, "" }, { 3, "" } };
-        //Para activar los botones de servicio
+
+        // Para activar los botones de servicio
         private bool _driverLinked = false;
 
+        // ==== Estado WAIT/OK y snapshot de peso estable ====
+        private bool _canAccept = false;          // true cuando hay snapshot estable listo para guardar
+        private double _snapAx1, _snapAx2, _snapAx3, _snapTotal;
+        private string _snapRaw = "";
+        private DateTime _snapUtc;
+
+        // Referencia al botón WAIT/OK (se toma del sender la primera vez que se hace click)
+        private Button? _waitOkButton;
 
         public MainWindow()
         {
@@ -113,22 +121,20 @@ namespace TruckScale.Pos
 
             ApplyTheme();
             ApplyBrand();
-
-            // UI básica
             ApplyUi();
 
             LoadKeypadConfig();
             BuildKeypadUI();
-            //UG lo movio a el boton de start
-            //StartReader("COM2"); //Yo setie el puerto manualmente en produccion
-            SetUiReady(false, "Waiting");   // bloqueado hasta que presionen Start
 
-
+            // Antes se usaba el botón Start para conectar.
+            // Ahora la conexión se hace automáticamente al cargar la ventana (TryAutoConnectAtBoot).
+            SetUiReady(false, "Connecting…");
         }
 
         //******************** Pudin *******************************//
-        /* Todo el codigo lo puse entre estos comentarios*/
+        /* Todo el código de báscula lo puse entre estos comentarios */
         /* ANDRES *****************************************/
+
         private void StartReader(string portName)
         {
             try
@@ -140,10 +146,11 @@ namespace TruckScale.Pos
                     _port.Dispose();
                     _port = null;
                 }
+
                 _port = new SerialPort(portName, 9600, Parity.None, 8, StopBits.One)
                 {
                     Handshake = Handshake.None,
-                    NewLine = "\r",      // <-- CR (igual que en el stream real)
+                    NewLine = "\r",      // CR (igual que en el stream real)
                     Encoding = Encoding.ASCII,
                     ReadTimeout = 1000,
                     WriteTimeout = 1000,
@@ -157,21 +164,21 @@ namespace TruckScale.Pos
 
                 if (_port.IsOpen)
                 {
-                    SetUiReady(true, "Connected");
-                    lblEstado.Content = ($"Puerto {_port.PortName} abierto a 9600 8N1");
+                    _isSimulated = false;
+                    SetUiReady(true, "Waiting for truck…");
+                    lblEstado.Content = $"Scale connected on {_port.PortName} (9600 8N1)";
+                    try { ScaleStateText.Text = "Scale: Connected"; } catch { }
                 }
                 else
                 {
                     SetUiReady(false, "Error");
-
-                    lblEstado.Content = ("No se pudo abrir el puerto.");
+                    lblEstado.Content = "No se pudo abrir el puerto.";
                 }
             }
             catch (UnauthorizedAccessException)
             {
                 lblEstado.Content = "El puerto está en uso por otra aplicación.";
                 throw;
-
             }
             catch (Exception ex)
             {
@@ -180,16 +187,31 @@ namespace TruckScale.Pos
             }
         }
 
+        /// <summary>
+        /// Conexión automática al arrancar (real → si falla, simulado).
+        /// </summary>
+        private void TryAutoConnectAtBoot()
+        {
+            try
+            {
+                AppendLog("[Boot] Trying to open scale on COM2…");
+                StartReader("COM2"); // si falla, lanza excepción y caemos al catch
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[Boot] Failed to open serial port: {ex.Message}. Switching to simulated mode.");
+                StartSimulatedReader();
+            }
+        }
 
-        //Captura lineas del indicador y guardar en un txt
-        //Esto solo lo use para generar un log y de ahi crear un simulador de bascula no lo vamos a usar en produccion
-        //Hay que asegurarnos que esto no funcione porque hace lenta la captura.
+        // ===== Captura de crudo a TXT (no usar en producción) =====
         private StreamWriter _rxCapture;
         private readonly object _capLock = new();
         private readonly Stopwatch _capSw = new();
+
         public void StartCapture(string folder = null)
         {
-            //no usar
+            // no usar en producción
             folder ??= Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "captures");
             Directory.CreateDirectory(folder);
 
@@ -205,6 +227,7 @@ namespace TruckScale.Pos
             _rxCapture.WriteLine("# capture-start-utc=" + DateTime.UtcNow.ToString("o"));
             _rxCapture.WriteLine("# format: <elapsed_ms>|<line-as-received>");
         }
+
         public void StopCapture()
         {
             lock (_capLock)
@@ -222,16 +245,10 @@ namespace TruckScale.Pos
         {
             try
             {
-                // 1) Asegura carpeta
                 Directory.CreateDirectory(_dir);
-
-                // 2) Archivo por día
                 string filePath = Path.Combine(_dir, $"raw_{DateTime.Now:yyyyMMdd}.log");
-
-                // 3) Línea con timestamp
                 string toWrite = $"{DateTime.Now:HH:mm:ss.fff}\t{line}{Environment.NewLine}";
 
-                // 4) Escritura segura (permite leer el log mientras se escribe)
                 lock (_rawLock)
                 {
                     using (var fs = new FileStream(filePath, FileMode.Append, FileAccess.Write, FileShare.Read))
@@ -243,8 +260,7 @@ namespace TruckScale.Pos
             }
             catch (Exception ex)
             {
-                // Opcional: loguea el error a Debug/Console para no romper el flujo
-                System.Diagnostics.Debug.WriteLine($"CaptureRaw error: {ex}");
+                Debug.WriteLine($"CaptureRaw error: {ex}");
             }
         }
 
@@ -258,23 +274,20 @@ namespace TruckScale.Pos
                     if (!string.IsNullOrWhiteSpace(line))
                     {
                         //CaptureRaw1(line);
-
                         ProcessLine2(line);
-                        //lblUUID.Content = $"{_last[3]:0} lbs";
                     }
                 }
-                //lblUUID.Content = $"{_last[3]:0} lbs";
             }
             catch (TimeoutException) { }
-            catch (Exception ex)
+            catch (Exception)
             {
-                //AppendLog($"Error lectura: {ex.Message}");
+                // log si quieres
             }
         }
 
-        // ===== Campos/estado de la ventana =====
-        private readonly double[] _last1 = new double[4];          // 0,1,2 = ejes; 3 = total
-        private readonly string[] _lastTail1 = new string[4];      // GG/GR por canal
+        // ===== Campos / estado de estabilidad =====
+        private readonly double[] _last1 = new double[4];     // 0,1,2 = ejes; 3 = total (legacy, casi no usado)
+        private readonly string[] _lastTail1 = new string[4];
         private double _ultimoTotalGuardado1 = 0;
 
         // Variables globales para BD (solo cuando estabiliza)
@@ -284,6 +297,33 @@ namespace TruckScale.Pos
 
         double lbs_temp = 0;
         bool isStable = false;
+
+        private static readonly Regex rx = new(@"^%(?<ch>\d)(?<w>\d+(?:\.\d+)?)lb(?<tail>[A-Za-z]{2})$",
+                                               RegexOptions.Compiled);
+
+        // ----- Config de estabilidad -----
+        const double MIN_TOTAL_LB = 100;           // mínimo para considerar lectura válida
+        const double EPSILON_LB = 20;             // variación permitida en la ventana (lb)
+        const int WINDOW_MS = 1200;               // ancho de ventana
+        const int MIN_SAMPLES = 5;                // mínimo de muestras en la ventana
+        const int HOLD_MS = 600;                  // tiempo estable continuo antes de disparar
+        const double SUM_TOL_LB = 100;            // |(e0+e1+e2) - total| tolerado
+        const double SNAP_DELTA_LB = 200;         // diferencia mínima contra último total guardado
+
+        // ----- Estado de estabilidad -----
+        private readonly Stopwatch _sw = Stopwatch.StartNew();
+        private long _lastUnstableMs = 0;
+        private bool _autoStable = false;
+        private double _lastPersistedTotal = double.NaN;
+
+        private static double Get(IDictionary<int, double> map, int key)
+        {
+            double v;
+            return (map != null && map.TryGetValue(key, out v)) ? v : 0d;
+        }
+
+        private readonly Queue<(long ts, double total)> _winTotals = new();
+
         private void ProcessLine2(string line)
         {
             // 1) Normaliza y parsea
@@ -297,9 +337,9 @@ namespace TruckScale.Pos
                 return;
             }
 
-            int ch = int.Parse(m.Groups["ch"].Value, System.Globalization.CultureInfo.InvariantCulture);
-            double w = double.Parse(m.Groups["w"].Value, System.Globalization.CultureInfo.InvariantCulture);
-            string tail = m.Groups["tail"].Value.ToUpperInvariant(); // (lo ignoraremos para estabilidad)
+            int ch = int.Parse(m.Groups["ch"].Value, CultureInfo.InvariantCulture);
+            double w = double.Parse(m.Groups["w"].Value, CultureInfo.InvariantCulture);
+            string tail = m.Groups["tail"].Value.ToUpperInvariant(); // GG/GR/etc
 
             _last[ch] = w;
             _lastTail[ch] = tail;
@@ -307,48 +347,25 @@ namespace TruckScale.Pos
             // 2) UI en “tiempo real”
             Dispatcher.InvokeAsync(() =>
             {
-                if (ch == 0) lblEje1.Content = $"{_last[0]:0} lb12";
+                if (ch == 0) lblEje1.Content = $"{_last[0]:0} lb";
                 if (ch == 1) lblEje2.Content = $"{_last[1]:0} lb";
                 if (ch == 2) lblEje3.Content = $"{_last[2]:0} lb";
                 if (ch == 3) WeightText.Text = $"{_last[3]:0}";
-                lblUUID.Content = $"{_last[3]:0} lb · ch={ch} · tail={tail}";
-            });
+            }); 
+
             string note = $"ch3={_last[3]} ,ch2={_last[2]} ,ch1={_last[1]} ,ch0={_last[0]}";
-            EvaluateStabilityAndMaybePersist(_last, note);
+
+            // Ahora solo evaluamos estabilidad + UI; el guardado ocurre al presionar OK.
+            EvaluateStabilityAndUpdateUi(_last, note);
         }
 
-        // ChatGPT [EvaluarEstabilidadPersistente] -- Parametros que podemos usar en Settings segun ChatGPT
-        // ----- Config de estabilidad -----
-        const double MIN_TOTAL_LB = 100;      // mínimo para considerar lectura válida
-        const double EPSILON_LB = 20;      // variación permitida en la ventana (lb)
-        const int WINDOW_MS = 1200;    // ancho de ventana para evaluar estabilidad
-        const int MIN_SAMPLES = 5;       // mínimo de muestras en la ventana
-        const int HOLD_MS = 600;     // tiempo estable continuo antes de disparar
-        const double SUM_TOL_LB = 100;     // |(e0+e1+e2) - total| tolerado
-        const double SNAP_DELTA_LB = 200;     // diferencia mínima contra último total guardado
-
-        // ----- Estado de estabilidad -----
-        private readonly System.Diagnostics.Stopwatch _sw = System.Diagnostics.Stopwatch.StartNew();
-        private readonly Queue<(long ts, double total)> _win = new();
-        private long _lastUnstableMs = 0;
-        private bool _autoStable = false;
-        private double _lastPersistedTotal = double.NaN;
-
-        private static readonly Regex rx = new(@"^%(?<ch>\d)(?<w>\d+(?:\.\d+)?)lb(?<tail>[A-Za-z]{2})$",
-                                               RegexOptions.Compiled);
-
-        //private readonly System.Diagnostics.Stopwatch _sw = System.Diagnostics.Stopwatch.StartNew();
-        private static double Get(IDictionary<int, double> map, int key)
+        /// <summary>
+        /// Evalúa estabilidad en ventana, actualiza UI y genera un snapshot
+        /// listo para guardar cuando el operador presione OK.
+        /// NO guarda en BD aquí.
+        /// </summary>
+        private void EvaluateStabilityAndUpdateUi(IDictionary<int, double> axles, string note)
         {
-            double v;
-            return (map != null && map.TryGetValue(key, out v)) ? v : 0d;
-        }
-
-        private readonly Queue<(long ts, double total)> _winTotals = new();
-        private void EvaluateStabilityAndMaybePersist(IDictionary<int, double> axles, string note)
-        {
-            //ChatGPT -- [Evaluar Estabilidad Persistente]
-            // axles: keys 0,1,2,3 = e1,e2,e3,total
             double e0 = Get(axles, 0);
             double e1 = Get(axles, 1);
             double e2 = Get(axles, 2);
@@ -363,24 +380,44 @@ namespace TruckScale.Pos
             if (_winTotals.Count < MIN_SAMPLES || total < MIN_TOTAL_LB)
             {
                 _autoStable = false;
+                _canAccept = false;
                 _lastUnstableMs = now;
-                Dispatcher.InvokeAsync(() => lblTemp.Content = "Weight in progress");
+
+                Dispatcher.InvokeAsync(() =>
+                {
+                    lblTemp.Content = total < MIN_TOTAL_LB ? "Waiting for truck…" : "Weight in progress";
+                    SetOkButtonWaitState();
+                });
+
                 return;
             }
 
-            double min = double.PositiveInfinity, max = double.NegativeInfinity;
-            foreach (var s in _winTotals) { if (s.total < min) min = s.total; if (s.total > max) max = s.total; }
+            double min = double.PositiveInfinity;
+            double max = double.NegativeInfinity;
+            foreach (var s in _winTotals)
+            {
+                if (s.total < min) min = s.total;
+                if (s.total > max) max = s.total;
+            }
             double span = max - min;
 
             if (span > EPSILON_LB)
             {
                 if (_autoStable) AppendLog($"→ pierde estabilidad (Δ={span:0.0} lb)");
                 _autoStable = false;
+                _canAccept = false;
                 _lastUnstableMs = now;
-                Dispatcher.InvokeAsync(() => lblTemp.Content = "Weight in progress");
+
+                Dispatcher.InvokeAsync(() =>
+                {
+                    lblTemp.Content = "Weight in progress";
+                    SetOkButtonWaitState();
+                });
+
                 return;
             }
 
+            // Aún no se cumple el HOLD (tiempo mínimo estable)
             if (!_autoStable && (now - _lastUnstableMs) < HOLD_MS)
                 return;
 
@@ -388,61 +425,94 @@ namespace TruckScale.Pos
             {
                 _autoStable = true;
                 AppendLog($"→ entra estable (Δ={span:0.0} lb en {WINDOW_MS} ms)");
-                // Indicador visible para el operador (antes de persistir)
-                Dispatcher.InvokeAsync(() => lblTemp.Content = "STABLE WEIGHT");
             }
 
+            // Reglas de suma de ejes vs total
             double suma = e0 + e1 + e2;
             if (Math.Abs(suma - total) > SUM_TOL_LB)
             {
                 AppendLog($"(Descartado) ejes {suma:0} vs total {total:0} (Δ={Math.Abs(suma - total):0} lb)");
+                _canAccept = false;
+
+                Dispatcher.InvokeAsync(() =>
+                {
+                    lblTemp.Content = "Check axles / total";
+                    SetOkButtonWaitState();
+                });
+
                 return;
             }
 
+            // Evitar aceptar dos veces casi el mismo peso
             if (!double.IsNaN(_lastPersistedTotal) &&
                 Math.Abs(total - _lastPersistedTotal) < SNAP_DELTA_LB)
-                return;
+            {
+                AppendLog($"(Descartado) total {total:0} lb demasiado cerca del último aceptado {_lastPersistedTotal:0} lb.");
+                _canAccept = false;
 
-            string uuid = GenerateUid10();
-            _lastPersistedTotal = total;
+                Dispatcher.InvokeAsync(() =>
+                {
+                    lblTemp.Content = "Waiting for next truck…";
+                    SetOkButtonWaitState();
+                });
+
+                return;
+            }
+
+            // Si llegamos aquí, hay snapshot estable listo para OK
+            _snapAx1 = e0;
+            _snapAx2 = e1;
+            _snapAx3 = e2;
+            _snapTotal = total;
+            _snapUtc = DateTime.UtcNow;
+            _snapRaw = note ?? $"e0={e0:0} e1={e1:0} e2={e2:0} tot={total:0}";
+
+            _canAccept = true;
 
             Dispatcher.InvokeAsync(() =>
             {
-                lblUUID.Content = uuid;
-                //lblTemp.Content = "OK";
-
-                lblTemp.Content = "STABLE WEIGHT";  //UG mantenemos el estado estable visible
+                lblTemp.Content = "STABLE — press OK";
+                SetOkButtonReadyState();
             });
-
-            string rawLine = note ?? $"e0={e0:0} e1={e1:0} e2={e2:0} tot={total:0}";
-
-            _ = saveScaleData(e0, e1, e2, total, rawLine, uuid).ContinueWith(t =>
-            {
-                if (t.IsFaulted)
-                {
-                    var ex = t.Exception?.GetBaseException()?.ToString();
-                    AppendLog("[DB] ERROR: " + ex);
-                    _ = _logger?.LogEventAsync("ACCEPT_EX", rawLine: rawLine, note: ex);
-
-                    Dispatcher.InvokeAsync(() => lblTemp.Content = "DB ERROR");
-                }
-                else
-                {
-                    AppendLog($"[DB] Insertado id={t.Result} (uuid={uuid})");
-                    //Dispatcher.InvokeAsync(() => lblTemp.Content = "OK"); 
-                    lblTemp.Content = "Waiting";
-                    lblEstado.Content = "Press Start to begin.";
-                    SetUiReady(false, "Waiting");
-
-
-                }
-            }, TaskScheduler.Default);
-
-            _autoStable = false;
         }
 
+
+        /// <summary>
+        /// Cambia visualmente el botón WAIT/OK según si se puede aceptar o no.
+        /// Nota: el botón real se captura la primera vez que el usuario hace click.
+        /// </summary>
+        private void SetWaitOkVisual(bool canAccept)
+        {
+            try
+            {
+                if (_waitOkButton == null) return;
+
+                _waitOkButton.Content = canAccept ? "OK" : "WAIT";
+
+                var okBrush = TryFindResource("PrimaryHueMidBrush") as Brush
+                              ?? TryFindResource("PrimaryBrush") as Brush
+                              ?? Brushes.SeaGreen;
+
+                var waitBrush = TryFindResource("MaterialDesignValidationErrorBrush") as Brush
+                                ?? Brushes.IndianRed;
+
+                _waitOkButton.Background = canAccept ? okBrush : waitBrush;
+            }
+            catch
+            {
+                // No romper el flujo si falla algo de UI
+            }
+        }
+
+        // ===== Conexión a BD para peso =====
         public static string GetConnectionString()
         {
+            // 1) Intentar leer desde config.json
+            var cfg = PosConfigService.Load();
+            if (!string.IsNullOrWhiteSpace(cfg.MainDbStrCon))
+                return cfg.MainDbStrCon;
+
+            // 2) Fallback legacy (lo que ya tenías)
             var builder = new MySqlConnectionStringBuilder
             {
                 Server = Environment.GetEnvironmentVariable("BAKEOPS_DB_HOST") ?? "lunisapp.com",
@@ -455,14 +525,15 @@ namespace TruckScale.Pos
             };
             return builder.ConnectionString;
         }
+
         private string? _currentWeightUuid;
-        //UG funcion que usa para save scale data
+
+        // Guarda snapshot de peso en scale_session_axles
         public async Task<long> saveScaleData(double eje1, double eje2, double eje3, double total, string rawLine, string uuid_weight)
         {
-            //MessageBox.Show(uuid_weight);
             string connStr = GetConnectionString();
 
-            _currentWeightUuid = uuid_weight; //UG lo usamos para poder insertarlo temporalmente en  scale_session_axles
+            _currentWeightUuid = uuid_weight; // se usa para vincular con sale_driver_info
 
             const string SQL = @"INSERT INTO scale_session_axles (uuid_weight, axle_index, weight_lb,
                                  captured_utc, captured_local, captured_local_time, raw_line, status_id, eje1, eje2, eje3, peso_total)
@@ -486,13 +557,11 @@ namespace TruckScale.Pos
             cmd.Parameters.AddWithValue("@e2", (int)Math.Round(eje2));
             cmd.Parameters.AddWithValue("@e3", (int)Math.Round(eje3));
             cmd.Parameters.AddWithValue("@total", (int)Math.Round(total));
-            //lblTemp.Content = "OK";
+
             await cmd.ExecuteNonQueryAsync();
 
-            return (long)cmd.LastInsertedId; //Si oupamos saber el ultimo registro que se creo aqui lo tenemos 
-            //Tambien podemos mantener el UUID en memoria
+            return (long)cmd.LastInsertedId;
         }
-
 
         private void AppendLog(string text)
         {
@@ -507,6 +576,7 @@ namespace TruckScale.Pos
             else
                 txtLogTemp.Dispatcher.BeginInvoke((Action)append);
         }
+
         private static readonly char[] UID_CHARS =
             "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".ToCharArray(); // 24 letras + 8 dígitos = 32 símbolos
 
@@ -527,26 +597,27 @@ namespace TruckScale.Pos
 
                 var id = new string(chars);
                 lock (_seenLock)
-                    if (_seenIds.Add(id)) return id; // sólo devuelve si no se ha visto antes
+                    if (_seenIds.Add(id)) return id;
             }
         }
-
 
         //***************************************************************//
 
         // ===== Localización / UI básica =====
         private string T(string key) => (TryFindResource(key) as string) ?? key;
+
         private void ApplyUi()
         {
             UpdateWeightText(0); // arranca en 0 lb
-            //try { RecientesList.ItemsSource = _recentSessions; } catch { }
         }
+
         private void ApplyTheme()
         {
             var theme = _palette.GetTheme();
             theme.SetBaseTheme(_dark ? BaseTheme.Dark : BaseTheme.Light);
             _palette.SetTheme(theme);
         }
+
         private void ApplyBrand()
         {
             var theme = _palette.GetTheme();
@@ -554,15 +625,18 @@ namespace TruckScale.Pos
             theme.SetSecondaryColor((Color)ColorConverter.ConvertFromString("#26A69A"));
             _palette.SetTheme(theme);
         }
-        private void ToggleTheme_Click(object sender, RoutedEventArgs e) { _dark = !_dark; ApplyTheme(); }
+
+        private void ToggleTheme_Click(object sender, RoutedEventArgs e)
+        {
+            _dark = !_dark;
+            ApplyTheme();
+        }
 
         // ===== Monitor de peso (label grande) =====
         private void UpdateWeightText(double lb)
         {
-            // Si hay sesión aceptada, muestra el total congelado
             double valToShowLb = (_sessionActive || _axleCount > 0) ? _sessionTotalLb : lb;
 
-            // Usa _units para evitar la advertencia CS0414
             string suffix = (_units == UnitSystem.Imperial) ? "lb" : "kg";
             double value = (_units == UnitSystem.Imperial) ? valToShowLb : (valToShowLb / 2.20462262185);
 
@@ -571,14 +645,16 @@ namespace TruckScale.Pos
 
         private void Zero_Click(object sender, RoutedEventArgs e)
         {
-            _sessionActive = false; _axleCount = 0; _sessionTotalLb = 0;
+            _sessionActive = false;
+            _axleCount = 0;
+            _sessionTotalLb = 0;
             _currentAxles.Clear();
             UpdateWeightText(0);
             lblTemp.Content = "Waiting";
-            lblEstado.Content = "Press Start to begin.";
+            lblEstado.Content = "Scale ready.";
             ResetDriverContext();
-
         }
+
         private void ResetDriverContext()
         {
             // 1) Estado de chofer y toggles
@@ -587,6 +663,7 @@ namespace TruckScale.Pos
             _simSavedOnce = false;
             _autoStable = false;
             _winTotals.Clear();
+            _canAccept = false;
 
             HideDriverCard();
             UpdateProductButtonsEnabled();
@@ -607,7 +684,7 @@ namespace TruckScale.Pos
             try { ProductoRegText.Text = ""; } catch { }
             try { RootDialog.IsOpen = false; } catch { }
 
-            // ** 3) Totales y producto seleccionado — RESETEA PRIMERO **
+            // 3) Totales y producto seleccionado
             _ventaTotal = 0m;
             _descuento = 0m;
             _impuestos = 0m;
@@ -619,7 +696,7 @@ namespace TruckScale.Pos
             _selectedCurrency = "USD";
             try { TotalVentaBigText.Text = _ventaTotal.ToString("C", _moneyCulture); } catch { }
 
-            // 4) Pagos / referencia / teclado — AHORA sí limpia y refresca
+            // 4) Pagos / referencia / teclado
             try { RefText.Text = ""; } catch { }
             try { RefPanel.Visibility = Visibility.Collapsed; } catch { }
             _pagos.Clear();
@@ -627,7 +704,7 @@ namespace TruckScale.Pos
             SelectPaymentByCode("cash");
             _keypadBuffer = "";
             RefreshKeypadDisplay();
-            RefreshSummary(); // → ahora mostrará $0 recibido y $0 de balance
+            RefreshSummary();
 
             // 5) Báscula / UUID
             _currentAxles.Clear();
@@ -635,31 +712,45 @@ namespace TruckScale.Pos
             _tAx1 = _tAx2 = _tAx3 = _tTotal = DateTime.MinValue;
             _lastPersistedTotal = double.NaN;
             _currentWeightUuid = null;
+            _canAccept = false;
+            _snapRaw = "";
             try { lblEje1.Content = ""; lblEje2.Content = ""; lblEje3.Content = ""; lblUUID.Content = ""; } catch { }
             UpdateWeightText(0);
 
             // 6) UI “Waiting”
             try
             {
-                lblTemp.Content = "Waiting";
-                lblEstado.Content = "Press Start to begin.";
-                SetUiReady(false, "Waiting");
+                if (_isConnected)
+                {
+                    lblTemp.Content = "Waiting for truck…";
+                    lblEstado.Content = "Scale ready.";
+                }
+                else
+                {
+                    lblTemp.Content = "Scale offline";
+                    lblEstado.Content = "No scale connection.";
+                }
+                SetWaitOkVisual(false);
             }
             catch { }
         }
 
+        // ===== Keypad / pagos =====
+        private void ToggleDrawer_Click(object sender, RoutedEventArgs e)
+            => RootDrawerHost.IsLeftDrawerOpen = !RootDrawerHost.IsLeftDrawerOpen;
 
-        // ===== Keypad / pagos  =====
-        private void ToggleDrawer_Click(object sender, RoutedEventArgs e) => RootDrawerHost.IsLeftDrawerOpen = !RootDrawerHost.IsLeftDrawerOpen;
         private void LoadKeypadConfig()
         {
             try
             {
                 var path = Path.Combine(AppContext.BaseDirectory, "keypad.json");
-                _kp = File.Exists(path) ? (System.Text.Json.JsonSerializer.Deserialize<KeypadConfig>(File.ReadAllText(path)) ?? new()) : new();
+                _kp = File.Exists(path)
+                    ? (System.Text.Json.JsonSerializer.Deserialize<KeypadConfig>(File.ReadAllText(path)) ?? new())
+                    : new();
             }
             catch { _kp = new(); }
         }
+
         private void BuildKeypadUI()
         {
             try
@@ -667,21 +758,33 @@ namespace TruckScale.Pos
                 DenomsHost.ItemsSource = _kp.Denominations;
                 KeysItems.ItemsSource = _kp.Keys;
 
-                // Selección por defecto visual en los métodos dinámicos
                 SelectPaymentByCode("cash");
-
                 RefreshKeypadDisplay();
             }
             catch { }
         }
-        private void PayButton_Click(object sender, RoutedEventArgs e) { SetPayment(((Button)sender).Tag?.ToString() ?? "cash"); }
+
+        private void PayButton_Click(object sender, RoutedEventArgs e)
+        {
+            SetPayment(((Button)sender).Tag?.ToString() ?? "cash");
+        }
+
         private void SetPayment(string methodId)
         {
             SelectPaymentByCode(methodId);
         }
-        private void RefreshKeypadDisplay() { try { KeypadDisplay.Text = KeypadText; } catch { } }
-        private void KeypadClear_Click(object sender, RoutedEventArgs e) { _keypadBuffer = ""; RefreshKeypadDisplay(); }
-        
+
+        private void RefreshKeypadDisplay()
+        {
+            try { KeypadDisplay.Text = KeypadText; } catch { }
+        }
+
+        private void KeypadClear_Click(object sender, RoutedEventArgs e)
+        {
+            _keypadBuffer = "";
+            RefreshKeypadDisplay();
+        }
+
         private bool _isCompletingSale = false; // evita doble clic
 
         private async void KeypadCommit_Click(object sender, RoutedEventArgs e)
@@ -701,28 +804,26 @@ namespace TruckScale.Pos
             }
             catch { }
         }
+
         private async Task TryAutoCompleteSaleAsync()
         {
             if (_isCompletingSale) return;
-
-            // Debe haber chofer y servicio seleccionado
             if (!_driverLinked || _selectedProductId <= 0) return;
 
             var (subtotal, tax, total) = ComputeTotals();
             var recibido = SumReceived();
-            if (recibido < total) return; // todavía falta pagar
+            if (recibido < total) return;
 
             _isCompletingSale = true;
             try
             {
-                var saleUid = await SaveSaleAsync(); // tu función de persistencia ya hecha
+                var saleUid = await SaveSaleAsync();
                 var change = recibido - total;
 
                 AppendLog($"[Sale] Completed sale_uid={saleUid} Total={total:0.00} Received={recibido:0.00} Change={change:0.00}");
-               
+
                 await ShowSaleCompletedDialogAsync(total, recibido, change, saleUid);
 
-                // Limpiar TODO para la siguiente operación
                 ResetDriverContext();
             }
             catch (Exception ex)
@@ -735,17 +836,26 @@ namespace TruckScale.Pos
                 _isCompletingSale = false;
             }
         }
+
         private void Key_Click(object sender, RoutedEventArgs e)
         {
             var key = ((Button)sender).Content?.ToString() ?? "";
             switch (key)
             {
-                case "←": if (_keypadBuffer.Length > 0) _keypadBuffer = _keypadBuffer[..^1]; break;
-                case ".": if (!_keypadBuffer.Contains('.')) _keypadBuffer = (_keypadBuffer.Length == 0 ? "0" : _keypadBuffer) + "."; break;
-                default: _keypadBuffer += key; break;
+                case "←":
+                    if (_keypadBuffer.Length > 0) _keypadBuffer = _keypadBuffer[..^1];
+                    break;
+                case ".":
+                    if (!_keypadBuffer.Contains('.'))
+                        _keypadBuffer = (_keypadBuffer.Length == 0 ? "0" : _keypadBuffer) + ".";
+                    break;
+                default:
+                    _keypadBuffer += key;
+                    break;
             }
             RefreshKeypadDisplay();
         }
+
         async private void Denom_Click(object sender, RoutedEventArgs e)
         {
             var tag = ((Button)sender).Tag?.ToString();
@@ -757,6 +867,7 @@ namespace TruckScale.Pos
                 await TryAutoCompleteSaleAsync();
             }
         }
+
         private string PaymentName(string id) => id switch
         {
             "cash" => T("Pay.Cash"),
@@ -766,21 +877,18 @@ namespace TruckScale.Pos
             "usd" => T("Pay.USD"),
             _ => id
         };
-        // === Handlers que faltaban del XAML ===
+
+        // === Handlers de UI faltantes ===
         private void RegisterDriver_Click(object sender, RoutedEventArgs e)
         {
             try { RootDialog.IsOpen = true; } catch { }
         }
 
-        async private void Button_Click(object sender, RoutedEventArgs e)//UG NO SE USA
+        async private void Button_Click(object sender, RoutedEventArgs e) // NO SE USA, solo pruebas
         {
             string uid = GenerateUid10();
             try
             {
-                // opcional: deshabilita botón para evitar doble clic
-                // btnSave.IsEnabled = false;
-
-
                 var id = await saveScaleData(1.1, 2.0, 3.0, 6.0, "example data", uid);
                 MessageBox.Show($"Guardado OK (id={id})", "TruckScale POS",
                     MessageBoxButton.OK, MessageBoxImage.Information);
@@ -790,10 +898,6 @@ namespace TruckScale.Pos
                 MessageBox.Show("Error al guardar: " + ex.Message, "TruckScale POS",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
-            finally
-            {
-                // btnSave.IsEnabled = true;
-            }
         }
 
         private void RegisterCancel_Click(object sender, RoutedEventArgs e)
@@ -801,20 +905,69 @@ namespace TruckScale.Pos
             try { RootDialog.IsOpen = false; } catch { }
         }
 
+        // === Handler del botón WAIT/OK (antes Start) ===
+        private async void Start_Click(object sender, RoutedEventArgs e)
+        {
+            // Capturamos el botón real la primera vez que se hace click
+            if (_waitOkButton == null && sender is Button b)
+                _waitOkButton = b;
+
+            // Si el estado es WAIT (_canAccept=false), no hacemos nada
+            if (!_canAccept)
+            {
+                AppendLog("[OK] Click ignored (no stable weight to accept).");
+                return;
+            }
+
+            var uuid = GenerateUid10();
+            _currentWeightUuid = uuid;
+
+            var ax1 = _snapAx1;
+            var ax2 = _snapAx2;
+            var ax3 = _snapAx3;
+            var total = _snapTotal;
+            var raw = _snapRaw;
+
+            try
+            {
+                AppendLog($"[OK] Saving snapshot uuid={uuid} total={total:0.0} lb");
+                var id = await saveScaleData(ax1, ax2, ax3, total, raw, uuid);
+                AppendLog($"[DB] Insertado id={id} (uuid={uuid})");
+
+                _lastPersistedTotal = total;
+                _canAccept = false;
+                _autoStable = false;
+                _winTotals.Clear();
+                if (_isSimulated) _simSavedOnce = true;
+
+                Dispatcher.Invoke(() =>
+                {
+                    lblUUID.Content = uuid;
+                    lblTemp.Content = "Waiting for next truck…";
+                    SetWaitOkVisual(false);
+                });
+            }
+            catch (Exception ex)
+            {
+                AppendLog("[DB] ERROR al guardar desde OK: " + ex);
+                Dispatcher.Invoke(() => lblTemp.Content = "DB ERROR");
+                _ = _logger?.LogEventAsync("ACCEPT_EX", rawLine: raw, note: ex.ToString());
+            }
+        }
+
         //UG save driver *sale_driver_info*
         private async void RegisterSave_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                // 1) Necesitamos la llave temporal
                 var uuid = _currentWeightUuid;
                 if (string.IsNullOrWhiteSpace(uuid))
                 {
-                    MessageBox.Show("No weight captured yet. Press Start and accept a stable weight before saving driver.",
+                    MessageBox.Show("No weight captured yet. Press OK on a stable weight before saving driver.",
                                     "TruckScale POS", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
-                // 2) Lee campos del formulario (con tus nombres de controles)
+
                 string first = ChoferNombreText?.Text?.Trim() ?? "";
                 string last = ChoferApellidosText?.Text?.Trim() ?? "";
                 string phone = ChoferTelefonoText?.Text?.Trim() ?? "";
@@ -823,21 +976,17 @@ namespace TruckScale.Pos
 
                 string plates = PlacasRegText?.Text?.Trim() ?? "";
 
-                // obtiene el ID correctamente (int?) ya sea por SelectedValue o SelectedItem
                 int? vtypeId = null;
                 if (TipoUnidadCombo?.SelectedValue is int sv) vtypeId = sv;
                 else if (TipoUnidadCombo?.SelectedItem is VehicleType vt) vtypeId = vt.Id;
-
 
                 string brand = MarcaText?.Text?.Trim() ?? "";
                 string model = ModeloText?.Text?.Trim() ?? "";
                 string notes = ObsText?.Text?.Trim();
 
-                // (Opcional) Por si quieres capturar lo visible en Cliente / Producto:
                 string clientText = (ClienteRegCombo?.SelectedItem as ComboBoxItem)?.Content?.ToString()?.Trim() ?? "";
                 string productText = ProductoRegText?.Text?.Trim() ?? "";
 
-                // Validaciones rápidas mínimas
                 if (string.IsNullOrWhiteSpace(plates) && string.IsNullOrWhiteSpace(licNo))
                 {
                     MessageBox.Show("Enter at least Plates or License number.", "TruckScale POS",
@@ -845,9 +994,8 @@ namespace TruckScale.Pos
                     return;
                 }
 
-                // 3) Inserta con identify_by/match_key = weight_uuid/uuid
                 long driverId = await InsertDriverInfoWithFallbackAsync(
-                    saleUid: null,//UG mandamos temporalmente un valor aqui
+                    saleUid: null,
                     firstName: first,
                     lastName: last,
                     phone: phone,
@@ -864,7 +1012,6 @@ namespace TruckScale.Pos
 
                 AppendLog($"[Driver] Saved id={driverId} linked to weight_uuid={uuid}");
 
-                // Trae el registro y muéstralo
                 var info = await GetDriverByWeightUuidAsync(uuid);
                 if (info != null)
                 {
@@ -872,9 +1019,6 @@ namespace TruckScale.Pos
                     lblEstado.Content = "Driver linked to current weight.";
                     _driverLinked = true;
                     UpdateProductButtonsEnabled();
-                    // Si queremos marcar Weigh por defecto cuando ya hay chofer:
-                    //if (WeighToggle.IsEnabled && WeighToggle.IsChecked != true)
-                    //    WeighToggle.IsChecked = true;
                 }
                 else
                 {
@@ -883,10 +1027,6 @@ namespace TruckScale.Pos
                     AppendLog("[Driver] Warning: driver not found right after insert.");
                 }
 
-
-                RootDialog.IsOpen = false;
-                //MessageBox.Show("Driver saved.", "TruckScale POS",
-                //                MessageBoxButton.OK, MessageBoxImage.Information);
                 RootDialog.IsOpen = false;
 
                 await ShowDriverSavedDialogAsync(
@@ -901,28 +1041,40 @@ namespace TruckScale.Pos
                                 MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
-        
-        private async Task<long> InsertDriverInfoWithFallbackAsync(string? saleUid, string firstName, string lastName, string phone, string licenseNo, DateTime? licenseExpiry, string plates, int? vehicleTypeId, string brand, string model, string identifyBy, string matchKey, string? notes)
+
+        private async Task<long> InsertDriverInfoWithFallbackAsync(
+            string? saleUid,
+            string firstName,
+            string lastName,
+            string phone,
+            string licenseNo,
+            DateTime? licenseExpiry,
+            string plates,
+            int? vehicleTypeId,
+            string brand,
+            string model,
+            string identifyBy,
+            string matchKey,
+            string? notes)
         {
             try
             {
-                return await InsertDriverInfoAsync(saleUid, firstName, lastName, phone, licenseNo, licenseExpiry, plates, vehicleTypeId, brand, model, identifyBy, matchKey, notes); // usa GetConnectionString()
+                return await InsertDriverInfoAsync(
+                    saleUid, firstName, lastName, phone, licenseNo, licenseExpiry,
+                    plates, vehicleTypeId, brand, model, identifyBy, matchKey, notes);
             }
-            catch (Exception ex1) //UG PEND falta esta parte
+            catch (Exception ex1)
             {
                 AppendLog("[Driver] Primary DB failed, trying local… " + ex1.Message);
-                // local
                 var localCsb = new MySqlConnectionStringBuilder(GetLocalConn());
                 await using var conn = new MySqlConnection(localCsb.ConnectionString);
                 await conn.OpenAsync();
-                // reutiliza el mismo SQL/params de arriba aquí si quieres duplicar, o
-                // llama a una versión interna que reciba conn abierta.
-                // (Para mantener esto corto, puedes duplicar el bloque de comando aquí).
-                throw; // si no implementas el bloque, no olvides quitar este throw
+                // Aquí podrías duplicar el SQL/params o factorizarlo.
+                throw;
             }
         }
-        private readonly ObservableCollection<PaymentEntry> _pagos = new();
 
+        private readonly ObservableCollection<PaymentEntry> _pagos = new();
 
         private void AddPayment(string methodCode, decimal monto)
         {
@@ -939,20 +1091,22 @@ namespace TruckScale.Pos
             });
             RefreshSummary();
         }
+
         private (decimal subtotal, decimal tax, decimal total) ComputeTotals()
         {
-            // Ajusta si después aplicas impuestos/comisiones
             var subtotal = _selectedProductPrice;
             var tax = 0m;
             var total = subtotal + tax;
             return (subtotal, tax, total);
         }
+
         private decimal SumReceived()
         {
             decimal s = 0m;
             foreach (var p in _pagos) s += p.Monto;
             return s;
         }
+
         private int? FindPaymentMethodIdByCode(string code)
         {
             foreach (var m in PaymentMethods)
@@ -963,48 +1117,64 @@ namespace TruckScale.Pos
 
         private decimal _ventaTotal = 0m, _descuento = 0m, _impuestos = 0m, _comisiones = 0m;
 
-        // === Simulación de báscula UG TODO  quitar ===
+        // === Simulación de báscula ===
         private bool _isSimulated = false;
-        private bool _simSavedOnce = false;  // ya guardamos una vez en esta sesión simulada
+        private bool _simSavedOnce = false;   // ya guardamos una vez en esta sesión simulada
 
         private CancellationTokenSource _simCts;
         private readonly Random _rand = new Random();
 
-        private void Start_Click(object sender, RoutedEventArgs e)
+        private void StartSimulatedReader()
         {
+            _isSimulated = true;
 
-            try
+            _simCts?.Cancel();
+            _simCts = new CancellationTokenSource();
+            var token = _simCts.Token;
+            _simSavedOnce = false;
+            _currentWeightUuid = null;
+
+            Dispatcher.Invoke(() =>
             {
-                _simSavedOnce = false;
+                try
+                {
+                    ScaleStateText.Text = "Scale: Simulated";
+                }
+                catch { }
 
-                // Estado inicial visible para el operador
-                lblTemp.Content = "Connecting";
-                lblEstado.Content = "Opening serial port…";
-                // Inicia la lectura (puerto fijo por ahora; lo moveremos a config después)
-                StartReader("COM2");
-                SetUiReady(false, "Connecting");
-
-            }
-            catch (Exception ex)
-            {
-                //lblTemp.Content = "DB ERROR";  // mostramos error visible; puedes diferenciar si quieres
-                //AppendLog("Weigh_Click error: " + ex);
-                AppendLog($"[Serial] {ex.GetType().Name}: {ex.Message}");
-
-                // Simulador
-                StartSimulatedReader();
-
-                // Quita overlay y habilita TODO
-                SetUiReady(true, "Connected");        // ← clave
                 lblEstado.Content = "Simulated mode (no device).";
-                ScaleStateText.Text = "Scale: Simulated";
+                lblTemp.Content = "Waiting for truck…";
+                SetUiReady(true, "Waiting");
+                SetOkButtonWaitState();
 
-            }
+            });
+
+            _ = Task.Run(async () =>
+            {
+                double a1 = _rand.Next(6000, 12000);
+                double a2 = _rand.Next(6000, 12000);
+                double a3 = _rand.Next(4000, 10000);
+
+                while (!token.IsCancellationRequested)
+                {
+                    var d1 = a1 + _rand.Next(-5, 6);
+                    var d2 = a2 + _rand.Next(-5, 6);
+                    var d3 = a3 + _rand.Next(-5, 6);
+                    var tot = d1 + d2 + d3;
+
+                    Dispatcher.Invoke(() => HandleCardinalRawGG($"%0 {d1:0}lb GG"));
+                    await Task.Delay(250, token);
+                    Dispatcher.Invoke(() => HandleCardinalRawGG($"%1 {d2:0}lb GG"));
+                    await Task.Delay(250, token);
+                    Dispatcher.Invoke(() => HandleCardinalRawGG($"%2 {d3:0}lb GG"));
+                    await Task.Delay(250, token);
+                    Dispatcher.Invoke(() => HandleCardinalRawGG($"%3 {tot:0}lb GG"));
+                    await Task.Delay(500, token);
+                }
+            }, token);
         }
 
-
-
-        // === Últimas lecturas (para validar TOTAL vs suma de ejes) ===
+        // === Últimas lecturas (para validar TOTAL vs suma de ejes en simulador) ===
         private double _ax1, _ax2, _ax3, _total;
         private DateTime _tAx1, _tAx2, _tAx3, _tTotal;
 
@@ -1043,89 +1213,83 @@ namespace TruckScale.Pos
             TryAcceptStableSet();
         }
 
-        //UG quien dispara el save en scale_session_axles
+        /// <summary>
+        /// Evaluación de set estable en modo simulado.
+        /// Ahora solo prepara snapshot y habilita OK, NO guarda.
+        /// </summary>
         private void TryAcceptStableSet()
         {
-            // 1) Ventana de sincronía
             bool inWindow =
                 (_tTotal - _tAx1).Duration().TotalMilliseconds <= SYNC_WINDOW_MS &&
                 (_tTotal - _tAx2).Duration().TotalMilliseconds <= SYNC_WINDOW_MS &&
                 (_tTotal - _tAx3).Duration().TotalMilliseconds <= SYNC_WINDOW_MS;
-            if (!inWindow) return;
 
-            // 2) Tolerancia suma vs total
-            double sum = _ax1 + _ax2 + _ax3;
-            if (Math.Abs(sum - _total) > 100) return;
-
-            // 3) En simulado, guarda solo una vez por sesión
-            if (_isSimulated && _simSavedOnce) return;
-
-            // Aceptado
-            //var uuid = Guid.NewGuid().ToString();
-            //UG cambiamos de donde se toma el uuid
-            string uuid = GenerateUid10();
-            _ = saveScaleData(_ax1, _ax2, _ax3, _total, "%sim%", uuid);
-
-            lblEstado.Content = _isSimulated ? "Stable set accepted (sim)." : "Stable set accepted.";
-
-            if (_isSimulated)
+            if (!inWindow)
             {
-                _simSavedOnce = true;   // ← bloquea nuevas inserciones en simulado
-
-                lblUUID.Content = $"{(_ax1 + _ax2 + _ax3):0} lb (Σ ejes)";
-
-            }
-        }
-
-
-
-        private void StartSimulatedReader()
-        {
-            _isSimulated = true;
-
-            _simCts?.Cancel();
-            _simCts = new CancellationTokenSource();
-            var token = _simCts.Token;
-            _simSavedOnce = false;  // <-- MUY IMPORTANTE: permite un nuevo guardado
-            _currentWeightUuid = null; // (opcional, para forzar nuevo UUID de chofer)
-            _ = Task.Run(async () =>
-            {
-                double a1 = _rand.Next(6000, 12000);
-                double a2 = _rand.Next(6000, 12000);
-                double a3 = _rand.Next(4000, 10000);
-
-                while (!token.IsCancellationRequested)
+                _canAccept = false;
+                Dispatcher.Invoke(() =>
                 {
-                    var d1 = a1 + _rand.Next(-5, 6);
-                    var d2 = a2 + _rand.Next(-5, 6);
-                    var d3 = a3 + _rand.Next(-5, 6);
-                    var tot = d1 + d2 + d3;
+                    lblTemp.Content = "Weight in progress";
+                    SetOkButtonWaitState();
+                });
+                return;
+            }
 
-                    Dispatcher.Invoke(() => HandleCardinalRawGG($"%0 {d1:0}lb GG"));
-                    await Task.Delay(250, token);
-                    Dispatcher.Invoke(() => HandleCardinalRawGG($"%1 {d2:0}lb GG"));
-                    await Task.Delay(250, token);
-                    Dispatcher.Invoke(() => HandleCardinalRawGG($"%2 {d3:0}lb GG"));
-                    await Task.Delay(250, token);
-                    Dispatcher.Invoke(() => HandleCardinalRawGG($"%3 {tot:0}lb GG"));
-                    await Task.Delay(500, token);
-                }
-            }, token);
+            double sum = _ax1 + _ax2 + _ax3;
+            if (Math.Abs(sum - _total) > 100)
+            {
+                _canAccept = false;
+                Dispatcher.Invoke(() =>
+                {
+                    lblTemp.Content = "Check axles / total";
+                    SetOkButtonWaitState();
+                });
+                return;
+            }
+
+            // 👇 elimina estas dos líneas
+            // if (_isSimulated && _simSavedOnce)
+            //     return;
+
+            // Snapshot listo para OK
+            _snapAx1 = _ax1;
+            _snapAx2 = _ax2;
+            _snapAx3 = _ax3;
+            _snapTotal = _total;
+            _snapUtc = DateTime.UtcNow;
+            _snapRaw = "%sim%";
+
+            _canAccept = true;
+
+            Dispatcher.Invoke(() =>
+            {
+                lblTemp.Content = "STABLE — press OK";
+                SetOkButtonReadyState();
+            });
         }
 
-        // === Simulación de báscula UG TODO  quitar hasta aqui ===
 
-        private void InitSummaryUi() { try { PagosList.ItemsSource = _pagos; RefreshSummary(); } catch { } }
+
+        private void InitSummaryUi()
+        {
+            try
+            {
+                PagosList.ItemsSource = _pagos;
+                RefreshSummary();
+            }
+            catch { }
+        }
+
         private void RefreshSummary()
         {
             try
             {
                 TotalVentaBigText.Text = _ventaTotal.ToString("C", _moneyCulture);
 
-                var recibido = 0m; foreach (var p in _pagos) recibido += p.Monto;
+                var recibido = 0m;
+                foreach (var p in _pagos) recibido += p.Monto;
                 var totalCalculado = _ventaTotal - _descuento + _impuestos + _comisiones;
 
-                // diff >= 0 => cambio a devolver; diff < 0 => saldo pendiente
                 var diff = recibido - totalCalculado;
 
                 PagoRecibidoText.Text = recibido.ToString("N2", _moneyCulture);
@@ -1137,13 +1301,11 @@ namespace TruckScale.Pos
 
                 if (PagosEmpty != null)
                     PagosEmpty.Visibility = _pagos.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-                //UG para cuando se tenga que dar cambio, se modifica la leyenda
-                BalanceCaption.Text = diff >= 0 ? "Change" : T("Payment.BalanceKpi");
 
+                BalanceCaption.Text = diff >= 0 ? "Change" : T("Payment.BalanceKpi");
             }
             catch { }
         }
-
 
         // ===== DB init en Window_Loaded =====
         private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -1151,37 +1313,47 @@ namespace TruckScale.Pos
             var dbCfg = new DatabaseConfig();
             var factory = new MySqlConnectionFactory(dbCfg);
             _logger = new WeightLogger(factory);
+
             try
             {
                 using var _ = await factory.CreateOpenConnectionAsync();
-
             }
             catch (Exception ex)
             {
                 WarnAndLog("UI_BIND_ERROR",
-               "No se pudo preparar la lista de recientes.",
-               ex.ToString(),
-               "RecientesList.ItemsSource");
+                    "No se pudo preparar la lista de recientes.",
+                    ex.ToString(),
+                    "RecientesList.ItemsSource");
             }
+
             InitSummaryUi();
-            lblTemp.Content = "Waiting";
-            lblEstado.Content = "Press Start to begin.";
+
+            lblTemp.Content = "Connecting…";
+            lblEstado.Content = "Opening serial port…";
+
+            // Conexión automática a la báscula (real o simulada)
+            TryAutoConnectAtBoot();
+            SetOkButtonWaitState();
+
             await LoadProductsAsync();
             await LoadVehicleTypesAsync();
-            PagosList.ItemsSource = _pagos; 
-            await LoadPaymentMethodsAsync();   // ya implementado antes
+            PagosList.ItemsSource = _pagos;
+            await LoadPaymentMethodsAsync();
 
-
+            if (_isConnected)
+            {
+                lblTemp.Content = "Waiting for truck…";
+                lblEstado.Content = "Scale ready.";
+            }
         }
+
         private void WarnAndLog(string kind, string userMessage, string? detail = null, string? raw = null)
         {
             _ = (_logger?.LogEventAsync(kind, rawLine: raw, note: detail ?? userMessage)) ?? Task.CompletedTask;
-
-            // Estamos en UI thread en Window_Loaded; si no, usa Dispatcher.BeginInvoke
             MessageBox.Show(userMessage, "TruckScale POS", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
-        private bool _isConnected;  // sólo conexión al puerto
+        private bool _isConnected;  // solo conexión al puerto
 
         private void SetUiReady(bool ready, string status = null)
         {
@@ -1193,21 +1365,16 @@ namespace TruckScale.Pos
             UiBlocker.IsHitTestVisible = !ready;
 
             if (status != null) lblTemp.Content = status;
-
-            // Si Register driver debe esperar “estable”, lo puedes refinar así:
-            // RegisterDriverBtn.IsEnabled = ready && _autoStable;
         }
 
-        // Estado actual del producto seleccionado
+        // ===== Estado actual del producto seleccionado =====
         private int _selectedProductId;
         private string _selectedProductCode;
         private string _selectedProductName;
         private decimal _selectedProductPrice;
         private string _selectedCurrency = "USD";
 
-
-        // ---- Modelo de producto (lo que realmente usas en UI) ----
-        //UG, tal vez tengamos que mover esto a otro archivo
+        // ---- Modelo de producto para UI ----
         public sealed class ProductInfo
         {
             public int Id { get; init; }
@@ -1221,25 +1388,26 @@ namespace TruckScale.Pos
         private readonly Dictionary<string, ProductInfo> _products =
             new(StringComparer.OrdinalIgnoreCase);
 
+        private string GetPrimaryConn() => GetConnectionString();
 
-        private string GetPrimaryConn() => GetConnectionString(); 
+
         private string GetLocalConn()
         {
-            // TODO: llévalo a app.config / secrets
+            var cfg = PosConfigService.Load();
+            if (!string.IsNullOrWhiteSpace(cfg.LocalDbStrCon))
+                return cfg.LocalDbStrCon;
+
+            // Fallback legacy
             return "Server=127.0.0.1;Port=3306;Database=truckscale;Uid=localuser;Pwd=localpass;SslMode=None;";
         }
-
         private async Task LoadProductsAsync()
         {
-            // Intento #1: BD principal
             if (!await TryLoadProductsAsync(GetPrimaryConn()))
             {
                 AppendLog("[Products] Primary DB failed, trying local…");
-                // Intento #2: instancia local
                 if (!await TryLoadProductsAsync(GetLocalConn()))
                 {
                     AppendLog("[Products] Local DB failed. Products unavailable.");
-                    // Si quieres, aquí puedes deshabilitar los toggles:
                     WeighToggle.IsEnabled = false;
                     ReweighToggle.IsEnabled = false;
                     lblEstado.Content = "Products unavailable (DB offline).";
@@ -1247,27 +1415,20 @@ namespace TruckScale.Pos
                 }
             }
             UpdateProductButtonsEnabled();
-
-            // Habilita UI si llegaron productos
-            //WeighToggle.IsEnabled = _products.ContainsKey("WEIGH");
-            //ReweighToggle.IsEnabled = _products.ContainsKey("REWEIGH");
-
-            // Selección por defecto
-            //if (WeighToggle.IsEnabled)
-            //    WeighToggle.IsChecked = true; // dispara el handler y setea el precio
         }
 
         private async Task<bool> TryLoadProductsAsync(string connStr)
         {
             try
             {
-                using var conn = new MySqlConnector.MySqlConnection(connStr);
+                using var conn = new MySqlConnection(connStr);
                 await conn.OpenAsync();
 
-                // Pedimos solo lo necesario y solo los códigos que usas
-                const string SQL = @"SELECT product_id, code, name, default_price, currency FROM products WHERE is_active = 1 AND code IN ('WEIGH','REWEIGH');";
+                const string SQL = @"SELECT product_id, code, name, default_price, currency 
+                                     FROM products 
+                                     WHERE is_active = 1 AND code IN ('WEIGH','REWEIGH');";
 
-                using var cmd = new MySqlConnector.MySqlCommand(SQL, conn);
+                using var cmd = new MySqlCommand(SQL, conn);
                 using var rd = await cmd.ExecuteReaderAsync();
 
                 var found = 0;
@@ -1295,9 +1456,6 @@ namespace TruckScale.Pos
             }
         }
 
-        //=-------UG, tal vez tengamos que mover esto a otro archivo (arriba)
-
-
         private void SetProduct(int id, string code, string name, decimal price, string currency = "USD")
         {
             _selectedProductId = id;
@@ -1306,27 +1464,23 @@ namespace TruckScale.Pos
             _selectedProductPrice = price;
             _selectedCurrency = currency;
 
-            _ventaTotal = price; // <-- importante para KPIs
+            _ventaTotal = price;
             TotalVentaBigText.Text = string.Format(
                 _selectedCurrency == "USD" ? CultureInfo.GetCultureInfo("en-US")
                                            : CultureInfo.GetCultureInfo("es-MX"),
                 "{0:C}", _selectedProductPrice);
 
-            RefreshSummary(); // <-- recalcula recibido/balance
+            RefreshSummary();
         }
-
 
         private void ApplySelected(string code)
         {
             if (_products.TryGetValue(code, out var p))
             {
-                // Usa el nombre de BD si quieres reflejarlo
-                // (tu UI ya muestra solo "Weigh"/"Reweigh", así que es opcional)
                 SetProduct(p.Id, p.Code, p.Name, p.Price, p.Currency);
             }
             else
             {
-                // Sin datos → deshabilita o muestra mensaje
                 lblEstado.Content = "Product not available.";
             }
         }
@@ -1345,7 +1499,10 @@ namespace TruckScale.Pos
 
         private async Task<string?> TryGetLastWeightUuidAsync(string connStr)
         {
-            const string SQL = @"SELECT uuid_weight FROM scale_session_axles WHERE captured_local >= CURDATE() ORDER BY id DESC LIMIT 1;";
+            const string SQL = @"SELECT uuid_weight 
+                                 FROM scale_session_axles 
+                                 WHERE captured_local >= CURDATE() 
+                                 ORDER BY id DESC LIMIT 1;";
 
             try
             {
@@ -1360,16 +1517,9 @@ namespace TruckScale.Pos
 
         private Task<string?> GetWeightUuidForLinkAsync()
         {
-            //if (!string.IsNullOrWhiteSpace(_currentWeightUuid))
-            //    return _currentWeightUuid;
-
-            //// intenta principal → local
-            //var uuid = await TryGetLastWeightUuidAsync(GetPrimaryConn());
-            //if (string.IsNullOrWhiteSpace(uuid))
-            //    uuid = await TryGetLastWeightUuidAsync(GetLocalConn());
-            //return uuid;
             return Task.FromResult(_currentWeightUuid);
         }
+
         /// <DriverInfo>
         /// UG Apartado de DriverInfo
         /// </DriverInfo>
@@ -1388,18 +1538,30 @@ namespace TruckScale.Pos
             public string VehicleTypeName { get; init; } = "";
         }
 
-        private async Task<long> InsertDriverInfoAsync(string? saleUid, string firstName, string lastName, string phone,string licenseNo, DateTime? licenseExpiry, string plates, int? vehicleTypeId,string brand, string model, string identifyBy, string matchKey, string? notes)
+        private async Task<long> InsertDriverInfoAsync(
+            string? saleUid,
+            string firstName,
+            string lastName,
+            string phone,
+            string licenseNo,
+            DateTime? licenseExpiry,
+            string plates,
+            int? vehicleTypeId,
+            string brand,
+            string model,
+            string identifyBy,
+            string matchKey,
+            string? notes)
         {
             string connStr = GetConnectionString();
 
             const string SQL = @"INSERT INTO sale_driver_info
-                                (sale_uid, driver_first_name, driver_last_name, driver_phone, license_number, license_expiry,vehicle_plates, vehicle_type_id, vehicle_brand, vehicle_model,identify_by, match_key, notes, created_at)
+                                (sale_uid, driver_first_name, driver_last_name, driver_phone, license_number, license_expiry,
+                                 vehicle_plates, vehicle_type_id, vehicle_brand, vehicle_model, identify_by, match_key, notes, created_at)
                                 VALUES
-                                (@sale_uid, @first, @last, @phone, @lic, @exp,@plates, @vtid, @brand, @model,@idby, @mkey, @notes, NOW())
+                                (@sale_uid, @first, @last, @phone, @lic, @exp, @plates, @vtid, @brand, @model, @idby, @mkey, @notes, NOW())
                                 ON DUPLICATE KEY UPDATE
-                                -- Nunca pisar sale_uid si ya existe
                                 sale_uid = COALESCE(sale_driver_info.sale_uid, VALUES(sale_uid)),
-                                -- Solo actualizar datos del chofer si AÚN no está ligado a una venta
                                 driver_first_name = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_first_name), sale_driver_info.driver_first_name),
                                 driver_last_name  = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_last_name),  sale_driver_info.driver_last_name),
                                 driver_phone      = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_phone),      sale_driver_info.driver_phone),
@@ -1435,7 +1597,9 @@ namespace TruckScale.Pos
 
         public async Task<int> LinkDriverToSaleAsync(MySqlConnection conn, MySqlTransaction tx, string weightUuid, string saleUid)
         {
-            const string SQL = @"UPDATE sale_driver_info SET sale_uid = @sale WHERE identify_by = 'weight_uuid' AND match_key = @uuid;";
+            const string SQL = @"UPDATE sale_driver_info 
+                                 SET sale_uid = @sale 
+                                 WHERE identify_by = 'weight_uuid' AND match_key = @uuid;";
 
             try
             {
@@ -1460,8 +1624,10 @@ namespace TruckScale.Pos
 
         private async Task<DriverInfo?> GetDriverByWeightUuidAsync(string uuid)
         {
-            const string SQL = @"SELECT sdi.id_driver_info,sdi.driver_first_name, sdi.driver_last_name,sdi.driver_phone, sdi.license_number, sdi.license_expiry,sdi.vehicle_plates, sdi.vehicle_type_id,sdi.vehicle_brand, sdi.vehicle_model,
-                                    COALESCE(vt.name,'') AS vehicle_type_name
+            const string SQL = @"SELECT sdi.id_driver_info,sdi.driver_first_name, sdi.driver_last_name,
+                                        sdi.driver_phone, sdi.license_number, sdi.license_expiry,
+                                        sdi.vehicle_plates, sdi.vehicle_type_id,sdi.vehicle_brand, sdi.vehicle_model,
+                                        COALESCE(vt.name,'') AS vehicle_type_name
                                  FROM sale_driver_info sdi
                                  LEFT JOIN vehicle_types vt ON vt.vehicle_type_id = sdi.vehicle_type_id
                                  WHERE sdi.identify_by = 'weight_uuid' AND sdi.match_key = @uuid
@@ -1533,7 +1699,6 @@ namespace TruckScale.Pos
                 DriverPhoneText.Text = DriverVehicleText.Text = "—";
         }
 
-
         /// <vehicle_types>
         /// UG Apartado de vehicle_types
         /// </vehicle_types>
@@ -1545,15 +1710,20 @@ namespace TruckScale.Pos
         }
 
         private readonly ObservableCollection<VehicleType> _vehicleTypes = new();
+
         private async Task<bool> TryLoadVehicleTypesAsync(string connStr)
         {
             try
             {
-                using var conn = new MySqlConnector.MySqlConnection(connStr);
+                using var conn = new MySqlConnection(connStr);
                 await conn.OpenAsync();
 
-                const string SQL = @"SELECT vehicle_type_id, code, name  FROM vehicle_types  WHERE is_active = 1 ORDER BY vehicle_type_id";
-                using var cmd = new MySqlConnector.MySqlCommand(SQL, conn);
+                const string SQL = @"SELECT vehicle_type_id, code, name  
+                                     FROM vehicle_types  
+                                     WHERE is_active = 1 
+                                     ORDER BY vehicle_type_id";
+
+                using var cmd = new MySqlCommand(SQL, conn);
                 using var rd = await cmd.ExecuteReaderAsync();
 
                 _vehicleTypes.Clear();
@@ -1584,7 +1754,6 @@ namespace TruckScale.Pos
                 if (!await TryLoadVehicleTypesAsync(GetLocalConn()))
                 {
                     AppendLog("[VehicleTypes] Local DB failed. Seeding defaults.");
-                    // fallback visual para no bloquear el formulario
                     _vehicleTypes.Clear();
                     _vehicleTypes.Add(new VehicleType { Id = 1, Code = "TRACTOR", Name = "Tractor" });
                     _vehicleTypes.Add(new VehicleType { Id = 2, Code = "TORTON", Name = "Torton" });
@@ -1593,11 +1762,11 @@ namespace TruckScale.Pos
                 }
             }
 
-            // Enlaza al ComboBox
             TipoUnidadCombo.ItemsSource = _vehicleTypes;
             TipoUnidadCombo.DisplayMemberPath = "Name";
             TipoUnidadCombo.SelectedValuePath = "Id";
         }
+
         /// <_rxDigits>
         /// UG Formato numero 
         /// </_rxDigits>
@@ -1605,11 +1774,9 @@ namespace TruckScale.Pos
 
         private void DigitsOnly_PreviewTextInput(object sender, TextCompositionEventArgs e)
         {
-            // Acepta sólo 0–9
             e.Handled = !_rxDigits.IsMatch(e.Text);
         }
 
-        // Controla pegado: sólo dígitos y respeta MaxLength
         private void DigitsOnly_Pasting(object sender, DataObjectPastingEventArgs e)
         {
             if (!e.DataObject.GetDataPresent(DataFormats.Text))
@@ -1622,7 +1789,6 @@ namespace TruckScale.Pos
             string pasted = (string)e.DataObject.GetData(DataFormats.Text) ?? "";
             string digits = new string(pasted.Where(char.IsDigit).ToArray());
 
-            // Longitud resultante si reemplaza la selección actual
             int room = tb.MaxLength - (tb.Text.Length - tb.SelectionLength);
             if (room <= 0)
             {
@@ -1639,7 +1805,6 @@ namespace TruckScale.Pos
             if (digits.Length > room)
                 digits = digits.Substring(0, room);
 
-            // Inserta nosotros mismos y cancelamos el pegado por defecto
             tb.SelectedText = digits;
             e.CancelCommand();
         }
@@ -1647,7 +1812,6 @@ namespace TruckScale.Pos
         /// <payment_methods>
         /// UG Apartado de payment_methods
         /// </payment_methods>        
-
         private static readonly Dictionary<string, PackIconKind> _methodIconMap =
             new(StringComparer.OrdinalIgnoreCase)
             {
@@ -1667,7 +1831,10 @@ namespace TruckScale.Pos
                     using var conn = new MySqlConnection(connStr);
                     await conn.OpenAsync();
 
-                    const string SQL = @"SELECT method_id, code, name, is_cash, allow_reference, is_active FROM payment_methods WHERE is_active = 1 ORDER BY method_id;";
+                    const string SQL = @"SELECT method_id, code, name, is_cash, allow_reference, is_active 
+                                         FROM payment_methods 
+                                         WHERE is_active = 1 
+                                         ORDER BY method_id;";
 
                     using var cmd = new MySqlCommand(SQL, conn);
                     using var rd = await cmd.ExecuteReaderAsync();
@@ -1684,7 +1851,9 @@ namespace TruckScale.Pos
                             IsCash = rd.GetBoolean("is_cash"),
                             AllowReference = rd.GetBoolean("allow_reference"),
                             IsActive = rd.GetBoolean("is_active"),
-                            IconKind = _methodIconMap.TryGetValue(code, out var kind) ? kind : PackIconKind.CashRegister
+                            IconKind = _methodIconMap.TryGetValue(code, out var kind)
+                                ? kind
+                                : PackIconKind.CashRegister
                         });
                     }
                     AppendLog($"[Payments] Loaded {PaymentMethods.Count} method(s) from {conn.DataSource}.");
@@ -1703,9 +1872,9 @@ namespace TruckScale.Pos
                 await TryOneAsync(GetLocalConn());
             }
 
-            // Selección por defecto
             SelectPaymentByCode("cash");
         }
+
         private void SelectPaymentByCode(string code)
         {
             PaymentMethod? sel = null;
@@ -1718,7 +1887,7 @@ namespace TruckScale.Pos
 
             if (sel != null)
             {
-                _selectedPaymentId = sel.Code; // conserva tu variable existente
+                _selectedPaymentId = sel.Code;
                 RefPanel.Visibility = sel.AllowReference ? Visibility.Visible : Visibility.Collapsed;
             }
         }
@@ -1728,20 +1897,18 @@ namespace TruckScale.Pos
             if ((sender as FrameworkElement)?.DataContext is PaymentMethod pm)
                 SelectPaymentByCode(pm.Code);
         }
-    
+
         /// <Servicios>
-        /// UG BOTONES DE PRODCTOS
+        /// UG BOTONES DE PRODUCTOS
         /// </Servicios> 
         private void UpdateProductButtonsEnabled()
         {
             bool hasWeigh = _products.ContainsKey("WEIGH");
             bool hasReweigh = _products.ContainsKey("REWEIGH");
 
-            // Actívalos SOLO si ya hay chofer ligado
             WeighToggle.IsEnabled = _driverLinked && hasWeigh;
             ReweighToggle.IsEnabled = _driverLinked && hasReweigh;
 
-            // Si se deshabilitan, quita la selección visual
             if (!WeighToggle.IsEnabled) WeighToggle.IsChecked = false;
             if (!ReweighToggle.IsEnabled) ReweighToggle.IsChecked = false;
         }
@@ -1749,11 +1916,10 @@ namespace TruckScale.Pos
         /// <sales>
         /// UG section save sales
         /// </sales> 
-        /// 
-        // En tu clase MainWindow (campos de contexto)
         private int _siteId = 0;       // setéalo al arrancar (ej. 1)
         private int _terminalId = 0;   // setéalo al arrancar (ej. 1)
         private int _operatorId = 1;   // por ahora 'admin' = 1
+
         private async Task<int> GetDefaultSiteIdAsync(MySqlConnection conn, MySqlTransaction tx)
         {
             const string Q = "SELECT site_id FROM sites ORDER BY site_id LIMIT 1;";
@@ -1761,6 +1927,7 @@ namespace TruckScale.Pos
             var obj = await cmd.ExecuteScalarAsync();
             return (obj == null || obj == DBNull.Value) ? 1 : Convert.ToInt32(obj);
         }
+
         private async Task<int> GetDefaultTerminalIdAsync(MySqlConnection conn, MySqlTransaction tx)
         {
             const string Q = "SELECT terminal_id FROM pos_terminals ORDER BY terminal_id LIMIT 1;";
@@ -1768,8 +1935,8 @@ namespace TruckScale.Pos
             var obj = await cmd.ExecuteScalarAsync();
             return (obj == null || obj == DBNull.Value) ? 1 : Convert.ToInt32(obj);
         }
-        private int GetCurrentOperatorId() => _operatorId > 0 ? _operatorId : 1;
 
+        private int GetCurrentOperatorId() => _operatorId > 0 ? _operatorId : 1;
 
         private async Task<string> SaveSaleAsync()
         {
@@ -1783,7 +1950,7 @@ namespace TruckScale.Pos
             var saleUid = Guid.NewGuid().ToString();
 
             const int STATUS_SALE_COMPLETED = 2; // SALES.COMPLETED
-            const int STATUS_PAY_RECEIVED = 6; // PAYMENTS.RECEIVED
+            const int STATUS_PAY_RECEIVED = 6;   // PAYMENTS.RECEIVED
 
             await using var conn = new MySqlConnection(GetConnectionString());
             await conn.OpenAsync();
@@ -1791,12 +1958,10 @@ namespace TruckScale.Pos
 
             try
             {
-                // Contexto (usa campos si ya los setearon; si no, toma el primero de BD)
                 int siteId = _siteId > 0 ? _siteId : await GetDefaultSiteIdAsync(conn, (MySqlTransaction)tx);
                 int terminalId = _terminalId > 0 ? _terminalId : await GetDefaultTerminalIdAsync(conn, (MySqlTransaction)tx);
                 int operatorId = GetCurrentOperatorId();
 
-                // 1) sales (cabecera)
                 const string SQL_SALE = @"INSERT INTO sales
                          (sale_uid, site_id, terminal_id, operator_id, sale_status_id, currency, subtotal, tax_total, total, created_at)
                          VALUES
@@ -1816,21 +1981,21 @@ namespace TruckScale.Pos
                     await cmd.ExecuteNonQueryAsync();
                 }
 
-                // === 2) sale_lines (encaja con tus columnas reales) ===
-                // Valores por defecto razonables para una línea de servicio sin impuestos/desc.
                 var qty = 1m;
-                var unit = "EA";              // ajusta si manejas otra unidad
+                var unit = "EA";
                 var lineSubtotal = _selectedProductPrice * qty;
                 var discount = 0m;
-                var taxable = 0;         // 0 = no gravable; 1 = gravable
+                var taxable = 0;
                 var taxRatePct = 0m;
                 var taxAmount = 0m;
                 var lineTotal = lineSubtotal - discount + taxAmount;
 
                 const string SQL_LINE = @"INSERT INTO sale_lines
-                                            (sale_uid, seq, product_id, description, qty, unit, unit_price,line_subtotal, discount_amount, taxable, tax_rate_percent, tax_amount, line_total)
+                                            (sale_uid, seq, product_id, description, qty, unit, unit_price,
+                                             line_subtotal, discount_amount, taxable, tax_rate_percent, tax_amount, line_total)
                                         VALUES
-                                            (@uid, @seq, @pid, @desc, @qty, @unit, @price,@lsub, @disc, @taxable, @trate, @tamt, @ltot);";
+                                            (@uid, @seq, @pid, @desc, @qty, @unit, @price,
+                                             @lsub, @disc, @taxable, @trate, @tamt, @ltot);";
 
                 await using (var cmd = new MySqlCommand(SQL_LINE, conn, (MySqlTransaction)tx))
                 {
@@ -1850,11 +2015,12 @@ namespace TruckScale.Pos
                     await cmd.ExecuteNonQueryAsync();
                 }
 
-                // === 3) payments (encaja con tus columnas reales) ===
                 const string SQL_PAY = @"INSERT INTO payments
-                                            (payment_uid, sale_uid, method_id, payment_status_id, amount, currency,exchange_rate, reference_number, received_by, received_at)
+                                            (payment_uid, sale_uid, method_id, payment_status_id, amount, currency,
+                                             exchange_rate, reference_number, received_by, received_at)
                                         VALUES
-                                            (@puid, @uid, @mid, @st, @amt, @ccy,@rate, @ref, @rcvby, NOW());";
+                                            (@puid, @uid, @mid, @st, @amt, @ccy,
+                                             @rate, @ref, @rcvby, NOW());";
 
                 foreach (var p in _pagos)
                 {
@@ -1869,13 +2035,12 @@ namespace TruckScale.Pos
                     cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
                     cmd.Parameters.AddWithValue("@amt", p.Monto);
                     cmd.Parameters.AddWithValue("@ccy", _selectedCurrency ?? "USD");
-                    cmd.Parameters.AddWithValue("@rate", 1m); // TODO: usa tipo de cambio real si manejas multi-moneda
+                    cmd.Parameters.AddWithValue("@rate", 1m);
                     cmd.Parameters.AddWithValue("@ref", (object?)p.Ref ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
                     await cmd.ExecuteNonQueryAsync();
                 }
 
-                // === 4) Link driver (weight_uuid → sale_uid) ===                
                 try
                 {
                     if (!string.IsNullOrWhiteSpace(_currentWeightUuid))
@@ -1886,14 +2051,14 @@ namespace TruckScale.Pos
                     throw new Exception(
                         $"Error linking driver (weight_uuid='{_currentWeightUuid}', sale_uid='{saleUid}'). {ex.Message}", ex);
                 }
-                // === 3.5) Actualiza sales.amount_paid y sales.balance_due ===
-                var amountPaid = recibido; // ya lo tienes calculado arriba
+
+                var amountPaid = recibido;
                 var balanceDue = Math.Max(total - amountPaid, 0m);
 
                 const string SQL_SALE_UPDATE = @"UPDATE sales
                                                     SET amount_paid = @paid,
-                                                    balance_due = @bal,
-                                                    occurred_at = COALESCE(occurred_at, NOW())
+                                                        balance_due = @bal,
+                                                        occurred_at = COALESCE(occurred_at, NOW())
                                                 WHERE sale_uid = @uid;";
 
                 await using (var up = new MySqlCommand(SQL_SALE_UPDATE, conn, (MySqlTransaction)tx))
@@ -1902,12 +2067,10 @@ namespace TruckScale.Pos
                     up.Parameters.AddWithValue("@bal", balanceDue);
                     up.Parameters.AddWithValue("@uid", saleUid);
                     await up.ExecuteNonQueryAsync();
-
-                    await tx.CommitAsync();
-                    return saleUid;
                 }
-                //await tx.CommitAsync();
-                //return saleUid;
+
+                await tx.CommitAsync();
+                return saleUid;
             }
             catch
             {
@@ -1923,23 +2086,20 @@ namespace TruckScale.Pos
         // === Modal: Sale completed ===
         private async Task ShowSaleCompletedDialogAsync(decimal total, decimal recibido, decimal change, string saleUid)
         {
-            // llena textos
             DlgSaleTotal.Text = total.ToString("C", _moneyCulture);
             DlgSaleReceived.Text = recibido.ToString("C", _moneyCulture);
             DlgSaleChange.Text = change.ToString("C", _moneyCulture);
             DlgSaleUid.Text = $"Ticket: {saleUid}";
 
-            // botones
             _saleDialogTcs = new TaskCompletionSource<bool>();
             DlgCloseBtn.Click += CloseSaleDlg_Click;
             DlgReprintBtn.Click += (s, e) => { _ = ReprintTicketAsync(saleUid); };
 
-            // (opcional) simular impresión en background
             DlgTicketProgress.IsIndeterminate = true;
             _ = Task.Run(async () =>
             {
-                try { await PrintTicketAsync(saleUid); } // tu función real de impresión
-                catch { /* log si aplica */ }
+                try { await PrintTicketAsync(saleUid); }
+                catch { }
                 finally
                 {
                     Dispatcher.Invoke(() => DlgTicketProgress.IsIndeterminate = false);
@@ -1957,12 +2117,11 @@ namespace TruckScale.Pos
             _saleDialogTcs?.TrySetResult(true);
         }
 
-        // Stub opcional
         private Task PrintTicketAsync(string saleUid)
         {
-            // integra aquí tu impresión real; por ahora solo una pequeña espera
             return Task.Delay(900);
         }
+
         private Task ReprintTicketAsync(string saleUid)
         {
             return PrintTicketAsync(saleUid);
@@ -1980,11 +2139,100 @@ namespace TruckScale.Pos
             DriverSavedHost.IsOpen = true;
             await _drvDialogTcs.Task;
         }
+
         private void CloseDrvDlg_Click(object? sender, RoutedEventArgs e)
         {
             DriverSavedHost.IsOpen = false;
             DlgDrvOkBtn.Click -= CloseDrvDlg_Click;
             _drvDialogTcs?.TrySetResult(true);
+        }
+        private void SetOkButtonWaitState()
+        {
+            try
+            {
+                OkButtonLabel.Text = "WAIT";
+                OkButtonIcon.Kind = PackIconKind.TimerSand;
+
+                var waitBg =
+                    TryFindResource("WaitCtaBg") as Brush ??
+                    TryFindResource("MaterialDesignValidationErrorBrush") as Brush ??
+                    Brushes.IndianRed;
+
+                OkButton.Background = waitBg;
+            }
+            catch { /* no rompemos la app por temas de UI */ }
+        }
+
+
+        private void SetOkButtonReadyState()
+        {
+            try
+            {
+                OkButtonLabel.Text = "OK";
+                OkButtonIcon.Kind = PackIconKind.CheckCircle;
+
+                var okBg =
+                    TryFindResource("StartCtaBg") as Brush ??
+                    TryFindResource("PrimaryHueMidBrush") as Brush ??
+                    TryFindResource("PrimaryBrush") as Brush ??
+                    Brushes.SeaGreen;
+
+                OkButton.Background = okBg;
+            }
+            catch { }
+        }
+        private async void OkButton_Click(object sender, RoutedEventArgs e)
+        {
+            // Si está en modo WAIT, no hace nada
+            if (!_canAccept)
+            {
+                AppendLog("[OK] Click ignored (no stable weight to accept).");
+                return;
+            }
+
+            // Tomamos el snapshot estable preparado por EvaluateStabilityAndUpdateUi o TryAcceptStableSet
+            var uuid = GenerateUid10();
+            _currentWeightUuid = uuid;
+
+            var ax1 = _snapAx1;
+            var ax2 = _snapAx2;
+            var ax3 = _snapAx3;
+            var total = _snapTotal;
+            var raw = _snapRaw;
+
+            try
+            {
+                AppendLog($"[OK] Saving snapshot uuid={uuid} total={total:0.0} lb");
+                var id = await saveScaleData(ax1, ax2, ax3, total, raw, uuid);
+                AppendLog($"[DB] Insertado id={id} (uuid={uuid})");
+
+                // Reglas para siguiente camión
+                _lastPersistedTotal = total;
+                _canAccept = false;
+                _autoStable = false;
+                _winTotals.Clear();
+                //if (_isSimulated) _simSavedOnce = true;
+
+                Dispatcher.Invoke(() =>
+                {
+                    // Mostrar el peso que REALMENTE se guardó (redondeado igual que en DB)
+                    int pesoEntero = (int)Math.Round(total);
+                    lblUUID.Content = $"{pesoEntero} lb";
+
+                    lblTemp.Content = "Waiting for next truck…";
+                    SetOkButtonWaitState();
+                });
+            }
+            catch (Exception ex)
+            {
+                AppendLog("[DB] ERROR al guardar desde OK: " + ex);
+                Dispatcher.Invoke(() =>
+                {
+                    lblTemp.Content = "DB ERROR";
+                    SetOkButtonWaitState();
+                });
+                _ = _logger?.LogEventAsync("ACCEPT_EX", rawLine: raw, note: ex.ToString());
+            }
         }
 
     }
