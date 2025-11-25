@@ -76,6 +76,17 @@
     <sys:String x:Key="Cancel">Cancel</sys:String>
     <sys:String x:Key="Save">Save</sys:String>
 
+    <sys:String x:Key="AccountName">Account name</sys:String>
+    <sys:String x:Key="AccountAddress">Account address</sys:String>
+    <sys:String x:Key="AccountCountry">Account country</sys:String>
+    <sys:String x:Key="AccountState">Account state</sys:String>
+
+
+    <!-- EN -->
+    <sys:String x:Key="LicenseState">License state</sys:String>
+    <sys:String x:Key="TrailerNumber">Trailer number</sys:String>
+    <sys:String x:Key="TractorNumber">Tractor number</sys:String>
+
     <!-- Validations -->
     <sys:String x:Key="Validation.MissingFields.Title">Validation</sys:String>
     <sys:String x:Key="Validation.MissingFields.Body">Missing required fields: First name, Last name and Plates.</sys:String>

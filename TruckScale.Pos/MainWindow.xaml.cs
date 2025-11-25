@@ -26,6 +26,7 @@ using TruckScale.Pos.Domain;
 using TruckScale.Pos.Config;
 namespace TruckScale.Pos
 {
+
     // ===== Teclado / pagos (UI) =====
     public class KeypadConfig
     {
@@ -38,6 +39,7 @@ namespace TruckScale.Pos
 
     public sealed class PaymentMethod : INotifyPropertyChanged
     {
+
         public int Id { get; init; }
         public string Code { get; init; } = "";
         public string Name { get; init; } = "";
@@ -67,6 +69,26 @@ namespace TruckScale.Pos
         public string? Ref { get; set; }           // referencia opcional
         public decimal Monto { get; set; }
     }
+    public class LicenseState
+    {
+        public int Id { get; set; }
+        public string CountryCode { get; set; } = "";
+        public string Code { get; set; } = "";   // state_code
+        public string Name { get; set; } = "";   // state_name
+
+        public string Display => $"{Name} ({Code})";
+    }
+    public sealed class DriverProduct
+    {
+        public int Id { get; init; }
+        public string Code { get; init; } = "";
+        public string Name { get; init; } = "";
+
+        public string Display => string.IsNullOrWhiteSpace(Code)
+            ? Name
+            : $"{Name} ({Code})";
+    }
+
 
     public partial class MainWindow : Window
     {
@@ -82,7 +104,7 @@ namespace TruckScale.Pos
         private KeypadConfig _kp = new();
         private string _keypadBuffer = "";
         public string KeypadText => string.IsNullOrEmpty(_keypadBuffer) ? "0" : _keypadBuffer;
-        private string _selectedPaymentId = "cash";
+        private string _selectedPaymentId = "";
 
         public ObservableCollection<PaymentMethod> PaymentMethods { get; } = new();
 
@@ -114,6 +136,26 @@ namespace TruckScale.Pos
 
         // Referencia al botón WAIT/OK (se toma del sender la primera vez que se hace click)
         private Button? _waitOkButton;
+        private readonly List<TransportAccount> _accounts = new();
+        private readonly List<LicenseState> _licenseStates = new();
+
+        // ===== Driver phone lookup =====
+        private string _driverPhoneDigits = "";
+        private const int DRIVER_PHONE_LEN = 10;
+
+        private static string OnlyDigits(string? s)
+            => string.IsNullOrEmpty(s)
+                ? ""
+                : new string(s.Where(char.IsDigit).ToArray());
+
+        private static string FormatPhone10(string digits)
+        {
+            digits = OnlyDigits(digits);
+            if (digits.Length != 10) return digits;
+            return $"({digits.Substring(0, 3)}) {digits.Substring(3, 3)}-{digits.Substring(6, 4)}";
+        }
+        private readonly ObservableCollection<ProductInfo> _productOptions = new();
+        private readonly ObservableCollection<DriverProduct> _driverProducts = new();
 
         public MainWindow()
         {
@@ -126,10 +168,23 @@ namespace TruckScale.Pos
             LoadKeypadConfig();
             BuildKeypadUI();
 
-            // Antes se usaba el botón Start para conectar.
-            // Ahora la conexión se hace automáticamente al cargar la ventana (TryAutoConnectAtBoot).
+            if (PosSession.IsLoggedIn)
+            {
+                var opName = string.IsNullOrWhiteSpace(PosSession.FullName)
+                    ? PosSession.Username
+                    : PosSession.FullName;
+
+                lblEstado.Content = $"Logged in as {opName} ({PosSession.Username})";
+                OperatorNameRun.Text = opName;
+            }
+            else
+            {
+                OperatorNameRun.Text = "—";
+            }
+
             SetUiReady(false, "Connecting…");
         }
+
 
         //******************** Pudin *******************************//
         /* Todo el código de báscula lo puse entre estos comentarios */
@@ -351,7 +406,7 @@ namespace TruckScale.Pos
                 if (ch == 1) lblEje2.Content = $"{_last[1]:0} lb";
                 if (ch == 2) lblEje3.Content = $"{_last[2]:0} lb";
                 if (ch == 3) WeightText.Text = $"{_last[3]:0}";
-            }); 
+            });
 
             string note = $"ch3={_last[3]} ,ch2={_last[2]} ,ch1={_last[1]} ,ch0={_last[0]}";
 
@@ -659,6 +714,8 @@ namespace TruckScale.Pos
         {
             // 1) Estado de chofer y toggles
             _driverLinked = false;
+            // Bloquea el formulario para el siguiente camión
+            _formUnlocked = false;
 
             _simSavedOnce = false;
             _autoStable = false;
@@ -667,22 +724,46 @@ namespace TruckScale.Pos
 
             HideDriverCard();
             UpdateProductButtonsEnabled();
-            try { WeighToggle.IsChecked = false; ReweighToggle.IsChecked = false; } catch { }
+            try { WeighToggle.IsChecked = false; } catch { }
+            try { ReweighToggle.IsChecked = false; } catch { }
 
-            // 2) Limpia modal
+            // 2) Limpia modal (datos de chofer / cuenta / unidad)
             try { ChoferNombreText.Text = ""; } catch { }
             try { ChoferApellidosText.Text = ""; } catch { }
-            try { ChoferTelefonoText.Text = ""; } catch { }
             try { LicenciaNumeroText.Text = ""; } catch { }
-            try { LicenciaVigenciaPicker.SelectedDate = null; } catch { }
             try { PlacasRegText.Text = ""; } catch { }
-            try { TipoUnidadCombo.SelectedIndex = -1; } catch { }
-            try { MarcaText.Text = ""; } catch { }
-            try { ModeloText.Text = ""; } catch { }
-            try { ObsText.Text = ""; } catch { }
-            try { ClienteRegCombo.SelectedIndex = -1; } catch { }
-            try { ProductoRegText.Text = ""; } catch { }
+
+            // Unidad
+            try { TrailerNumberText.Text = ""; } catch { }
+            try { TractorNumberText.Text = ""; } catch { }
+            try { LicenseStateCombo.SelectedIndex = -1; } catch { }
+
+            // Datos de cuenta
+            try { AccountNameText.Text = ""; } catch { }
+            try { AccountAddressText.Text = ""; } catch { }
+            try { AccountCountryText.Text = ""; } catch { }
+            try { AccountStateText.Text = ""; } catch { }
+
+            // Cliente / producto
+            try { ClienteRegCombo.SelectedIndex = 0; } catch { }   // 0 = Cash sale – no account
+                                                                   // Datos de chofer
+            try { DriverPhoneText.Text = ""; } catch { }
+            try { DriverPhoneStatusText.Visibility = Visibility.Collapsed; } catch { }
+            try { ChoferNombreText.Text = ""; } catch { }
+            try { ChoferApellidosText.Text = ""; } catch { }
+            try { LicenciaNumeroText.Text = ""; } catch { }
+          
+            _driverPhoneDigits = "";
+
             try { RootDialog.IsOpen = false; } catch { }
+            //try { ProductoRegCombo.SelectedIndex = -1; } catch { }
+            try { ProductoRegText.SelectedIndex = -1; } catch { }
+
+
+            try { DriverPhoneText.Text = ""; } catch { }
+           
+
+            
 
             // 3) Totales y producto seleccionado
             _ventaTotal = 0m;
@@ -694,15 +775,23 @@ namespace TruckScale.Pos
             _selectedProductName = "";
             _selectedProductPrice = 0m;
             _selectedCurrency = "USD";
-            try { TotalVentaBigText.Text = _ventaTotal.ToString("C", _moneyCulture); } catch { }
+            try
+            {
+                TotalVentaBigText.Text = _ventaTotal.ToString("C", _moneyCulture);
+            }
+            catch { }
 
             // 4) Pagos / referencia / teclado
             try { RefText.Text = ""; } catch { }
             try { RefPanel.Visibility = Visibility.Collapsed; } catch { }
             _pagos.Clear();
-            _selectedPaymentId = "cash";
-            SelectPaymentByCode("cash");
+
+            // Ningún método de pago seleccionado hasta que el operador elija uno
+            _selectedPaymentId = "";
+            SelectPaymentByCode(null);
+
             _keypadBuffer = "";
+
             RefreshKeypadDisplay();
             RefreshSummary();
 
@@ -714,7 +803,14 @@ namespace TruckScale.Pos
             _currentWeightUuid = null;
             _canAccept = false;
             _snapRaw = "";
-            try { lblEje1.Content = ""; lblEje2.Content = ""; lblEje3.Content = ""; lblUUID.Content = ""; } catch { }
+            try
+            {
+                lblEje1.Content = "";
+                lblEje2.Content = "";
+                lblEje3.Content = "";
+                lblUUID.Content = "";
+            }
+            catch { }
             UpdateWeightText(0);
 
             // 6) UI “Waiting”
@@ -730,10 +826,14 @@ namespace TruckScale.Pos
                     lblTemp.Content = "Scale offline";
                     lblEstado.Content = "No scale connection.";
                 }
-                SetWaitOkVisual(false);
+
+                SetOkButtonWaitState();
             }
             catch { }
+
+            SetUiReady(_isConnected, null);
         }
+
 
         // ===== Keypad / pagos =====
         private void ToggleDrawer_Click(object sender, RoutedEventArgs e)
@@ -758,11 +858,12 @@ namespace TruckScale.Pos
                 DenomsHost.ItemsSource = _kp.Denominations;
                 KeysItems.ItemsSource = _kp.Keys;
 
-                SelectPaymentByCode("cash");
+
                 RefreshKeypadDisplay();
             }
             catch { }
         }
+
 
         private void PayButton_Click(object sender, RoutedEventArgs e)
         {
@@ -791,9 +892,14 @@ namespace TruckScale.Pos
         {
             try
             {
+
+
                 if (decimal.TryParse(KeypadDisplay.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out var importe)
                     && importe > 0)
                 {
+                    // ⬇️ NUEVO: validar chofer antes de agregar el pago
+                    if (!await EnsureDriverLinkedForPaymentAsync())
+                        return;
                     AddPayment(_selectedPaymentId, importe);
                 }
                 _keypadBuffer = "";
@@ -804,15 +910,50 @@ namespace TruckScale.Pos
             }
             catch { }
         }
+        private async Task<bool> EnsureDriverLinkedForPaymentAsync()
+        {
+            if (_driverLinked && !string.IsNullOrWhiteSpace(_currentWeightUuid))
+                return true;
+
+            await ShowAlertAsync(
+                "Driver required",
+                "Please register the driver for the current weight before adding payments.",
+                PackIconKind.AccountAlertOutline);
+
+            return false;
+        }
 
         private async Task TryAutoCompleteSaleAsync()
         {
             if (_isCompletingSale) return;
-            if (!_driverLinked || _selectedProductId <= 0) return;
 
+            // Calculamos totales primero
             var (subtotal, tax, total) = ComputeTotals();
             var recibido = SumReceived();
+
+            // Si todavía no se ha pagado lo suficiente, no intentamos cerrar la venta
             if (recibido < total) return;
+
+            // ⬇️ Nuevo bloque
+            if (!_driverLinked)
+            {
+                await ShowAlertAsync(
+                    "Driver required",
+                    "Please register the driver for the current weight before completing the sale.",
+                    PackIconKind.AccountAlertOutline);
+                return;
+            }
+
+            if (_selectedProductId <= 0)
+            {
+                MessageBox.Show(
+                    "Please select a service before completing the sale.",
+                    "TruckScale POS",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information
+                );
+                return;
+            }
 
             _isCompletingSale = true;
             try
@@ -836,6 +977,7 @@ namespace TruckScale.Pos
                 _isCompletingSale = false;
             }
         }
+
 
         private void Key_Click(object sender, RoutedEventArgs e)
         {
@@ -902,7 +1044,10 @@ namespace TruckScale.Pos
 
         private void RegisterCancel_Click(object sender, RoutedEventArgs e)
         {
-            try { RootDialog.IsOpen = false; } catch { }
+            try { 
+                RootDialog.IsOpen = false;
+                ResetDriverContext();
+            } catch { }
         }
 
         // === Handler del botón WAIT/OK (antes Start) ===
@@ -954,6 +1099,96 @@ namespace TruckScale.Pos
                 _ = _logger?.LogEventAsync("ACCEPT_EX", rawLine: raw, note: ex.ToString());
             }
         }
+        private async Task<bool> ValidateDriverFormAsync()
+        {
+            //string product = ProductoRegText.Text.Trim();
+            // Product (dropdown)
+            var selectedProduct = ProductoRegText.SelectedItem as DriverProduct;
+            string product = selectedProduct?.Name?.Trim() ?? "";
+
+
+
+            string first = ChoferNombreText.Text.Trim();
+            string last = ChoferApellidosText.Text.Trim();
+            string lic = LicenciaNumeroText.Text.Trim();
+            string plates = PlacasRegText.Text.Trim();
+            string licState = (LicenseStateCombo.SelectedItem as ComboBoxItem)?.Content?.ToString()?.Trim()
+                               ?? LicenseStateCombo.Text.Trim();
+            string trailer = TrailerNumberText.Text.Trim();
+            string tractor = TractorNumberText.Text.Trim();
+
+            if (string.IsNullOrEmpty(product))
+            {
+                await ShowAlertAsync("Required field",
+                    "Please select the product for this load.",
+                    PackIconKind.InformationOutline);
+                ProductoRegText.Focus();
+                return false;
+            }
+
+            // Phone digits
+            _driverPhoneDigits = OnlyDigits(DriverPhoneText.Text);
+            if (string.IsNullOrEmpty(_driverPhoneDigits) || _driverPhoneDigits.Length != DRIVER_PHONE_LEN)
+            {
+                await ShowAlertAsync("Required field",
+                    "Please enter a 10-digit phone number for the driver.",
+                    PackIconKind.InformationOutline);
+                DriverPhoneText.Focus();
+                return false;
+            }
+
+
+            if (string.IsNullOrEmpty(first) || string.IsNullOrEmpty(last))
+            {
+                await ShowAlertAsync("Required field",
+                    "Please enter the driver's first and last name.",
+                    PackIconKind.InformationOutline);
+                ChoferNombreText.Focus();
+                return false;
+            }
+            if (string.IsNullOrEmpty(lic))
+            {
+                await ShowAlertAsync("Required field",
+                    "Please enter the driver's license number (DL#).",
+                    PackIconKind.InformationOutline);
+                LicenciaNumeroText.Focus();
+                return false;
+            }
+            if (string.IsNullOrEmpty(plates))
+            {
+                await ShowAlertAsync("Required field",
+                    "Please enter the truck license plate.",
+                    PackIconKind.InformationOutline);
+                PlacasRegText.Focus();
+                return false;
+            }
+            if (string.IsNullOrEmpty(licState))
+            {
+                await ShowAlertAsync("Required field",
+                    "Please select the state where the plate was issued.",
+                    PackIconKind.InformationOutline);
+                LicenseStateCombo.Focus();
+                return false;
+            }
+            if (string.IsNullOrEmpty(trailer))
+            {
+                await ShowAlertAsync("Required field",
+                    "Please enter the trailer number.",
+                    PackIconKind.InformationOutline);
+                TrailerNumberText.Focus();
+                return false;
+            }
+            if (string.IsNullOrEmpty(tractor))
+            {
+                await ShowAlertAsync("Required field",
+                    "Please enter the tractor number.",
+                    PackIconKind.InformationOutline);
+                TractorNumberText.Focus();
+                return false;
+            }
+
+            return true;
+        }
 
         //UG save driver *sale_driver_info*
         private async void RegisterSave_Click(object sender, RoutedEventArgs e)
@@ -963,51 +1198,109 @@ namespace TruckScale.Pos
                 var uuid = _currentWeightUuid;
                 if (string.IsNullOrWhiteSpace(uuid))
                 {
-                    MessageBox.Show("No weight captured yet. Press OK on a stable weight before saving driver.",
-                                    "TruckScale POS", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    await ShowAlertAsync(
+                        "Weight required",
+                        "No weight captured yet. Press OK on a stable weight before saving the driver.",
+                        PackIconKind.Scale);
                     return;
                 }
+
+                if (!await ValidateDriverFormAsync())
+                    return;
+
+                
 
                 string first = ChoferNombreText?.Text?.Trim() ?? "";
                 string last = ChoferApellidosText?.Text?.Trim() ?? "";
-                string phone = ChoferTelefonoText?.Text?.Trim() ?? "";
                 string licNo = LicenciaNumeroText?.Text?.Trim() ?? "";
-                DateTime? exp = LicenciaVigenciaPicker?.SelectedDate;
-
                 string plates = PlacasRegText?.Text?.Trim() ?? "";
 
-                int? vtypeId = null;
-                if (TipoUnidadCombo?.SelectedValue is int sv) vtypeId = sv;
-                else if (TipoUnidadCombo?.SelectedItem is VehicleType vt) vtypeId = vt.Id;
+                // NUEVO: tomar tráiler y tractor del formulario
+                string trailerNumber = TrailerNumberText?.Text?.Trim() ?? "";
+                string tractorNumber = TractorNumberText?.Text?.Trim() ?? "";
 
-                string brand = MarcaText?.Text?.Trim() ?? "";
-                string model = ModeloText?.Text?.Trim() ?? "";
-                string notes = ObsText?.Text?.Trim();
+                // Estado de la placa (código, ej. "AZ")
+                var licenseState = (LicenseStateCombo.SelectedItem as LicenseState)?.Code ?? "";
 
-                string clientText = (ClienteRegCombo?.SelectedItem as ComboBoxItem)?.Content?.ToString()?.Trim() ?? "";
-                string productText = ProductoRegText?.Text?.Trim() ?? "";
+                var selectedProduct = ProductoRegText.SelectedItem as DriverProduct;
+                string productText = selectedProduct?.Name
+                                     ?? ProductoRegText.Text?.Trim() ?? "";
+                int? driverProductId = selectedProduct?.Id;
+
+
+                string phoneDigits = _driverPhoneDigits;
+
+                // ===== Datos de cuenta =====
+                string? accountNumber = null;
+                string accountName;
+                string accountAddress;
+                string accountCountry;
+                string accountState;
+
+                if (ClienteRegCombo?.SelectedItem is TransportAccount acc && acc.IdCustomer != 0)
+                {
+                    // Cuenta seleccionada del catálogo
+                    accountNumber = string.IsNullOrWhiteSpace(acc.AccountNumber) ? null : acc.AccountNumber;
+                    accountName = acc.AccountName ?? "";
+                    accountAddress = acc.AccountAddress ?? "";
+                    accountCountry = acc.AccountCountry ?? "";
+                    accountState = acc.AccountState ?? "";
+                }
+                else
+                {
+                    // Cash sale / cuenta libre: usamos lo que capturó el operador
+                    accountName = AccountNameText?.Text?.Trim() ?? "";
+                    accountAddress = AccountAddressText?.Text?.Trim() ?? "";
+                    accountCountry = AccountCountryText?.Text?.Trim() ?? "";
+                    accountState = AccountStateText?.Text?.Trim() ?? "";
+                }
 
                 if (string.IsNullOrWhiteSpace(plates) && string.IsNullOrWhiteSpace(licNo))
                 {
-                    MessageBox.Show("Enter at least Plates or License number.", "TruckScale POS",
-                                    MessageBoxButton.OK, MessageBoxImage.Information);
+                    await ShowAlertAsync(
+                        "Missing information",
+                        "Enter at least Plates or License number.",
+                        PackIconKind.AlertOutline);
                     return;
                 }
 
+                //long driverId = await InsertDriverInfoWithFallbackAsync(
+                //    saleUid: null,
+                //    accountNumber: accountNumber,
+                //    accountName: accountName,
+                //    accountAddress: accountAddress,
+                //    accountCountry: accountCountry,
+                //    accountState: accountState,
+                //    firstName: first,
+                //    lastName: last,
+                //    licenseNo: licNo,
+                //    licenseState: licenseState,
+                //    plates: plates,
+                //    trailerNumber: trailerNumber,
+                //    tractorNumber: tractorNumber,
+                //    productDescription: productText,
+                //    identifyBy: "weight_uuid",
+                //    matchKey: uuid
+                //);
+
                 long driverId = await InsertDriverInfoWithFallbackAsync(
                     saleUid: null,
+                    accountNumber: accountNumber,
+                    accountName: accountName,
+                    accountAddress: accountAddress,
+                    accountCountry: accountCountry,
+                    accountState: accountState,
                     firstName: first,
                     lastName: last,
-                    phone: phone,
+                    driverPhone: phoneDigits,
                     licenseNo: licNo,
-                    licenseExpiry: exp,
+                    licenseState: licenseState,
                     plates: plates,
-                    vehicleTypeId: vtypeId,
-                    brand: brand,
-                    model: model,
+                    trailerNumber: trailerNumber,
+                    tractorNumber: tractorNumber,
+                    driverProductId: driverProductId,                     
                     identifyBy: "weight_uuid",
-                    matchKey: uuid!,
-                    notes: notes
+                    matchKey: uuid
                 );
 
                 AppendLog($"[Driver] Saved id={driverId} linked to weight_uuid={uuid}");
@@ -1037,48 +1330,80 @@ namespace TruckScale.Pos
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Error saving driver: " + ex.Message, "TruckScale POS",
-                                MessageBoxButton.OK, MessageBoxImage.Error);
+                await ShowAlertAsync("Driver error", "Error saving driver: " + ex.Message, PackIconKind.AlertCircle);
             }
         }
 
+
         private async Task<long> InsertDriverInfoWithFallbackAsync(
-            string? saleUid,
-            string firstName,
-            string lastName,
-            string phone,
-            string licenseNo,
-            DateTime? licenseExpiry,
-            string plates,
-            int? vehicleTypeId,
-            string brand,
-            string model,
-            string identifyBy,
-            string matchKey,
-            string? notes)
+        string? saleUid,
+        string? accountNumber,
+        string accountName,
+        string accountAddress,
+        string accountCountry,
+        string accountState,
+        string firstName,
+        string lastName,
+        string driverPhone,
+        string licenseNo,
+        string licenseState,
+        string plates,
+        string trailerNumber,
+        string tractorNumber,
+        int? driverProductId,        
+        string identifyBy,
+        string matchKey)
         {
             try
             {
                 return await InsertDriverInfoAsync(
-                    saleUid, firstName, lastName, phone, licenseNo, licenseExpiry,
-                    plates, vehicleTypeId, brand, model, identifyBy, matchKey, notes);
+                saleUid, accountNumber, accountName, accountAddress, accountCountry, accountState,
+                firstName, lastName, driverPhone, licenseNo, licenseState,
+                plates, trailerNumber, tractorNumber, driverProductId,
+                identifyBy, matchKey);
             }
             catch (Exception ex1)
             {
                 AppendLog("[Driver] Primary DB failed, trying local… " + ex1.Message);
+
                 var localCsb = new MySqlConnectionStringBuilder(GetLocalConn());
                 await using var conn = new MySqlConnection(localCsb.ConnectionString);
-                await conn.OpenAsync();
-                // Aquí podrías duplicar el SQL/params o factorizarlo.
+                await conn.OpenAsync(); // si no hay MySQL local, aquí también truena
+                // Aquí se hará duplicar el INSERT para modo offline si lo necesitas.
                 throw;
             }
         }
+
 
         private readonly ObservableCollection<PaymentEntry> _pagos = new();
 
         private void AddPayment(string methodCode, decimal monto)
         {
             if (monto <= 0) return;
+
+
+            if (string.IsNullOrWhiteSpace(methodCode))
+            {
+                MessageBox.Show(
+                    "Please select the payment method (Cash, Credit card, etc.) before entering the amount.",
+                    "TruckScale POS",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information
+                );
+                return;
+            }
+
+            if (!_driverLinked)
+            {
+                MessageBox.Show(
+                    "Please register the driver for the current weight before recording payments.",
+                    "TruckScale POS",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information
+                );
+                return;
+            }
+
             var refTxt = "";
             try { refTxt = RefPanel.Visibility == Visibility.Visible ? (RefText?.Text ?? "") : ""; } catch { }
 
@@ -1089,8 +1414,10 @@ namespace TruckScale.Pos
                 Ref = string.IsNullOrWhiteSpace(refTxt) ? null : refTxt,
                 Monto = monto
             });
+
             RefreshSummary();
         }
+
 
         private (decimal subtotal, decimal tax, decimal total) ComputeTotals()
         {
@@ -1336,7 +1663,10 @@ namespace TruckScale.Pos
             SetOkButtonWaitState();
 
             await LoadProductsAsync();
+            await LoadDriverProductsAsync();
             await LoadVehicleTypesAsync();
+            await LoadAccountsAsync();
+            await LoadLicenseStatesAsync();
             PagosList.ItemsSource = _pagos;
             await LoadPaymentMethodsAsync();
 
@@ -1354,17 +1684,25 @@ namespace TruckScale.Pos
         }
 
         private bool _isConnected;  // solo conexión al puerto
+        private bool _formUnlocked = false; // habilita MidCol/RightCol sólo después de OK
 
         private void SetUiReady(bool ready, string status = null)
         {
             _isConnected = ready;
-            MidCol.IsEnabled = ready;
-            RightCol.IsEnabled = ready;
 
-            UiBlocker.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
-            UiBlocker.IsHitTestVisible = !ready;
+            // El formulario sólo se habilita si:
+            //  - hay conexión a la báscula
+            //  - ya se presionó OK al menos una vez (_formUnlocked)
+            bool enableForm = ready && _formUnlocked;
 
-            if (status != null) lblTemp.Content = status;
+            MidCol.IsEnabled = enableForm;
+            RightCol.IsEnabled = enableForm;
+
+            UiBlocker.Visibility = enableForm ? Visibility.Collapsed : Visibility.Visible;
+            UiBlocker.IsHitTestVisible = !enableForm;
+
+            if (status != null)
+                lblTemp.Content = status;
         }
 
         // ===== Estado actual del producto seleccionado =====
@@ -1414,6 +1752,9 @@ namespace TruckScale.Pos
                     return;
                 }
             }
+            //ProductoRegCombo.ItemsSource = _productOptions;
+            //ProductoRegCombo.DisplayMemberPath = nameof(ProductInfo.Name);
+            //ProductoRegCombo.SelectedIndex = -1;
             UpdateProductButtonsEnabled();
         }
 
@@ -1431,6 +1772,8 @@ namespace TruckScale.Pos
                 using var cmd = new MySqlCommand(SQL, conn);
                 using var rd = await cmd.ExecuteReaderAsync();
 
+                _productOptions.Clear();
+
                 var found = 0;
                 while (await rd.ReadAsync())
                 {
@@ -1443,6 +1786,8 @@ namespace TruckScale.Pos
                         Currency = rd.GetString("currency")
                     };
                     _products[p.Code] = p;
+                    _productOptions.Add(p);
+
                     found++;
                 }
 
@@ -1528,72 +1873,123 @@ namespace TruckScale.Pos
             public long Id { get; init; }
             public string First { get; init; } = "";
             public string Last { get; init; } = "";
-            public string Phone { get; init; } = "";
+
+            public string AccountNumber { get; init; } = "";
+            public string AccountName { get; init; } = "";
+            public string AccountAddress { get; init; } = "";
+            public string AccountCountry { get; init; } = "";
+            public string AccountState { get; init; } = "";
+            public int? DriverProductId { get; init; }
+
+            public string ProductDescription { get; init; } = "";
+
             public string License { get; init; } = "";
-            public DateTime? LicenseExpiry { get; init; }
+            public string LicenseStateCode { get; init; } = "";
+
+            public string PhoneDigits { get; init; } = "";
+
             public string Plates { get; init; } = "";
-            public int? VehicleTypeId { get; init; }
-            public string VehicleBrand { get; init; } = "";
-            public string VehicleModel { get; init; } = "";
-            public string VehicleTypeName { get; init; } = "";
+            public string TrailerNumber { get; init; } = "";
+            public string TractorNumber { get; init; } = "";
         }
 
         private async Task<long> InsertDriverInfoAsync(
-            string? saleUid,
-            string firstName,
-            string lastName,
-            string phone,
-            string licenseNo,
-            DateTime? licenseExpiry,
-            string plates,
-            int? vehicleTypeId,
-            string brand,
-            string model,
-            string identifyBy,
-            string matchKey,
-            string? notes)
+        string? saleUid,
+        string? accountNumber,
+        string accountName,
+        string accountAddress,
+        string accountCountry,
+        string accountState,
+        string firstName,
+        string lastName,
+        string driverPhone,
+        string licenseNo,
+        string licenseState,
+        string plates,
+        string trailerNumber,
+        string tractorNumber,
+        int? driverProductId,      
+        string identifyBy,
+        string matchKey)
         {
             string connStr = GetConnectionString();
 
-            const string SQL = @"INSERT INTO sale_driver_info
-                                (sale_uid, driver_first_name, driver_last_name, driver_phone, license_number, license_expiry,
-                                 vehicle_plates, vehicle_type_id, vehicle_brand, vehicle_model, identify_by, match_key, notes, created_at)
-                                VALUES
-                                (@sale_uid, @first, @last, @phone, @lic, @exp, @plates, @vtid, @brand, @model, @idby, @mkey, @notes, NOW())
-                                ON DUPLICATE KEY UPDATE
-                                sale_uid = COALESCE(sale_driver_info.sale_uid, VALUES(sale_uid)),
-                                driver_first_name = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_first_name), sale_driver_info.driver_first_name),
-                                driver_last_name  = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_last_name),  sale_driver_info.driver_last_name),
-                                driver_phone      = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_phone),      sale_driver_info.driver_phone),
-                                license_number    = IF(sale_driver_info.sale_uid IS NULL, VALUES(license_number),    sale_driver_info.license_number),
-                                license_expiry    = IF(sale_driver_info.sale_uid IS NULL, VALUES(license_expiry),    sale_driver_info.license_expiry),
-                                vehicle_plates    = IF(sale_driver_info.sale_uid IS NULL, VALUES(vehicle_plates),    sale_driver_info.vehicle_plates),
-                                vehicle_type_id   = IF(sale_driver_info.sale_uid IS NULL, VALUES(vehicle_type_id),   sale_driver_info.vehicle_type_id),
-                                vehicle_brand     = IF(sale_driver_info.sale_uid IS NULL, VALUES(vehicle_brand),     sale_driver_info.vehicle_brand),
-                                vehicle_model     = IF(sale_driver_info.sale_uid IS NULL, VALUES(vehicle_model),     sale_driver_info.vehicle_model),
-                                notes             = IF(sale_driver_info.sale_uid IS NULL, VALUES(notes),             sale_driver_info.notes);";
+            const string SQL = @"
+            INSERT INTO sale_driver_info
+                (sale_uid,
+                 account_number, account_name, account_address, account_country, account_state,
+                 driver_first_name, driver_last_name, driver_phone,
+                 license_number, license_state,
+                 vehicle_plates,
+                 trailer_number, tractor_number, driver_product_id,
+                 identify_by, match_key, created_at)
+            VALUES
+                (@sale_uid,
+                 @acc_no, @acc_name, @acc_addr, @acc_country, @acc_state,
+                 @first, @last, @phone,
+                 @lic, @lic_state,
+                 @plates,
+                 @trailer, @tractor, @product_id,
+                 @idby, @mkey, NOW())
+            ON DUPLICATE KEY UPDATE
+                sale_uid          = COALESCE(sale_driver_info.sale_uid, VALUES(sale_uid)),
+                account_number    = IF(sale_driver_info.sale_uid IS NULL, VALUES(account_number),   sale_driver_info.account_number),
+                account_name      = IF(sale_driver_info.sale_uid IS NULL, VALUES(account_name),     sale_driver_info.account_name),
+                account_address   = IF(sale_driver_info.sale_uid IS NULL, VALUES(account_address),  sale_driver_info.account_address),
+                account_country   = IF(sale_driver_info.sale_uid IS NULL, VALUES(account_country),  sale_driver_info.account_country),
+                account_state     = IF(sale_driver_info.sale_uid IS NULL, VALUES(account_state),    sale_driver_info.account_state),
+                driver_first_name = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_first_name),sale_driver_info.driver_first_name),
+                driver_last_name  = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_last_name), sale_driver_info.driver_last_name),
+                driver_phone      = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_phone),     sale_driver_info.driver_phone),
+                license_number    = IF(sale_driver_info.sale_uid IS NULL, VALUES(license_number),   sale_driver_info.license_number),
+                license_state     = IF(sale_driver_info.sale_uid IS NULL, VALUES(license_state),    sale_driver_info.license_state),
+                vehicle_plates    = IF(sale_driver_info.sale_uid IS NULL, VALUES(vehicle_plates),   sale_driver_info.vehicle_plates),
+                trailer_number    = IF(sale_driver_info.sale_uid IS NULL, VALUES(trailer_number),   sale_driver_info.trailer_number),
+                tractor_number    = IF(sale_driver_info.sale_uid IS NULL, VALUES(tractor_number),   sale_driver_info.tractor_number),
+                driver_product_id =
+                    IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_product_id), sale_driver_info.driver_product_id)";
+
 
             await using var conn = new MySqlConnection(connStr);
             await conn.OpenAsync();
+
             await using var cmd = new MySqlCommand(SQL, conn);
 
             cmd.Parameters.AddWithValue("@sale_uid", (object?)saleUid ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@acc_no", (object?)accountNumber ?? DBNull.Value);
+
+            cmd.Parameters.AddWithValue("@acc_name", string.IsNullOrWhiteSpace(accountName) ? (object)DBNull.Value : accountName);
+            cmd.Parameters.AddWithValue("@acc_addr", string.IsNullOrWhiteSpace(accountAddress) ? (object)DBNull.Value : accountAddress);
+            cmd.Parameters.AddWithValue("@acc_country", string.IsNullOrWhiteSpace(accountCountry) ? (object)DBNull.Value : accountCountry);
+            cmd.Parameters.AddWithValue("@acc_state", string.IsNullOrWhiteSpace(accountState) ? (object)DBNull.Value : accountState);
+
             cmd.Parameters.AddWithValue("@first", firstName);
             cmd.Parameters.AddWithValue("@last", lastName);
-            cmd.Parameters.AddWithValue("@phone", phone);
+       
+            cmd.Parameters.AddWithValue("@phone",
+                string.IsNullOrWhiteSpace(driverPhone) ? (object)DBNull.Value : driverPhone);
             cmd.Parameters.AddWithValue("@lic", licenseNo);
-            cmd.Parameters.AddWithValue("@exp", (object?)licenseExpiry?.Date ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@lic_state",
+                                         string.IsNullOrWhiteSpace(licenseState) ? (object)DBNull.Value : licenseState);
+
             cmd.Parameters.AddWithValue("@plates", plates);
-            cmd.Parameters.AddWithValue("@vtid", (object?)vehicleTypeId ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@brand", brand);
-            cmd.Parameters.AddWithValue("@model", model);
+
+            cmd.Parameters.AddWithValue("@trailer",
+                                         string.IsNullOrWhiteSpace(trailerNumber) ? (object)DBNull.Value : trailerNumber);
+            cmd.Parameters.AddWithValue("@tractor",
+                                         string.IsNullOrWhiteSpace(tractorNumber) ? (object)DBNull.Value : tractorNumber);
+            cmd.Parameters.AddWithValue("@product_id",
+                                        driverProductId.HasValue ? driverProductId.Value : (object)DBNull.Value);
+
+
             cmd.Parameters.AddWithValue("@idby", identifyBy);
             cmd.Parameters.AddWithValue("@mkey", matchKey);
-            cmd.Parameters.AddWithValue("@notes", (object?)notes ?? DBNull.Value);
+
 
             await cmd.ExecuteNonQueryAsync();
             return (long)cmd.LastInsertedId;
         }
+
 
         public async Task<int> LinkDriverToSaleAsync(MySqlConnection conn, MySqlTransaction tx, string weightUuid, string saleUid)
         {
@@ -1621,84 +2017,180 @@ namespace TruckScale.Pos
                 throw new Exception(msg, ex);
             }
         }
-
+        /*
+             
+                COALESCE(
+                    sdi.product_description,
+                    CONCAT(dp.NAME, ' (', dp.code, ')'),
+                    ''
+                ) AS product_description,
+         */
         private async Task<DriverInfo?> GetDriverByWeightUuidAsync(string uuid)
         {
-            const string SQL = @"SELECT sdi.id_driver_info,sdi.driver_first_name, sdi.driver_last_name,
-                                        sdi.driver_phone, sdi.license_number, sdi.license_expiry,
-                                        sdi.vehicle_plates, sdi.vehicle_type_id,sdi.vehicle_brand, sdi.vehicle_model,
-                                        COALESCE(vt.name,'') AS vehicle_type_name
-                                 FROM sale_driver_info sdi
-                                 LEFT JOIN vehicle_types vt ON vt.vehicle_type_id = sdi.vehicle_type_id
-                                 WHERE sdi.identify_by = 'weight_uuid' AND sdi.match_key = @uuid
-                                 ORDER BY sdi.id_driver_info DESC LIMIT 1;";
+            const string SQL = @"
+            SELECT
+                sdi.id_driver_info,
+                sdi.driver_first_name,
+                sdi.driver_last_name,
+                sdi.account_name,
+                sdi.account_address,
+                sdi.account_country,
+                sdi.account_state,
+                sdi.driver_product_id,
+                dp.name AS product_description,
+                sdi.license_number,
+                sdi.license_state,
+                sdi.vehicle_plates,
+                sdi.trailer_number,
+                sdi.tractor_number
+            FROM sale_driver_info sdi
+            LEFT JOIN driver_products dp
+                ON dp.product_id = sdi.driver_product_id   -- <-- ajusta el nombre si tu PK se llama distinto
+            WHERE sdi.identify_by = 'weight_uuid'
+                AND sdi.match_key   = @uuid
+            ORDER BY sdi.id_driver_info DESC
+            LIMIT 1;";
 
             async Task<DriverInfo?> TryOneAsync(string connStr)
             {
                 await using var conn = new MySqlConnection(connStr);
                 await conn.OpenAsync();
+
                 await using var cmd = new MySqlCommand(SQL, conn);
                 cmd.Parameters.AddWithValue("@uuid", uuid);
 
                 await using var rd = await cmd.ExecuteReaderAsync();
-                if (await rd.ReadAsync())
+                if (!await rd.ReadAsync())
+                    return null;
+
+                return new DriverInfo
                 {
-                    return new DriverInfo
-                    {
-                        Id = rd.GetInt64("id_driver_info"),
-                        First = rd.GetString("driver_first_name"),
-                        Last = rd.GetString("driver_last_name"),
-                        Phone = rd.GetString("driver_phone"),
-                        License = rd.GetString("license_number"),
-                        LicenseExpiry = rd.IsDBNull("license_expiry") ? (DateTime?)null : rd.GetDateTime("license_expiry"),
-                        Plates = rd.GetString("vehicle_plates"),
-                        VehicleTypeId = rd.IsDBNull("vehicle_type_id") ? (int?)null : rd.GetInt32("vehicle_type_id"),
-                        VehicleBrand = rd.IsDBNull("vehicle_brand") ? "" : rd.GetString("vehicle_brand"),
-                        VehicleModel = rd.IsDBNull("vehicle_model") ? "" : rd.GetString("vehicle_model"),
-                        VehicleTypeName = rd.GetString("vehicle_type_name"),
-                    };
-                }
-                return null;
+                    Id = rd.GetInt64("id_driver_info"),
+                    First = rd.GetString("driver_first_name"),
+                    Last = rd.GetString("driver_last_name"),
+                    AccountName = rd.IsDBNull("account_name") ? "" : rd.GetString("account_name"),
+                    AccountAddress = rd.IsDBNull("account_address") ? "" : rd.GetString("account_address"),
+                    AccountCountry = rd.IsDBNull("account_country") ? "" : rd.GetString("account_country"),
+                    AccountState = rd.IsDBNull("account_state") ? "" : rd.GetString("account_state"),
+
+                    DriverProductId = rd.IsDBNull("driver_product_id")
+                        ? (int?)null
+                        : rd.GetInt32("driver_product_id"),
+
+                    // ahora sí alimentamos la descripción que usa la tarjeta
+                    ProductDescription = rd.IsDBNull("product_description")
+                        ? ""
+                        : rd.GetString("product_description"),
+
+                    License = rd.IsDBNull("license_number") ? "" : rd.GetString("license_number"),
+                    LicenseStateCode = rd.IsDBNull("license_state") ? "" : rd.GetString("license_state"),
+                    Plates = rd.IsDBNull("vehicle_plates") ? "" : rd.GetString("vehicle_plates"),
+                    TrailerNumber = rd.IsDBNull("trailer_number") ? "" : rd.GetString("trailer_number"),
+                    TractorNumber = rd.IsDBNull("tractor_number") ? "" : rd.GetString("tractor_number"),
+                };
             }
 
-            try { return await TryOneAsync(GetPrimaryConn()); }
-            catch
+            try
             {
-                AppendLog("[Driver] Primary DB failed, trying local…");
+                return await TryOneAsync(GetPrimaryConn());
+            }
+            catch (Exception ex)
+            {
+                AppendLog("[Driver] Primary DB failed, trying local… " + ex.Message);
                 return await TryOneAsync(GetLocalConn());
             }
         }
 
+
+
+
+
         private void ShowDriverCard(DriverInfo d)
         {
+            // Nombre
             DriverNameText.Text = string.IsNullOrWhiteSpace(d.Last)
                 ? d.First
                 : $"{d.First} {d.Last}";
 
-            DriverLicenseText.Text = string.IsNullOrWhiteSpace(d.License)
-                ? "License: —"
-                : (d.LicenseExpiry.HasValue
-                    ? $"License: {d.License} (exp. {d.LicenseExpiry:yyyy-MM-dd})"
-                    : $"License: {d.License}");
+            // Account
+            var accLabel = string.IsNullOrWhiteSpace(d.AccountName) ? "Cash sale" : d.AccountName;
+            DriverAccountText.Text = $"Account: {accLabel}";
 
-            DriverPlatesText.Text = string.IsNullOrWhiteSpace(d.Plates) ? "Plates: —" : $"Plates: {d.Plates}";
-            DriverPhoneText.Text = string.IsNullOrWhiteSpace(d.Phone) ? "Phone: —" : $"Phone: {d.Phone}";
+            // Product
+            var prodLabel = string.IsNullOrWhiteSpace(d.ProductDescription) ? "—" : d.ProductDescription;
+            DriverProductText.Text = $"Product: {prodLabel}";
 
-            string unit = string.IsNullOrWhiteSpace(d.VehicleTypeName) ? "" : d.VehicleTypeName;
-            string brandModel = string.Join(" ", new[] { d.VehicleBrand, d.VehicleModel }.Where(s => !string.IsNullOrWhiteSpace(s)));
-            string combo = string.Join(" · ", new[] { unit, brandModel }.Where(s => !string.IsNullOrWhiteSpace(s)));
-            DriverVehicleText.Text = string.IsNullOrWhiteSpace(combo) ? "Unit: —" : $"Unit: {combo}";
+            // License + state
+            if (string.IsNullOrWhiteSpace(d.License))
+            {
+                DriverLicenseText.Text = "License: —";
+            }
+            else if (!string.IsNullOrWhiteSpace(d.LicenseStateCode))
+            {
+                DriverLicenseText.Text = $"License: {d.License} ({d.LicenseStateCode})";
+            }
+            else
+            {
+                DriverLicenseText.Text = $"License: {d.License}";
+            }
+
+            // Plates
+            DriverPlatesText.Text = string.IsNullOrWhiteSpace(d.Plates)
+                ? "Plates: —"
+                : $"Plates: {d.Plates}";
+
+            // Unit = Tractor / Trailer
+            if (!string.IsNullOrWhiteSpace(d.TractorNumber) || !string.IsNullOrWhiteSpace(d.TrailerNumber))
+            {
+                var parts = new List<string>();
+                if (!string.IsNullOrWhiteSpace(d.TractorNumber)) parts.Add($"Tractor {d.TractorNumber}");
+                if (!string.IsNullOrWhiteSpace(d.TrailerNumber)) parts.Add($"Trailer {d.TrailerNumber}");
+                DriverUnitText.Text = "Unit: " + string.Join(" · ", parts);
+            }
+            else
+            {
+                DriverUnitText.Text = "Unit: —";
+            }
+
+            // Address = address + (state, country)
+            if (!string.IsNullOrWhiteSpace(d.AccountAddress) ||
+                !string.IsNullOrWhiteSpace(d.AccountState) ||
+                !string.IsNullOrWhiteSpace(d.AccountCountry))
+            {
+                var addrParts = new List<string>();
+                if (!string.IsNullOrWhiteSpace(d.AccountAddress))
+                    addrParts.Add(d.AccountAddress);
+
+                var loc = new List<string>();
+                if (!string.IsNullOrWhiteSpace(d.AccountState)) loc.Add(d.AccountState);
+                if (!string.IsNullOrWhiteSpace(d.AccountCountry)) loc.Add(d.AccountCountry);
+                if (loc.Count > 0) addrParts.Add(string.Join(", ", loc));
+
+                DriverAccountAddressText.Text = "Address: " + string.Join(" · ", addrParts);
+            }
+            else
+            {
+                DriverAccountAddressText.Text = "Address: —";
+            }
 
             DriverCard.Visibility = Visibility.Visible;
         }
 
+
+
+
         private void HideDriverCard()
         {
             DriverCard.Visibility = Visibility.Collapsed;
-            DriverNameText.Text = DriverLicenseText.Text = DriverPlatesText.Text =
-                DriverPhoneText.Text = DriverVehicleText.Text = "—";
-        }
 
+            DriverNameText.Text = "—";
+            DriverAccountText.Text = "Account: —";
+            DriverProductText.Text = "Product: —";
+            DriverLicenseText.Text = "License: —";
+            DriverPlatesText.Text = "Plates: —";
+            DriverUnitText.Text = "Unit: —";
+            DriverAccountAddressText.Text = "Address: —";
+        }
         /// <vehicle_types>
         /// UG Apartado de vehicle_types
         /// </vehicle_types>
@@ -1762,9 +2254,6 @@ namespace TruckScale.Pos
                 }
             }
 
-            TipoUnidadCombo.ItemsSource = _vehicleTypes;
-            TipoUnidadCombo.DisplayMemberPath = "Name";
-            TipoUnidadCombo.SelectedValuePath = "Id";
         }
 
         /// <_rxDigits>
@@ -1872,15 +2361,21 @@ namespace TruckScale.Pos
                 await TryOneAsync(GetLocalConn());
             }
 
-            SelectPaymentByCode("cash");
+
+            // Al terminar de cargar métodos, dejamos TODO sin seleccionar:
+            SelectPaymentByCode(null);
+
         }
 
-        private void SelectPaymentByCode(string code)
+        private void SelectPaymentByCode(string? code)
         {
             PaymentMethod? sel = null;
+
             foreach (var m in PaymentMethods)
             {
-                var isSel = string.Equals(m.Code, code, StringComparison.OrdinalIgnoreCase);
+                var isSel = !string.IsNullOrWhiteSpace(code) &&
+                            string.Equals(m.Code, code, StringComparison.OrdinalIgnoreCase);
+
                 m.IsSelected = isSel;
                 if (isSel) sel = m;
             }
@@ -1890,7 +2385,14 @@ namespace TruckScale.Pos
                 _selectedPaymentId = sel.Code;
                 RefPanel.Visibility = sel.AllowReference ? Visibility.Visible : Visibility.Collapsed;
             }
+            else
+            {
+                // Nada seleccionado
+                _selectedPaymentId = "";
+                RefPanel.Visibility = Visibility.Collapsed;
+            }
         }
+
 
         private void PaymentMethod_Click(object sender, RoutedEventArgs e)
         {
@@ -1917,8 +2419,18 @@ namespace TruckScale.Pos
         /// UG section save sales
         /// </sales> 
         private int _siteId = 0;       // setéalo al arrancar (ej. 1)
-        private int _terminalId = 0;   // setéalo al arrancar (ej. 1)
-        private int _operatorId = 1;   // por ahora 'admin' = 1
+        private int _terminalId = 0;   // setéalo al arrancar (ej. 1)       
+
+        private int _operatorId = 0;
+
+        private int GetCurrentOperatorId()
+        {
+            if (_operatorId > 0) return _operatorId;
+            if (PosSession.IsLoggedIn)
+                _operatorId = PosSession.UserId;
+            return _operatorId > 0 ? _operatorId : 1; // fallback por si acaso
+        }
+
 
         private async Task<int> GetDefaultSiteIdAsync(MySqlConnection conn, MySqlTransaction tx)
         {
@@ -1936,12 +2448,15 @@ namespace TruckScale.Pos
             return (obj == null || obj == DBNull.Value) ? 1 : Convert.ToInt32(obj);
         }
 
-        private int GetCurrentOperatorId() => _operatorId > 0 ? _operatorId : 1;
 
         private async Task<string> SaveSaleAsync()
         {
-            if (!_driverLinked) throw new InvalidOperationException("Driver not linked.");
-            if (_selectedProductId <= 0) throw new InvalidOperationException("No service selected.");
+            if (!_driverLinked)
+                throw new InvalidOperationException("Please register the driver before completing the sale.");
+
+            if (_selectedProductId <= 0)
+                throw new InvalidOperationException("No service selected. Please select a service before completing the sale.");
+
 
             var (subtotal, tax, total) = ComputeTotals();
             var recibido = SumReceived();
@@ -2082,6 +2597,7 @@ namespace TruckScale.Pos
         // Campos para señales de cierre
         private TaskCompletionSource<bool>? _saleDialogTcs;
         private TaskCompletionSource<bool>? _drvDialogTcs;
+        private TaskCompletionSource<bool>? _alertDialogTcs;
 
         // === Modal: Sale completed ===
         private async Task ShowSaleCompletedDialogAsync(decimal total, decimal recibido, decimal change, string saleUid)
@@ -2219,7 +2735,10 @@ namespace TruckScale.Pos
                     int pesoEntero = (int)Math.Round(total);
                     lblUUID.Content = $"{pesoEntero} lb";
 
-                    lblTemp.Content = "Waiting for next truck…";
+                    // A partir de aquí se habilita el formulario (MidCol / RightCol)
+                    _formUnlocked = true;
+                    SetUiReady(_isConnected, "Waiting for next truck…");
+
                     SetOkButtonWaitState();
                 });
             }
@@ -2234,6 +2753,400 @@ namespace TruckScale.Pos
                 _ = _logger?.LogEventAsync("ACCEPT_EX", rawLine: raw, note: ex.ToString());
             }
         }
+        private async Task ShowAlertAsync(string title, string message, PackIconKind icon = PackIconKind.InformationOutline)
+        {
+            AlertTitle.Text = title;
+            AlertMessage.Text = message;
+            AlertIcon.Kind = icon;
+
+            _alertDialogTcs = new TaskCompletionSource<bool>();
+
+            RoutedEventHandler handler = null!;
+            handler = (s, e) =>
+            {
+                AlertOkButton.Click -= handler;
+                AlertHost.IsOpen = false;
+                _alertDialogTcs.TrySetResult(true);
+            };
+            AlertOkButton.Click += handler;
+
+            AlertHost.IsOpen = true;
+            await _alertDialogTcs.Task;
+        }
+        private async Task LoadAccountsAsync()
+        {
+            _accounts.Clear();
+
+            var connStr = GetConnectionString();
+            if (string.IsNullOrWhiteSpace(connStr))
+            {
+                AppendLog("[Accounts] Missing connection string.");
+                return;
+            }
+
+            try
+            {
+                using var conn = new MySqlConnection(connStr);
+                await conn.OpenAsync();
+
+                const string SQL = @"SELECT 
+                                    id_customer,
+                                    account_number,
+                                    account_name,
+                                    account_address,
+                                    account_country,
+                                    account_state
+                                FROM customers
+                                ORDER BY account_name;";
+
+                using var cmd = new MySqlCommand(SQL, conn);
+                using var rd = await cmd.ExecuteReaderAsync();
+
+                var count = 0;
+                while (await rd.ReadAsync())
+                {
+                    var acc = new TransportAccount
+                    {
+                        IdCustomer = rd.GetInt32(rd.GetOrdinal("id_customer")),
+                        AccountNumber = rd.IsDBNull(rd.GetOrdinal("account_number")) ? "" : rd.GetString(rd.GetOrdinal("account_number")),
+                        AccountName = rd.IsDBNull(rd.GetOrdinal("account_name")) ? "" : rd.GetString(rd.GetOrdinal("account_name")),
+                        AccountAddress = rd.IsDBNull(rd.GetOrdinal("account_address")) ? "" : rd.GetString(rd.GetOrdinal("account_address")),
+                        AccountCountry = rd.IsDBNull(rd.GetOrdinal("account_country")) ? "" : rd.GetString(rd.GetOrdinal("account_country")),
+                        AccountState = rd.IsDBNull(rd.GetOrdinal("account_state")) ? "" : rd.GetString(rd.GetOrdinal("account_state")),
+                    };
+
+                    _accounts.Add(acc);
+                    count++;
+                }
+
+                AppendLog($"[Accounts] Loaded {count} account(s) from {conn.DataSource}.");
+
+                // Opción CASH / sin cuenta al inicio
+                _accounts.Insert(0, new TransportAccount
+                {
+                    IdCustomer = 0,
+                    AccountNumber = "",
+                    AccountName = "(Cash sale – no account)",
+                    AccountAddress = "",
+                    AccountCountry = "",
+                    AccountState = ""
+                });
+
+                // Refrescar combo
+                ClienteRegCombo.ItemsSource = null;
+                ClienteRegCombo.ItemsSource = _accounts;
+                ClienteRegCombo.DisplayMemberPath = nameof(TransportAccount.Display);
+                ClienteRegCombo.SelectedIndex = 0;
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[Accounts] {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        private void ClienteRegCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (ClienteRegCombo.SelectedItem is not TransportAccount acc)
+            {
+                SetAccountFieldsEditable(true);
+                ClearAccountFields();
+                return;
+            }
+
+            bool isCashSale = acc.IdCustomer == 0;
+
+            if (isCashSale)
+            {
+                SetAccountFieldsEditable(true);
+                ClearAccountFields();
+            }
+            else
+            {
+                AccountNameText.Text = acc.AccountName ?? string.Empty;
+                AccountAddressText.Text = acc.AccountAddress ?? string.Empty;
+                AccountCountryText.Text = acc.AccountCountry ?? string.Empty;
+                AccountStateText.Text = acc.AccountState ?? string.Empty;
+
+                SetAccountFieldsEditable(false);
+            }
+        }
+
+
+        private void SetAccountFieldsEditable(bool editable)
+        {
+            AccountNameText.IsReadOnly = !editable;
+            AccountAddressText.IsReadOnly = !editable;
+            AccountCountryText.IsReadOnly = !editable;
+            AccountStateText.IsReadOnly = !editable;
+        }
+
+        private void ClearAccountFields()
+        {
+            AccountNameText.Text = string.Empty;
+            AccountAddressText.Text = string.Empty;
+            AccountCountryText.Text = string.Empty;
+            AccountStateText.Text = string.Empty;
+        }
+        private async Task LoadLicenseStatesAsync()
+        {
+            _licenseStates.Clear();
+
+            var connStr = GetConnectionString();
+
+            try
+            {
+                using var conn = new MySqlConnection(connStr);
+                await conn.OpenAsync();
+
+                const string SQL = @"
+            SELECT id_state, country_code, state_code, state_name
+            FROM license_states
+            WHERE is_active = 1
+            ORDER BY country_code, state_name;";
+
+                using var cmd = new MySqlCommand(SQL, conn);
+                using var rd = await cmd.ExecuteReaderAsync();
+
+                while (await rd.ReadAsync())
+                {
+                    var st = new LicenseState
+                    {
+                        Id = rd.GetInt32(0),
+                        CountryCode = rd.GetString(1),
+                        Code = rd.GetString(2),
+                        Name = rd.GetString(3)
+                    };
+                    _licenseStates.Add(st);
+                }
+
+                AppendLog($"[LicenseStates] Loaded {_licenseStates.Count} state(s).");
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[LicenseStates] {ex.GetType().Name}: {ex.Message}");
+            }
+
+            LicenseStateCombo.ItemsSource = _licenseStates;
+            LicenseStateCombo.DisplayMemberPath = "Display";
+        }
+        private async Task<DriverInfo?> GetDriverByPhoneAsync(string phoneDigits)
+        {
+            const string SQL = @"SELECT
+                sdi.id_driver_info,
+                sdi.driver_first_name,
+                sdi.driver_last_name,
+                sdi.account_number,
+                sdi.account_name,
+                sdi.account_address,
+                sdi.account_country,
+                sdi.account_state,                
+                sdi.license_number,
+                sdi.license_state,
+                sdi.vehicle_plates,
+                sdi.trailer_number,
+                sdi.tractor_number,
+                sdi.driver_phone
+            FROM sale_driver_info sdi
+            WHERE sdi.driver_phone = @phone
+            ORDER BY sdi.id_driver_info DESC
+            LIMIT 1;";
+
+            async Task<DriverInfo?> TryOneAsync(string connStr)
+            {
+                await using var conn = new MySqlConnection(connStr);
+                await conn.OpenAsync();
+                await using var cmd = new MySqlCommand(SQL, conn);
+                cmd.Parameters.AddWithValue("@phone", phoneDigits);
+
+                await using var rd = await cmd.ExecuteReaderAsync();
+                if (!await rd.ReadAsync())
+                    return null;
+
+                return new DriverInfo
+                {
+                    Id = rd.GetInt64("id_driver_info"),
+                    First = rd.GetString("driver_first_name"),
+                    Last = rd.GetString("driver_last_name"),
+                    AccountNumber = rd.IsDBNull("account_number") ? "" : rd.GetString("account_number"),
+                    AccountName = rd.IsDBNull("account_name") ? "" : rd.GetString("account_name"),
+                    AccountAddress = rd.IsDBNull("account_address") ? "" : rd.GetString("account_address"),
+                    AccountCountry = rd.IsDBNull("account_country") ? "" : rd.GetString("account_country"),
+                    AccountState = rd.IsDBNull("account_state") ? "" : rd.GetString("account_state"),
+                  
+                    License = rd.IsDBNull("license_number") ? "" : rd.GetString("license_number"),
+                    LicenseStateCode = rd.IsDBNull("license_state") ? "" : rd.GetString("license_state"),
+                    Plates = rd.IsDBNull("vehicle_plates") ? "" : rd.GetString("vehicle_plates"),
+                    TrailerNumber = rd.IsDBNull("trailer_number") ? "" : rd.GetString("trailer_number"),
+                    TractorNumber = rd.IsDBNull("tractor_number") ? "" : rd.GetString("tractor_number"),
+                    PhoneDigits = rd.IsDBNull("driver_phone") ? "" : rd.GetString("driver_phone")
+                };
+            }
+
+            try
+            {
+                return await TryOneAsync(GetPrimaryConn());
+            }
+            catch (Exception ex)
+            {
+                AppendLog("[Driver] Phone lookup primary failed, trying local… " + ex.Message);
+                return await TryOneAsync(GetLocalConn());
+            }
+        }
+
+        private void FillDriverFormFromInfo(DriverInfo d)
+        {
+            ChoferNombreText.Text = d.First;
+            ChoferApellidosText.Text = d.Last;
+            LicenciaNumeroText.Text = d.License;
+            PlacasRegText.Text = d.Plates;
+            TrailerNumberText.Text = d.TrailerNumber;
+            TractorNumberText.Text = d.TractorNumber;
+
+            // License state
+            if (!string.IsNullOrWhiteSpace(d.LicenseStateCode))
+            {
+                var st = _licenseStates
+                    .FirstOrDefault(x => string.Equals(x.Code, d.LicenseStateCode, StringComparison.OrdinalIgnoreCase));
+                if (st != null)
+                    LicenseStateCombo.SelectedItem = st;
+            }
+
+            // Company from catálogo
+            TransportAccount? acc = null;
+            if (!string.IsNullOrWhiteSpace(d.AccountNumber))
+            {
+                acc = _accounts.FirstOrDefault(a =>
+                    string.Equals(a.AccountNumber, d.AccountNumber, StringComparison.OrdinalIgnoreCase));
+            }
+            if (acc == null && !string.IsNullOrWhiteSpace(d.AccountName))
+            {
+                acc = _accounts.FirstOrDefault(a =>
+                    string.Equals(a.AccountName, d.AccountName, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (acc != null)
+            {
+                ClienteRegCombo.SelectedItem = acc;
+            }
+            else
+            {
+                ClienteRegCombo.SelectedIndex = 0; // Cash sale – no account
+                AccountNameText.Text = d.AccountName;
+                AccountAddressText.Text = d.AccountAddress;
+                AccountCountryText.Text = d.AccountCountry;
+                AccountStateText.Text = d.AccountState;
+            }
+            if (d.DriverProductId.HasValue && d.DriverProductId.Value > 0)
+            {
+                var dp = _driverProducts.FirstOrDefault(x => x.Id == d.DriverProductId.Value);
+                if (dp != null)
+                    ProductoRegText.SelectedItem = dp;
+            }            
+        }
+        private async void DriverPhoneText_LostFocus(object sender, RoutedEventArgs e)
+        {
+            await ValidateAndLoadDriverByPhoneAsync();
+        }
+        private async void DialogBody_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            // Solo nos interesa si el textbox tenía el foco
+            if (!DriverPhoneText.IsKeyboardFocusWithin)
+                return;
+
+            // Si el click fue dentro del propio textbox, no hacemos nada extra
+            if (DriverPhoneText.IsMouseOver)
+                return;
+
+            await ValidateAndLoadDriverByPhoneAsync();
+        }
+
+        private async Task ValidateAndLoadDriverByPhoneAsync()
+        {
+            var digits = OnlyDigits(DriverPhoneText.Text);
+            if (digits.Length != DRIVER_PHONE_LEN)
+            {
+                // No buscamos si no trae 10 dígitos
+                DriverPhoneStatusText.Text = "Phone must be 10 digits.";
+                DriverPhoneStatusText.Visibility = Visibility.Visible;
+                return;
+            }
+
+            _driverPhoneDigits = digits;
+            // Formato visual
+            DriverPhoneText.Text = FormatPhone10(digits);
+
+            var info = await GetDriverByPhoneAsync(digits);
+            if (info == null)
+            {
+                DriverPhoneStatusText.Text = "Driver not found";
+                DriverPhoneStatusText.Visibility = Visibility.Visible;
+
+                // Limpia campos básicos para captura manual
+                ChoferNombreText.Text = "";
+                ChoferApellidosText.Text = "";
+                LicenciaNumeroText.Text = "";
+                PlacasRegText.Text = "";
+            }
+            else
+            {
+                FillDriverFormFromInfo(info);
+                DriverPhoneStatusText.Text = $"Driver loaded: {info.First} {info.Last}";
+                DriverPhoneStatusText.Visibility = Visibility.Visible;
+            }
+        }
+
+        private async Task LoadDriverProductsAsync()
+        {
+            _driverProducts.Clear();
+
+            async Task<bool> TryOneAsync(string connStr)
+            {
+                try
+                {
+                    using var conn = new MySqlConnection(connStr);
+                    await conn.OpenAsync();
+
+                    const string SQL = @"SELECT product_id, code, name FROM driver_products WHERE is_active = 1 ORDER BY name;";
+
+                    using var cmd = new MySqlCommand(SQL, conn);
+                    using var rd = await cmd.ExecuteReaderAsync();
+
+                    while (await rd.ReadAsync())
+                    {
+                        _driverProducts.Add(new DriverProduct
+                        {
+                            Id = rd.GetInt32("product_id"),
+                            Code = rd.GetString("code"),
+                            Name = rd.GetString("name")
+                        });
+                    }
+
+                    AppendLog($"[DrvProducts] Loaded {_driverProducts.Count} product(s).");
+                    return _driverProducts.Count > 0;
+                }
+                catch (Exception ex)
+                {
+                    AppendLog($"[DrvProducts] {ex.GetType().Name}: {ex.Message}");
+                    return false;
+                }
+            }
+
+            if (!await TryOneAsync(GetPrimaryConn()))
+            {
+                AppendLog("[DrvProducts] Primary DB failed, trying local…");
+                await TryOneAsync(GetLocalConn());
+            }
+
+            // Bind al ComboBox del modal
+            ProductoRegText.ItemsSource = _driverProducts;
+            ProductoRegText.DisplayMemberPath = nameof(DriverProduct.Display);
+            //ProductoRegText.SelectedIndex = -1;
+        }
+
+
+
+
+
 
     }
 }

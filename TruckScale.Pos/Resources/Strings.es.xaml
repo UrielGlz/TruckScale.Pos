@@ -76,6 +76,16 @@
     <sys:String x:Key="Notes">Observaciones</sys:String>
     <sys:String x:Key="Cancel">Cancelar</sys:String>
     <sys:String x:Key="Save">Guardar</sys:String>
+    <sys:String x:Key="AccountName">Nombre de la cuenta</sys:String>
+    <sys:String x:Key="AccountAddress">Dirección de la cuenta</sys:String>
+    <sys:String x:Key="AccountCountry">País de la cuenta</sys:String>
+    <sys:String x:Key="AccountState">Estado de la cuenta</sys:String>
+
+    <!-- ES -->
+    <sys:String x:Key="LicenseState">Estado de la placa</sys:String>
+    <sys:String x:Key="TrailerNumber">Número de tráiler</sys:String>
+    <sys:String x:Key="TractorNumber">Número de tractor</sys:String>
+    
 
     <!-- Validaciones -->
     <sys:String x:Key="Validation.MissingFields.Title">Validación</sys:String>

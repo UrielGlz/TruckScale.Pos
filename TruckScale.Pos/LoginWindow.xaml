@@ -10,7 +10,8 @@
         WindowStartupLocation="CenterScreen"
         ResizeMode="CanResize"
         PreviewKeyDown="Window_PreviewKeyDown"
-        Background="{DynamicResource MaterialDesignPaper}">
+        Background="{DynamicResource MaterialDesignPaper}"
+        Loaded="LoginWindow_Loaded">
 
     <Grid Margin="32">
         <Grid.ColumnDefinitions>
@@ -28,6 +29,24 @@
             <StackPanel Grid.Row="0"
                         VerticalAlignment="Center"
                         Margin="0 0 24 0">
+
+                <!-- LOGO (placeholder cuadrado) -->
+                <Border Width="150"
+                        Height="150"
+                        CornerRadius="4"
+                        BorderBrush="{DynamicResource MaterialDesignDivider}"
+                        BorderThickness="1"
+                        Margin="0 0 0 24"
+                        Background="White">
+                    <TextBlock Text="LOGO"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource MaterialDesignBodySecondary}" />
+                </Border>
+
+                <!-- Título principal -->
                 <TextBlock Text="TruckScale POS"
                            FontSize="40"
                            FontWeight="Bold"
@@ -35,28 +54,44 @@
                 <TextBlock Text="Weighbridge System"
                            FontSize="18"
                            Foreground="{DynamicResource MaterialDesignBodySecondary}"
-                           Margin="0 0 0 24"/>
+                           Margin="0 0 0 16" />
 
                 <Border Height="4"
                         Width="120"
                         CornerRadius="2"
                         Background="{DynamicResource PrimaryHueMidBrush}"
-                        Margin="0 0 0 24"/>
+                        Margin="0 0 0 16" />
 
-                <TextBlock Text="Capture axle weights, register drivers and issue tickets from a single, focused screen."
+                <!-- Descripción corta -->
+                <!--<TextBlock Text="Capture axle weights, register drivers and issue tickets from a single, focused screen."
                            FontSize="13"
                            TextWrapping="Wrap"
                            Foreground="{DynamicResource MaterialDesignBodySecondary}"
-                           MaxWidth="320"/>
+                           MaxWidth="320"
+                           Margin="0 0 0 24" />-->
+
+                <!-- Nombre del sitio / planta -->
+                <Border BorderThickness="1"
+                        BorderBrush="{DynamicResource MaterialDesignDivider}"
+                        Padding="12"
+                        Margin="0 0 0 0">
+                    <TextBlock Text="McAllen Foreign Trade Zone"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               Foreground="Red"
+                               TextWrapping="Wrap" />
+                </Border>
             </StackPanel>
 
-            <TextBlock x:Name="ConfigHintText"
+            <!-- Mensaje de configuración de BD (oculto normalmente) -->
+            <!--<TextBlock x:Name="ConfigHintText"
                        Grid.Row="1"
                        Margin="0 16 0 0"
                        FontSize="12"
-                       Foreground="{DynamicResource MaterialDesignBodySecondary}">
+                       Foreground="{DynamicResource MaterialDesignBodySecondary}"
+                       Visibility="Collapsed">
                 Database not configured. Press CTRL + ALT + F8 for configuration.
-            </TextBlock>
+            </TextBlock>-->
         </Grid>
 
         <!-- DERECHA: Tarjeta de login -->
@@ -82,9 +117,10 @@
                             <TextBlock Text="Sign in"
                                        FontSize="26"
                                        FontWeight="SemiBold" />
-                            <TextBlock Text="Use your TruckScale POS credentials"
+                            <!-- Se elimina la leyenda de credenciales para que no aparezca -->
+                            <!--<TextBlock Text="Use your TruckScale POS credentials"
                                        FontSize="13"
-                                       Foreground="{DynamicResource MaterialDesignBodySecondary}" />
+                                       Foreground="{DynamicResource MaterialDesignBodySecondary}" />-->
                         </StackPanel>
 
                         <!-- User -->
@@ -126,7 +162,9 @@
                                     Height="36"
                                     Padding="12 0"
                                     Click="LoginButton_Click"
-                                    Style="{StaticResource MaterialDesignRaisedButton}" />
+                                    HorizontalAlignment="Right"
+                                    Style="{StaticResource MaterialDesignRaisedButton}"
+                                    IsDefault="True" />
                         </StackPanel>
                     </Grid>
                 </Border>

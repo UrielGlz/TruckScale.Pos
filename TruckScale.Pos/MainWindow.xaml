@@ -9,7 +9,13 @@
         Style="{StaticResource MaterialDesignWindow}"
         FontFamily="{DynamicResource MaterialDesignFont}"
         Background="{DynamicResource MaterialDesignPaper}"
-        Loaded="Window_Loaded">
+        Loaded="Window_Loaded"
+        WindowState="Maximized"
+        
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        
+        >
 
     <!-- ====== RECURSOS DE ESTILO ====== -->
     <Window.Resources>
@@ -199,6 +205,22 @@
                 </Trigger>
             </Style.Triggers>
         </Style>
+        <!-- Label para ejes -->
+        <Style x:Key="AxleLabel" TargetType="Label">
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="Margin" Value="0,2,0,0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+
+        <!-- Label para TOTAL -->
+        <Style x:Key="AxleTotalLabel" TargetType="Label" BasedOn="{StaticResource AxleLabel}">
+            <Setter Property="FontSize" Value="18"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground"
+            Value="{DynamicResource PrimaryHueMidBrush}"/>
+            <Setter Property="Margin" Value="0,6,0,0"/>
+        </Style>
 
     </Window.Resources>
 
@@ -293,15 +315,18 @@
                                     <TextBlock Text="Ejes por sesión" Style="{StaticResource TitleLarge}" />
                                     <ListBox x:Name="AxlesList" Height="7" ItemsSource="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=_currentAxles}" />
                                 </StackPanel>
-                                <Label x:Name="lblEje1" Content="Label" Height="42" Width="237" FontSize="24"/>
-                                <Label x:Name="lblEje2" Content="Label" Height="42" Width="237" FontSize="24"/>
-                                <Label x:Name="lblEje3" Content="Label" Height="42" Width="237" FontSize="24"/>
-                                <Label x:Name="lblUUID" Content="Label2" Height="42" Width="237" FontSize="24"/>
+                                <Label x:Name="lblEje1" Style="{StaticResource AxleLabel}" Content="Axle 1: 0 lb"/>
+
+                                <Label x:Name="lblEje2" Style="{StaticResource AxleLabel}" Content="Axle 2: 0 lb"/>
+
+                                <Label x:Name="lblEje3" Style="{StaticResource AxleLabel}" Content="Axle 3: 0 lb"/>
+
+                                <Label x:Name="lblUUID" Style="{StaticResource AxleTotalLabel}" Content="Total: 0 lb"/>
                                 <!--<Label x:Name="lblTemp" Content="Label2" Height="42" Width="237" FontSize="24"/>-->
 
                             </StackPanel>
                         </md:Card>
-                        
+
                         <!-- STATUS CARD -->
                         <md:Card Grid.Row="2" x:Name="StatusCard" Padding="40" Margin="0,8,0,0">
 
@@ -328,7 +353,7 @@
                                 <SolidColorBrush x:Key="StErrorFg" Color="#B71C1C"/>
 
 
-                               
+
                             </md:Card.Resources>
 
                             <!-- Estilo del card con disparadores por estado -->
@@ -545,7 +570,7 @@
                                     </Border.Resources>
 
                                     <StackPanel>
-                                        
+
                                         <!-- === NUEVO: selección de servicio (side-by-side) === -->
                                         <TextBlock Text="Service" Style="{StaticResource TitleLarge}" Margin="0,0,0,6"/>
 
@@ -685,26 +710,50 @@
                                 </StackPanel>
 
                                 <!-- Nombre -->
-                                <TextBlock x:Name="DriverNameText" Text="—" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="DriverNameText"
+                   Text="—"
+                   FontSize="18"
+                   FontWeight="SemiBold"
+                   Margin="0,0,0,6"/>
 
-                                <!-- Placas / Licencia -->
+                                <!-- Cuenta -->
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
-                                    <md:PackIcon Kind="License" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
-                                    <TextBlock x:Name="DriverLicenseText" Text="—" Opacity="0.85"/>
+                                    <md:PackIcon Kind="AccountMultipleOutline" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
+                                    <TextBlock x:Name="DriverAccountText" Text="Account: —" Opacity="0.85"/>
                                 </StackPanel>
+
+                                <!-- Producto -->
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                                    <md:PackIcon Kind="PackageVariantClosed" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
+                                    <TextBlock x:Name="DriverProductText" Text="Product: —" Opacity="0.85"/>
+                                </StackPanel>
+
+                                <!-- Licencia -->
+                                <StackPanel Orientation="Horizontal" Margin="0,4,0,2">
+                                    <md:PackIcon Kind="License" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
+                                    <TextBlock x:Name="DriverLicenseText" Text="License: —" Opacity="0.85"/>
+                                </StackPanel>
+
+                                <!-- Placas -->
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
                                     <md:PackIcon Kind="Car" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
-                                    <TextBlock x:Name="DriverPlatesText" Text="—" Opacity="0.85"/>
+                                    <TextBlock x:Name="DriverPlatesText" Text="Plates: —" Opacity="0.85"/>
                                 </StackPanel>
 
-                                <!-- Teléfono / Unidad -->
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
-                                    <md:PackIcon Kind="Phone" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
-                                    <TextBlock x:Name="DriverPhoneText" Text="—" Opacity="0.85"/>
-                                </StackPanel>
+                                <!-- Tractor / Trailer -->
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
                                     <md:PackIcon Kind="Truck" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
-                                    <TextBlock x:Name="DriverVehicleText" Text="—" Opacity="0.85"/>
+                                    <TextBlock x:Name="DriverUnitText" Text="Unit: —" Opacity="0.85"/>
+                                </StackPanel>
+
+                                <!-- Dirección de la cuenta -->
+                                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                    <md:PackIcon Kind="MapMarker" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
+                                    <TextBlock x:Name="DriverAccountAddressText"
+                       Text="Address: —"
+                       TextWrapping="Wrap"
+                       Opacity="0.85"
+                       MaxWidth="280"/>
                                 </StackPanel>
                             </StackPanel>
                         </md:Card>
@@ -735,7 +784,8 @@
                     <TextBlock Text="   |   " />
                     <TextBlock>
                         <Run Text="{DynamicResource Operator}"/>
-                        <Run Text=": admin"/>
+                        <Run Text=": " />
+                        <Run x:Name="OperatorNameRun" Text="admin"/>
                     </TextBlock>
                     <TextBlock Text="   |   " />
                     <TextBlock Text="{Binding ElementName=WeightText, Path=Text}" />
@@ -833,149 +883,353 @@
                     </md:DialogHost.DialogContent>
                 </md:DialogHost>
 
+                <!-- === GENERIC ALERT DIALOG (CENTERED) === -->
+                <md:DialogHost x:Name="AlertHost"
+               Grid.RowSpan="99"
+               Grid.ColumnSpan="99"
+               Panel.ZIndex="100">
+                    <md:DialogHost.DialogContent>
+                        <Grid Width="420"
+              HorizontalAlignment="Center"
+              VerticalAlignment="Center">
+                            <md:Card Padding="18"
+                     md:ElevationAssist.Elevation="Dp2"
+                     UniformCornerRadius="16">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Título + icono -->
+                                    <StackPanel Grid.Row="0"
+                                Orientation="Horizontal"
+                                Margin="0,0,0,12">
+                                        <md:PackIcon x:Name="AlertIcon"
+                                     Kind="InformationOutline"
+                                     Width="26" Height="26"
+                                     Margin="0,0,8,0"
+                                     Foreground="{DynamicResource PrimaryHueMidBrush}"/>
+                                        <TextBlock x:Name="AlertTitle"
+                                   VerticalAlignment="Center"
+                                   FontSize="18"
+                                   FontWeight="SemiBold"/>
+                                    </StackPanel>
+
+                                    <!-- Mensaje -->
+                                    <TextBlock x:Name="AlertMessage"
+                               Grid.Row="1"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,20"/>
+
+                                    <!-- Botón OK -->
+                                    <StackPanel Grid.Row="2"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Right">
+                                        <Button x:Name="AlertOkButton"
+                                MinWidth="80"
+                                IsDefault="True"
+                                Style="{StaticResource MaterialDesignRaisedButton}">
+                                            <StackPanel Orientation="Horizontal" Margin="4,2">
+                                                <md:PackIcon Kind="Check"
+                                             Width="18" Height="18"
+                                             Margin="0,0,4,0"/>
+                                                <TextBlock Text="OK"/>
+                                            </StackPanel>
+                                        </Button>
+                                    </StackPanel>
+                                </Grid>
+                            </md:Card>
+                        </Grid>
+                    </md:DialogHost.DialogContent>
+                </md:DialogHost>
+
+
 
             </Grid>
-            
+
         </md:DrawerHost>
 
+
+        <!-- ===== MODAL: Registrar chofer ===== -->
         <!-- ===== MODAL: Registrar chofer ===== -->
         <md:DialogHost.DialogContent>
-            <md:Card Padding="24" Width="760">
-                <StackPanel>
-                    <!-- Encabezado -->
-                    <Border Padding="0,0,0,12" BorderBrush="{DynamicResource MaterialDesignDivider}" BorderThickness="0,0,0,1">
+            <md:Card Padding="24" Width="980" MaxHeight="1100"  HorizontalAlignment="Center">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <!-- Header -->
+                        <RowDefinition Height="*"/>
+                        <!-- Form scrolleable -->
+                        <RowDefinition Height="Auto"/>
+                        <!-- Footer fijo -->
+                    </Grid.RowDefinitions>
+
+                    <!-- ===== Encabezado ===== -->
+                    <Border Grid.Row="0"
+                    Padding="0,0,0,12"
+                    BorderBrush="{DynamicResource MaterialDesignDivider}"
+                    BorderThickness="0,0,0,1">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <md:PackIcon Kind="Steering" Width="20" Height="20" Opacity="0.85" Margin="0,0,8,0"/>
-                            <TextBlock Text="{DynamicResource Driver.Dialog.Title}" Style="{StaticResource TitleLarge}" />
+                            <md:PackIcon Kind="Steering" Width="20" Height="20"
+                                 Opacity="0.85" Margin="0,0,8,0"/>
+                            <TextBlock Text="{DynamicResource Driver.Dialog.Title}"
+                               Style="{StaticResource TitleLarge}" />
                         </StackPanel>
                     </Border>
 
-                    <Grid Margin="0,8,0,0">
-                        <!-- 2 columnas -->
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <!-- Filas -->
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <!-- 0: título Datos del servicio -->
-                            <RowDefinition Height="Auto"/>
-                            <!-- 1: cliente/producto -->
-                            <RowDefinition Height="Auto"/>
-                            <!-- 2: título Chofer -->
-                            <RowDefinition Height="Auto"/>
-                            <!-- 3: nombre/apellidos -->
-                            <RowDefinition Height="Auto"/>
-                            <!-- 4: teléfono/licencia -->
-                            <RowDefinition Height="Auto"/>
-                            <!-- 5: vigencia -->
-                            <RowDefinition Height="Auto"/>
-                            <!-- 6: título Unidad -->
-                            <RowDefinition Height="Auto"/>
-                            <!-- 7: placas/tipo -->
-                            <RowDefinition Height="Auto"/>
-                            <!-- 8: marca/modelo -->
-                            <RowDefinition Height="Auto"/>
-                            <!-- 9: observaciones -->
-                        </Grid.RowDefinitions>
+                    <!-- ===== Formulario scrolleable ===== -->
+                    <ScrollViewer Grid.Row="1"
+                          Margin="0,8,0,0"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                        <Grid MouseDown="DialogBody_MouseDown">
+                            <!-- 2 columnas -->
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
 
-                        <!-- Datos del servicio -->
-                        <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="{DynamicResource Service.Data}" Opacity="0.7" Margin="0,0,0,4"/>
-                        <ComboBox x:Name="ClienteRegCombo" Grid.Row="1" Grid.Column="0"
-                                  md:HintAssist.Hint="{DynamicResource Client}" MinHeight="44"
-                                  Margin="0,0,8,12" IsEditable="False" IsTextSearchEnabled="True">
-                            <!-- demo items -->
-                            <ComboBoxItem Content="Transportes Acme S.A."/>
-                            <ComboBoxItem Content="Logística del Norte"/>
-                            <ComboBoxItem Content="Fletes y Mudanzas MX"/>
-                            <ComboBoxItem Content="Minería San Jorge"/>
-                        </ComboBox>
+                            <!-- Filas -->
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <!-- 0: Driver information header -->
+                                <RowDefinition Height="Auto"/>
+                                <!-- 1: Phone -->
+                                <RowDefinition Height="Auto"/>
+                                <!-- 2: Driver header -->
+                                <RowDefinition Height="Auto"/>
+                                <!-- 3: Driver fields -->
+                                <RowDefinition Height="Auto"/>
+                                <!-- 4: Service header -->
+                                <RowDefinition Height="Auto"/>
+                                <!-- 5: Company -->
+                                <RowDefinition Height="Auto"/>
+                                <!-- 6: Account name -->
+                                <RowDefinition Height="Auto"/>
+                                <!-- 7: Account address -->
+                                <RowDefinition Height="Auto"/>
+                                <!-- 8: Country/state -->
+                                <RowDefinition Height="Auto"/>
+                                <!-- 9: Vehicle header -->
+                                <RowDefinition Height="Auto"/>
+                                <!-- 10: Plates -->
+                                <RowDefinition Height="Auto"/>
+                                <!-- 11: License state -->
+                                <RowDefinition Height="Auto"/>
+                                <!-- 12: Trailer/Tractor -->
+                                <RowDefinition Height="Auto"/>
+                                <!-- 13: Product header -->
+                                <RowDefinition Height="Auto"/>
+                                <!-- 14: Product -->
+                            </Grid.RowDefinitions>
 
-                        <TextBox x:Name="ProductoRegText" Grid.Row="1" Grid.Column="1"
-                                 Style="{StaticResource FieldBox}" md:HintAssist.Hint="{DynamicResource Product}"
+                            <!-- ===== Driver information ===== -->
+                            <Border Grid.Row="0" Grid.ColumnSpan="2"
+                            BorderBrush="{DynamicResource MaterialDesignDivider}"
+                            BorderThickness="0,0,0,1"
+                            Padding="0,0,0,6"
+                            Margin="0,0,0,6">
+                                <TextBlock Text="Driver information" Opacity="0.7"/>
+                            </Border>
+
+                            <!-- Phone (10 digits) -->
+                            <TextBox x:Name="DriverPhoneText"
+                             Grid.Row="1" Grid.ColumnSpan="2"
+                             Style="{StaticResource FieldBox}"
+                             md:HintAssist.Hint="Phone (10 digits)"
+                             Margin="0,4,0,12"
+                             MaxLength="14"
+                             PreviewTextInput="DigitsOnly_PreviewTextInput"
+                             DataObject.Pasting="DigitsOnly_Pasting"
+                             LostFocus="DriverPhoneText_LostFocus"/>
+
+                            <!-- ===== Driver ===== -->
+                            <Border Grid.Row="2" Grid.ColumnSpan="2"
+                            BorderBrush="{DynamicResource MaterialDesignDivider}"
+                            BorderThickness="0,1,0,0"
+                            Padding="0,12,0,0"
+                            Margin="0,8,0,6">
+                                <TextBlock Text="{DynamicResource Driver.Section}" Opacity="0.7"/>
+                            </Border>
+
+                            <Grid Grid.Row="3" Grid.ColumnSpan="2">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <!-- First/Last -->
+                                    <RowDefinition Height="Auto"/>
+                                    <!-- License no. -->
+                                    <RowDefinition Height="Auto"/>
+                                    <!-- Status -->
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- First / Last name -->
+                                <TextBox x:Name="ChoferNombreText"
+                                 Grid.Row="0" Grid.Column="0"
+                                 Style="{StaticResource FieldBox}"
+                                 md:HintAssist.Hint="{StaticResource FirstName}"
+                                 Margin="0,0,8,12"/>
+
+                                <TextBox x:Name="ChoferApellidosText"
+                                 Grid.Row="0" Grid.Column="1"
+                                 Style="{StaticResource FieldBox}"
+                                 md:HintAssist.Hint="{StaticResource LastName}"
                                  Margin="8,0,0,12"/>
 
-                        <!-- Chofer -->
-                        <Border Grid.Row="2" Grid.ColumnSpan="2" BorderBrush="{DynamicResource MaterialDesignDivider}"
-                                BorderThickness="0,1,0,0" Padding="0,12,0,0" Margin="0,8,0,6">
-                            <TextBlock Text="{DynamicResource Driver.Section}" Opacity="0.7"/>
-                        </Border>
+                                <!-- Driver License # -->
+                                <TextBox x:Name="LicenciaNumeroText"
+                                 Grid.Row="1" Grid.ColumnSpan="2"
+                                 Style="{StaticResource FieldBox}"
+                                 md:HintAssist.Hint="{StaticResource LicenseNo}"
+                                 Margin="0,0,0,12"/>
 
-                        <Grid Grid.Row="3" Grid.ColumnSpan="2" Margin="0,0,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBox x:Name="ChoferNombreText" Grid.Column="0"
-                                     Style="{StaticResource FieldBox}" md:HintAssist.Hint="{DynamicResource FirstName}"
-                                     Margin="0,0,8,12"/>
-                            <TextBox x:Name="ChoferApellidosText" Grid.Column="1"
-                                     Style="{StaticResource FieldBox}" md:HintAssist.Hint="{DynamicResource LastName}"
-                                     Margin="8,0,0,12"/>
+                                <!-- Status: driver found / not found -->
+                                <TextBlock x:Name="DriverPhoneStatusText"
+                                   Grid.Row="2" Grid.ColumnSpan="2"
+                                   Margin="0,0,0,8"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource MaterialDesignValidationErrorBrush}"
+                                   Visibility="Collapsed"
+                                   Text="Driver not found"/>
+                            </Grid>
+
+                            <!-- ===== Service info ===== -->
+                            <Border Grid.Row="4" Grid.ColumnSpan="2"
+                            BorderBrush="{DynamicResource MaterialDesignDivider}"
+                            BorderThickness="0,1,0,0"
+                            Padding="0,12,0,0"
+                            Margin="0,8,0,6">
+                                <TextBlock Text="{DynamicResource Service.Data}" Opacity="0.7"/>
+                            </Border>
+
+                            <ComboBox x:Name="ClienteRegCombo"
+                              Grid.Row="5" Grid.ColumnSpan="2"
+                              Margin="0,0,0,12"
+                              MinHeight="44"
+                              IsEditable="False"
+                              IsTextSearchEnabled="True"
+                              SelectionChanged="ClienteRegCombo_SelectionChanged"
+                              md:HintAssist.Hint="Company" />
+
+                            <TextBox x:Name="AccountNameText" IsReadOnly="True"
+                             Grid.Row="6" Grid.ColumnSpan="2"
+                             Style="{StaticResource FieldBox}"
+                             md:HintAssist.Hint="{DynamicResource AccountName}"
+                             Margin="0,0,0,12"/>
+
+                            <TextBox x:Name="AccountAddressText"
+                             Grid.Row="7" Grid.ColumnSpan="2"
+                             Style="{StaticResource FieldBox}"
+                             md:HintAssist.Hint="{DynamicResource AccountAddress}"
+                             Margin="0,0,0,12"/>
+
+                            <TextBox x:Name="AccountCountryText"
+                             Grid.Row="8" Grid.Column="0"
+                             Style="{StaticResource FieldBox}"
+                             md:HintAssist.Hint="{DynamicResource AccountCountry}"
+                             Margin="0,0,8,12"/>
+
+                            <TextBox x:Name="AccountStateText"
+                             Grid.Row="8" Grid.Column="1"
+                             Style="{StaticResource FieldBox}"
+                             md:HintAssist.Hint="{DynamicResource AccountState}"
+                             Margin="8,0,0,12"/>
+
+                            <!-- ===== Vehicle ===== -->
+                            <Border Grid.Row="9" Grid.ColumnSpan="2"
+                            BorderBrush="{DynamicResource MaterialDesignDivider}"
+                            BorderThickness="0,1,0,0"
+                            Padding="0,12,0,0"
+                            Margin="0,8,0,6">
+                                <TextBlock Text="{DynamicResource Unit.Section}"
+                                   Opacity="0.7"/>
+                            </Border>
+
+                            <!-- Plates -->
+                            <TextBox x:Name="PlacasRegText"
+                             Grid.Row="10" Grid.ColumnSpan="2"
+                             Style="{StaticResource FieldBox}"
+                             md:HintAssist.Hint="{DynamicResource Plates}"
+                             Margin="0,0,0,12"/>
+
+                            <!-- License State (para placas) -->
+                            <ComboBox x:Name="LicenseStateCombo"
+                              Grid.Row="11" Grid.ColumnSpan="2"
+                              md:HintAssist.Hint="{DynamicResource LicenseState}"
+                              MinHeight="44"
+                              Margin="0,0,0,12"
+                              IsEditable="False"
+                              IsTextSearchEnabled="True"/>
+
+                            <!-- Trailer / Tractor -->
+                            <Grid Grid.Row="12" Grid.ColumnSpan="2">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <TextBox x:Name="TrailerNumberText"
+                                 Grid.Column="0"
+                                 Style="{StaticResource FieldBox}"
+                                 md:HintAssist.Hint="{DynamicResource TrailerNumber}"
+                                 Margin="0,0,8,12"/>
+
+                                <TextBox x:Name="TractorNumberText"
+                                 Grid.Column="1"
+                                 Style="{StaticResource FieldBox}"
+                                 md:HintAssist.Hint="{DynamicResource TractorNumber}"
+                                 Margin="8,0,0,12"/>
+                            </Grid>
+
+                            <!-- ===== Product ===== -->
+                            <Border Grid.Row="13" Grid.ColumnSpan="2"
+                            BorderBrush="{DynamicResource MaterialDesignDivider}"
+                            BorderThickness="0,1,0,0"
+                            Padding="0,12,0,0"
+                            Margin="0,8,0,6">
+                                <TextBlock Text="{DynamicResource Product}"
+                                   Opacity="0.7"/>
+                            </Border>
+
+                            <ComboBox x:Name="ProductoRegText"
+                              Grid.Row="14" Grid.ColumnSpan="2"
+                              md:HintAssist.Hint="{DynamicResource Product}"
+                              MinHeight="44"
+                              Margin="0,0,0,0"
+                              IsEditable="False"
+                              IsTextSearchEnabled="True" />
                         </Grid>
+                    </ScrollViewer>
 
-                        <Grid Grid.Row="4" Grid.ColumnSpan="2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBox x:Name="ChoferTelefonoText" Grid.Column="0" Style="{StaticResource FieldBox}" md:HintAssist.Hint="{DynamicResource Phone}" Margin="0,0,8,12" MaxLength="10" PreviewTextInput="DigitsOnly_PreviewTextInput" DataObject.Pasting="DigitsOnly_Pasting"/>
-
-                            <TextBox x:Name="LicenciaNumeroText" Grid.Column="1" Style="{StaticResource FieldBox}" md:HintAssist.Hint="{DynamicResource LicenseNo}" Margin="8,0,0,12"/>
-                        </Grid>
-
-                        <DatePicker x:Name="LicenciaVigenciaPicker" Grid.Row="5" Grid.ColumnSpan="2"
-                                    Margin="0,0,0,12" md:HintAssist.Hint="{DynamicResource LicenseExpiry}"
-                                    MinHeight="44"/>
-
-                        <!-- Unidad -->
-                        <Border Grid.Row="6" Grid.ColumnSpan="2" BorderBrush="{DynamicResource MaterialDesignDivider}"
-                                BorderThickness="0,1,0,0" Padding="0,12,0,0" Margin="0,8,0,6">
-                            <TextBlock Text="{DynamicResource Unit.Section}" Opacity="0.7"/>
-                        </Border>
-
-                        <Grid Grid.Row="7" Grid.ColumnSpan="2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="2*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBox x:Name="PlacasRegText" Grid.Column="0"
-                                     Style="{StaticResource FieldBox}" md:HintAssist.Hint="{DynamicResource Plates}"
-                                     Margin="0,0,8,12"/>
-                            <ComboBox x:Name="TipoUnidadCombo" Grid.Column="1" md:HintAssist.Hint="{DynamicResource UnitType}" MinHeight="44" Margin="8,0,0,12"/>
-                        </Grid>
-
-                        <Grid Grid.Row="8" Grid.ColumnSpan="2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBox x:Name="MarcaText" Grid.Column="0"
-                                     Style="{StaticResource FieldBox}" md:HintAssist.Hint="{DynamicResource Brand}"
-                                     Margin="0,0,8,12"/>
-                            <TextBox x:Name="ModeloText" Grid.Column="1"
-                                     Style="{StaticResource FieldBox}" md:HintAssist.Hint="{DynamicResource Model}"
-                                     Margin="8,0,0,12"/>
-                        </Grid>
-
-                        <TextBox x:Name="ObsText" Grid.Row="9" Grid.ColumnSpan="2"
-                                 Style="{StaticResource FieldBox}" md:HintAssist.Hint="{DynamicResource Notes}"
-                                 AcceptsReturn="True" Height="80"/>
-                    </Grid>
-
-                    <!-- Acciones -->
-                    <Border BorderBrush="{DynamicResource MaterialDesignDivider}" BorderThickness="0,1,0,0" Padding="0,12,0,0" Margin="0,16,0,0">
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button Content="{DynamicResource Cancel}" Style="{StaticResource PrimaryOutlined}" Margin="0,0,8,0" Click="RegisterCancel_Click"/>
-                            <Button Content="{DynamicResource Save}"    Style="{StaticResource PrimaryRaised}" Click="RegisterSave_Click" MinWidth="92"/>
+                    <!-- ===== Footer fijo ===== -->
+                    <Border Grid.Row="2"
+                    BorderBrush="{DynamicResource MaterialDesignDivider}"
+                    BorderThickness="0,1,0,0"
+                    Padding="0,12,0,0"
+                    Margin="0,16,0,0">
+                        <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Right">
+                            <Button Content="{DynamicResource Cancel}"
+                            Style="{StaticResource PrimaryOutlined}"
+                            Margin="0,0,8,0"
+                            Click="RegisterCancel_Click"/>
+                            <Button Content="{DynamicResource Save}"
+                            Style="{StaticResource PrimaryRaised}"
+                            MinWidth="92"
+                            Click="RegisterSave_Click"/>
                         </StackPanel>
-                        
                     </Border>
-                    
-                </StackPanel>
+                </Grid>
             </md:Card>
         </md:DialogHost.DialogContent>
+
+
+
 
     </md:DialogHost>
 </Window>
