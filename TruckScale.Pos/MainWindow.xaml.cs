@@ -856,7 +856,7 @@ namespace TruckScale.Pos
             try
             {
                 DenomsHost.ItemsSource = _kp.Denominations;
-                KeysItems.ItemsSource = _kp.Keys;
+                //KeysItems.ItemsSource = _kp.Keys;
 
 
                 RefreshKeypadDisplay();
@@ -877,7 +877,7 @@ namespace TruckScale.Pos
 
         private void RefreshKeypadDisplay()
         {
-            try { KeypadDisplay.Text = KeypadText; } catch { }
+            //try { KeypadDisplay.Text = KeypadText; } catch { }
         }
 
         private void KeypadClear_Click(object sender, RoutedEventArgs e)
@@ -887,21 +887,21 @@ namespace TruckScale.Pos
         }
 
         private bool _isCompletingSale = false; // evita doble clic
-
+        
         private async void KeypadCommit_Click(object sender, RoutedEventArgs e)
         {
             try
             {
 
 
-                if (decimal.TryParse(KeypadDisplay.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out var importe)
-                    && importe > 0)
-                {
-                    // ⬇️ NUEVO: validar chofer antes de agregar el pago
-                    if (!await EnsureDriverLinkedForPaymentAsync())
-                        return;
-                    AddPayment(_selectedPaymentId, importe);
-                }
+                //if (decimal.TryParse(KeypadDisplay.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out var importe)
+                //    && importe > 0)
+                //{
+                //    // ⬇️ NUEVO: validar chofer antes de agregar el pago
+                //    if (!await EnsureDriverLinkedForPaymentAsync())
+                //        return;
+                //    AddPayment(_selectedPaymentId, importe);
+                //}
                 _keypadBuffer = "";
                 RefreshKeypadDisplay();
                 RefreshSummary();
@@ -1003,8 +1003,8 @@ namespace TruckScale.Pos
             var tag = ((Button)sender).Tag?.ToString();
             if (decimal.TryParse(tag, NumberStyles.Any, CultureInfo.InvariantCulture, out var add))
             {
-                decimal.TryParse(KeypadDisplay.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out var current);
-                _keypadBuffer = (current + add).ToString("0.##", CultureInfo.InvariantCulture);
+                //decimal.TryParse(KeypadDisplay.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out var current);
+                //_keypadBuffer = (current + add).ToString("0.##", CultureInfo.InvariantCulture);
                 RefreshKeypadDisplay();
                 await TryAutoCompleteSaleAsync();
             }
@@ -1629,7 +1629,7 @@ namespace TruckScale.Pos
                 if (PagosEmpty != null)
                     PagosEmpty.Visibility = _pagos.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-                BalanceCaption.Text = diff >= 0 ? "Change" : T("Payment.BalanceKpi");
+                //BalanceCaption.Text = diff >= 0 ? "Change" : T("Payment.BalanceKpi");
             }
             catch { }
         }
@@ -3143,7 +3143,11 @@ namespace TruckScale.Pos
             //ProductoRegText.SelectedIndex = -1;
         }
 
-
+        private void DoneButton_Click(object sender, RoutedEventArgs e)
+        {
+            // TODO: aquí vamos a cerrar/finalizar la transacción
+          
+        }
 
 
 
