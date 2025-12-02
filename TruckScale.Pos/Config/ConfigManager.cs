@@ -37,11 +37,15 @@ namespace TruckScale.Pos.Config
                     LocalDbStrCon = string.IsNullOrWhiteSpace(raw.local_db_str_con)
                         ? ""
                         : CryptoHelper.Unprotect(raw.local_db_str_con),
+                    // NEW – si en el JSON no vienen, tomamos defaults
+                    TicketPrinterName = raw.ticket_printer_name ?? "",
+                    TicketLandscape = raw.ticket_landscape ?? true,
+                    TicketMarginInches = raw.ticket_margin_inches ?? 0.25
                 };
             }
             catch
             {
-                // Si hay error al leer, mejor dejarlo vacío y que el usuario configure
+                // Si hay error al leer, mejor dejarlo vacío y que el admin configure
                 Current = new AppConfig();
             }
         }
@@ -58,6 +62,14 @@ namespace TruckScale.Pos.Config
                 local_db_str_con = string.IsNullOrWhiteSpace(localPlain)
                     ? ""
                     : CryptoHelper.Protect(localPlain),
+                // NEW: se guardan los valores que ya estén en Current
+                ticket_printer_name = Current.TicketPrinterName,
+                ticket_landscape = Current.TicketLandscape,
+                ticket_margin_inches = Current.TicketMarginInches
+
+
+            
+
             };
 
             var json = JsonSerializer.Serialize(raw, new JsonSerializerOptions { WriteIndented = true });
@@ -67,6 +79,12 @@ namespace TruckScale.Pos.Config
             Current.LocalDbStrCon = localPlain;
         }
 
+        // Helper para guardar solo la impresora
+        public static void SavePrinter(string printerName)
+        {
+            Current.TicketPrinterName = printerName ?? "";
+            Save(Current.MainDbStrCon, Current.LocalDbStrCon);
+        }
         public static bool HasMainConnection =>
             !string.IsNullOrWhiteSpace(Current.MainDbStrCon);
 

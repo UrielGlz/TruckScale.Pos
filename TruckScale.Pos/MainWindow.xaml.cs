@@ -4,7 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Runtime.CompilerServices;
 using System.Data;
 using System.Data.SqlTypes;
 using System.Diagnostics;
@@ -12,6 +11,7 @@ using System.Globalization;
 using System.IO;
 using System.IO.Ports;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -21,9 +21,14 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using TruckScale.Pos.Data;
-using TruckScale.Pos.Domain;
+using System.Windows.Xps; // para XpsDocumentWriter
+using TruckScale.Pos.Tickets;
 using TruckScale.Pos.Config;
+using TruckScale.Pos.Data;
+using System.Printing;
+using TruckScale.Pos.Domain;
+using System.Text.Json;
+
 namespace TruckScale.Pos
 {
 
@@ -92,6 +97,8 @@ namespace TruckScale.Pos
 
     public partial class MainWindow : Window
     {
+        private string _ticketPrinterName = "";
+
         // ===== Tema =====
         private readonly PaletteHelper _palette = new();
         private bool _dark = false;
@@ -156,6 +163,16 @@ namespace TruckScale.Pos
         }
         private readonly ObservableCollection<ProductInfo> _productOptions = new();
         private readonly ObservableCollection<DriverProduct> _driverProducts = new();
+
+        // Para recordar datos del último ticket y usarlos al imprimir
+        private string _lastTicketUid = "";
+        private string _lastTicketNumber = "";
+        private string _lastTicketQrJson = "";
+
+        //status_catalogo para TICKETS.PRINTED
+        private const int STATUS_TICKET_PRINTED = 9;
+
+
 
         public MainWindow()
         {
@@ -562,12 +579,22 @@ namespace TruckScale.Pos
         // ===== Conexión a BD para peso =====
         public static string GetConnectionString()
         {
-            // 1) Intentar leer desde config.json
+            // 1) Intentar leer desde config.json (PosConfigService)
             var cfg = PosConfigService.Load();
-            if (!string.IsNullOrWhiteSpace(cfg.MainDbStrCon))
-                return cfg.MainDbStrCon;
 
-            // 2) Fallback legacy (lo que ya tenías)
+            if (!string.IsNullOrWhiteSpace(cfg.MainDbStrCon))
+            {
+                // Tomamos la cadena guardada y le inyectamos las opciones de fecha
+                var fromConfig = new MySqlConnectionStringBuilder(cfg.MainDbStrCon)
+                {
+                    AllowZeroDateTime = true,      // permite 0000-00-00...
+                    ConvertZeroDateTime = true     // los convierte a DateTime.MinValue
+                };
+
+                return fromConfig.ConnectionString;
+            }
+
+            // 2) Fallback legacy (lo que ya tenías), pero con las mismas opciones
             var builder = new MySqlConnectionStringBuilder
             {
                 Server = Environment.GetEnvironmentVariable("BAKEOPS_DB_HOST") ?? "lunisapp.com",
@@ -577,7 +604,12 @@ namespace TruckScale.Pos
                 SslMode = MySqlSslMode.Preferred,
                 ConnectionTimeout = 8,
                 DefaultCommandTimeout = 30,
+
+                // 👇 clave para quitar el error de impresión
+                AllowZeroDateTime = true,
+                ConvertZeroDateTime = true
             };
+
             return builder.ConnectionString;
         }
 
@@ -887,29 +919,40 @@ namespace TruckScale.Pos
         }
 
         private bool _isCompletingSale = false; // evita doble clic
-        
+
         private async void KeypadCommit_Click(object sender, RoutedEventArgs e)
         {
             try
             {
+                if (decimal.TryParse(KeypadText, NumberStyles.Any, CultureInfo.InvariantCulture, out var importe)
+                    && importe > 0)
+                {
+                    if (string.IsNullOrWhiteSpace(_selectedPaymentId))
+                    {
+                        await ShowAlertAsync(
+                            "Payment method required",
+                            "Please select the payment method (Cash, Card, etc.) before adding an amount.",
+                            PackIconKind.Cash);
+                        return;
+                    }
 
+                    // Valida chofer ligado
+                    if (!await EnsureDriverLinkedForPaymentAsync())
+                        return;
 
-                //if (decimal.TryParse(KeypadDisplay.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out var importe)
-                //    && importe > 0)
-                //{
-                //    // ⬇️ NUEVO: validar chofer antes de agregar el pago
-                //    if (!await EnsureDriverLinkedForPaymentAsync())
-                //        return;
-                //    AddPayment(_selectedPaymentId, importe);
-                //}
+                    AddPayment(_selectedPaymentId, importe);
+                }
+
                 _keypadBuffer = "";
                 RefreshKeypadDisplay();
-                RefreshSummary();
-
-                await TryAutoCompleteSaleAsync();
+                RefreshSummary();   // esto actualiza totales y el estado de DONE
             }
-            catch { }
+            catch
+            {
+                // silencioso para no romper la UI
+            }
         }
+
         private async Task<bool> EnsureDriverLinkedForPaymentAsync()
         {
             if (_driverLinked && !string.IsNullOrWhiteSpace(_currentWeightUuid))
@@ -925,16 +968,13 @@ namespace TruckScale.Pos
 
         private async Task TryAutoCompleteSaleAsync()
         {
-            if (_isCompletingSale) return;
+            if (_isCompletingSale)
+                return;
 
-            // Calculamos totales primero
             var (subtotal, tax, total) = ComputeTotals();
             var recibido = SumReceived();
 
-            // Si todavía no se ha pagado lo suficiente, no intentamos cerrar la venta
-            if (recibido < total) return;
-
-            // ⬇️ Nuevo bloque
+            // 1) Validaciones de negocio
             if (!_driverLinked)
             {
                 await ShowAlertAsync(
@@ -946,15 +986,41 @@ namespace TruckScale.Pos
 
             if (_selectedProductId <= 0)
             {
-                MessageBox.Show(
+                await ShowAlertAsync(
+                    "Service required",
                     "Please select a service before completing the sale.",
-                    "TruckScale POS",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information
-                );
+                    PackIconKind.InformationOutline);
                 return;
             }
 
+            if (_pagos.Count == 0)
+            {
+                await ShowAlertAsync(
+                    "Payment required",
+                    "Please record at least one payment before completing the sale.",
+                    PackIconKind.Cash);
+                return;
+            }
+
+            if (total <= 0m)
+            {
+                await ShowAlertAsync(
+                    "Invalid amount",
+                    "The service total must be greater than zero before completing the sale.",
+                    PackIconKind.AlertCircle);
+                return;
+            }
+
+            if (recibido < total)
+            {
+                await ShowAlertAsync(
+                    "Incomplete payment",
+                    "Received amount is less than the order total.",
+                    PackIconKind.Cash);
+                return;
+            }
+
+            // 2) Guardar venta
             _isCompletingSale = true;
             try
             {
@@ -969,14 +1035,17 @@ namespace TruckScale.Pos
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Error completing sale: " + ex.Message, "TruckScale POS",
-                                MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show("Error completing sale: " + ex.Message,
+                                "TruckScale POS",
+                                MessageBoxButton.OK,
+                                MessageBoxImage.Error);
             }
             finally
             {
                 _isCompletingSale = false;
             }
         }
+
 
 
         private void Key_Click(object sender, RoutedEventArgs e)
@@ -1001,14 +1070,37 @@ namespace TruckScale.Pos
         async private void Denom_Click(object sender, RoutedEventArgs e)
         {
             var tag = ((Button)sender).Tag?.ToString();
-            if (decimal.TryParse(tag, NumberStyles.Any, CultureInfo.InvariantCulture, out var add))
+            if (!decimal.TryParse(tag, NumberStyles.Any, CultureInfo.InvariantCulture, out var add))
+                return;
+
+            // 1) Validar método de pago
+            if (string.IsNullOrWhiteSpace(_selectedPaymentId))
             {
-                //decimal.TryParse(KeypadDisplay.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out var current);
-                //_keypadBuffer = (current + add).ToString("0.##", CultureInfo.InvariantCulture);
-                RefreshKeypadDisplay();
-                await TryAutoCompleteSaleAsync();
+                await ShowAlertAsync(
+                    "Payment method required",
+                    "Please select the payment method (Cash, Card, etc.) before adding an amount.",
+                    PackIconKind.Cash);
+                return;
             }
+
+            // 2) Validar chofer ligado a este peso
+            if (!_driverLinked)
+            {
+                await ShowAlertAsync(
+                    "Driver required",
+                    "Please register the driver for the current weight before recording payments.",
+                    PackIconKind.AccountAlertOutline);
+                return;
+            }
+
+            // 3) Agregar directamente el pago con la denominación seleccionada
+            AddPayment(_selectedPaymentId, add);
+
+            // 4) Limpiar buffer del keypad (por si en el futuro vuelves a usarlo)
+            _keypadBuffer = "";
+            RefreshKeypadDisplay();
         }
+
 
         private string PaymentName(string id) => id switch
         {
@@ -1630,13 +1722,45 @@ namespace TruckScale.Pos
                     PagosEmpty.Visibility = _pagos.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
                 //BalanceCaption.Text = diff >= 0 ? "Change" : T("Payment.BalanceKpi");
+                //actualizar el estado del botón DONE
+                UpdateDoneButtonState();
             }
             catch { }
+        }
+        private void UpdateDoneButtonState()
+        {
+            try
+            {
+                if (DoneButton == null)
+                    return;
+
+                var (subtotal, tax, total) = ComputeTotals();
+                var recibido = SumReceived();
+
+                bool hasProduct = _selectedProductId > 0;
+                bool hasPayments = _pagos.Count > 0;
+                bool isFullyPaid = total > 0m && recibido >= total;
+
+                // Reglas:
+                //  - chofer ligado
+                //  - servicio seleccionado
+                //  - al menos un pago
+                //  - total del servicio cubierto
+                DoneButton.IsEnabled = _driverLinked && hasProduct && hasPayments && isFullyPaid;
+            }
+            catch
+            {
+                // No romper la app por temas de UI
+            }
         }
 
         // ===== DB init en Window_Loaded =====
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
+            // === Config general (incluye impresora) ===
+            ConfigManager.Load();
+            _ticketPrinterName = ConfigManager.Current.TicketPrinterName; //Si nunca configuramos TicketPrinterName, se quedará vacío y usaremos la predeterminada.
+
             var dbCfg = new DatabaseConfig();
             var factory = new MySqlConnectionFactory(dbCfg);
             _logger = new WeightLogger(factory);
@@ -2451,6 +2575,13 @@ namespace TruckScale.Pos
 
         private async Task<string> SaveSaleAsync()
         {
+            // TODO OFFLINE:
+            //  - En una fase futura, envolver este método en un try/catch
+            //    y, si falla la conexión principal (GetConnectionString()),
+            //    repetir los mismos INSERTs usando GetLocalConn(),
+            //    igual que se hace en InsertDriverInfoWithFallbackAsync.
+            //  - Por ahora sólo se guarda en la BD principal.
+
             if (!_driverLinked)
                 throw new InvalidOperationException("Please register the driver before completing the sale.");
 
@@ -2461,7 +2592,7 @@ namespace TruckScale.Pos
             var (subtotal, tax, total) = ComputeTotals();
             var recibido = SumReceived();
             if (recibido < total) throw new InvalidOperationException("Received amount is less than order total.");
-
+             
             var saleUid = Guid.NewGuid().ToString();
 
             const int STATUS_SALE_COMPLETED = 2; // SALES.COMPLETED
@@ -2584,7 +2715,43 @@ namespace TruckScale.Pos
                     await up.ExecuteNonQueryAsync();
                 }
 
+                // ================== TICKET ==================
+                var ticketUid = Guid.NewGuid().ToString();
+                var ticketNumber = await GenerateTicketNumberAsync(conn, (MySqlTransaction)tx);
+
+                const string SQL_TICKET = @"INSERT INTO tickets
+                     (ticket_uid, sale_uid, ticket_status_id, ticket_number, reprint_count, printed_at)
+                     VALUES
+                     (@tuid, @suid, @st, @tnum, 0, NOW());";
+
+                await using (var tcmd = new MySqlCommand(SQL_TICKET, conn, (MySqlTransaction)tx))
+                {
+                    tcmd.Parameters.AddWithValue("@tuid", ticketUid);
+                    tcmd.Parameters.AddWithValue("@suid", saleUid);
+                    tcmd.Parameters.AddWithValue("@st", STATUS_TICKET_PRINTED);
+                    tcmd.Parameters.AddWithValue("@tnum", ticketNumber);
+                    await tcmd.ExecuteNonQueryAsync();
+                }
+
                 await tx.CommitAsync();
+
+                // Guardamos datos en memoria para impresión (TicketView)
+                _lastTicketUid = ticketUid;
+                _lastTicketNumber = ticketNumber;
+
+                // Moneda actual
+                var currency = _selectedCurrency ?? "USD";
+
+                // JSON para QR en memoria (para uso inmediato si lo necesitas)
+                _lastTicketQrJson = BuildTicketQrPayload(
+                    saleUid: saleUid,
+                    ticketUid: ticketUid,
+                    ticketNumber: ticketNumber,
+                    total: total,
+                    currency: currency,
+                    date: DateTime.Now   // aquí usamos la fecha actual
+                );
+
                 return saleUid;
             }
             catch
@@ -2633,10 +2800,108 @@ namespace TruckScale.Pos
             _saleDialogTcs?.TrySetResult(true);
         }
 
-        private Task PrintTicketAsync(string saleUid)
+        private async Task PrintTicketAsync(string saleUid)
         {
-            return Task.Delay(900);
+            try
+            {
+                // 1) Cargar datos DESDE BD (esto puede ir en cualquier hilo)
+                var data = await LoadTicketDataAsync(saleUid);
+                if (data == null)
+                {
+                    AppendLog($"[Print] No data found for sale_uid={saleUid}");
+                    return;
+                }
+
+                // 2) Todo lo que cree visuals / use impresora VA EN EL UI THREAD (STA)
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    const double inch = 96.0;
+                    double marginInch = ConfigManager.Current.TicketMarginInches > 0
+                        ? ConfigManager.Current.TicketMarginInches
+                        : 0.25;
+
+                    // Media carta horizontal
+                    double pageWidth = 8.5 * inch;
+                    double pageHeight = 5.5 * inch;
+
+                    if (!ConfigManager.Current.TicketLandscape)
+                    {
+                        // Si algún día lo quieres vertical
+                        var tmp = pageWidth;
+                        pageWidth = pageHeight;
+                        pageHeight = tmp;
+                    }
+
+                    // Crear el visual del ticket
+                    var ticketView = new Tickets.TicketView
+                    {
+                        DataContext = data,
+                        Width = pageWidth,
+                        Height = pageHeight
+                    };
+
+                    ticketView.Measure(new Size(pageWidth, pageHeight));
+                    ticketView.Arrange(new Rect(new Size(pageWidth, pageHeight)));
+                    ticketView.UpdateLayout();
+
+                    // --- Selección de impresora -------------------------------
+                    var server = new LocalPrintServer();
+                    PrintQueue? queue = null;
+
+                    // 1) Intentamos usar la impresora configurada en config.json
+                    var configuredName = ConfigManager.Current.TicketPrinterName;
+                    if (!string.IsNullOrWhiteSpace(configuredName))
+                    {
+                        try
+                        {
+                            queue = new PrintQueue(server, configuredName);
+                            AppendLog($"[Print] Using configured printer '{configuredName}'.");
+                        }
+                        catch (Exception ex)
+                        {
+                            AppendLog($"[Print] Could not use configured printer '{configuredName}': {ex.Message}");
+                        }
+                    }
+
+                    // 2) Si no hay configurada o falló, en DESARROLLO intentamos Microsoft Print to PDF
+                    if (queue == null)
+                    {
+                        const string devPrinter = "Microsoft Print to PDF";
+                        try
+                        {
+                            queue = new PrintQueue(server, devPrinter);
+                            AppendLog($"[Print] Using DEV printer '{devPrinter}'.");
+                        }
+                        catch (Exception ex)
+                        {
+                            AppendLog($"[Print] Could not use '{devPrinter}': {ex.Message}");
+                        }
+                    }
+
+                    // 3) Último recurso: impresora predeterminada del sistema
+                    if (queue == null)
+                    {
+                        queue = LocalPrintServer.GetDefaultPrintQueue();
+                        AppendLog($"[Print] Using system default printer '{queue.FullName}'.");
+                    }
+
+                    // En este punto `queue` ya NO debe ser null
+                    var writer = PrintQueue.CreateXpsDocumentWriter(queue);
+                    writer.Write(ticketView);
+
+                    AppendLog($"[Print] Ticket sent to printer '{queue.FullName}' for sale_uid={saleUid}");
+                });
+            }
+            catch (Exception ex)
+            {
+                AppendLog("[Print] ERROR: " + ex);
+                MessageBox.Show("Error al imprimir el ticket:\n" + ex.Message,
+                                "Print error",
+                                MessageBoxButton.OK,
+                                MessageBoxImage.Error);
+            }
         }
+
 
         private Task ReprintTicketAsync(string saleUid)
         {
@@ -2651,14 +2916,14 @@ namespace TruckScale.Pos
 
             _drvDialogTcs = new TaskCompletionSource<bool>();
             DlgDrvOkBtn.Click += CloseDrvDlg_Click;
-
-            DriverSavedHost.IsOpen = true;
+            //UG es un modal que se mostraba como confirmacion
+            //DriverSavedHost.IsOpen = true;
             await _drvDialogTcs.Task;
         }
 
         private void CloseDrvDlg_Click(object? sender, RoutedEventArgs e)
         {
-            DriverSavedHost.IsOpen = false;
+            //DriverSavedHost.IsOpen = false;
             DlgDrvOkBtn.Click -= CloseDrvDlg_Click;
             _drvDialogTcs?.TrySetResult(true);
         }
@@ -3143,14 +3408,191 @@ namespace TruckScale.Pos
             //ProductoRegText.SelectedIndex = -1;
         }
 
-        private void DoneButton_Click(object sender, RoutedEventArgs e)
+        private async void DoneButton_Click(object sender, RoutedEventArgs e)
         {
-            // TODO: aquí vamos a cerrar/finalizar la transacción
-          
+            await TryAutoCompleteSaleAsync();
+        }
+      
+
+    private async Task<TicketData?> LoadTicketDataAsync(string saleUid)
+    {
+        const string SQL = @"SELECT
+            s.sale_uid,
+            s.total,
+            s.currency,
+            COALESCE(s.occurred_at, s.created_at) AS sale_date,
+            sl.description AS product_description,
+            p.code AS product_code,
+
+            sdi.driver_first_name,
+            sdi.driver_last_name,
+            sdi.license_number,
+            sdi.vehicle_plates,
+            sdi.tractor_number,
+            sdi.trailer_number,
+
+            ax.eje1,
+            ax.eje2,
+            ax.eje3,
+            ax.peso_total,
+
+            t.ticket_number,
+            t.ticket_uid
+        FROM sales s
+        JOIN sale_lines sl
+            ON sl.sale_uid = s.sale_uid AND sl.seq = 1
+        LEFT JOIN products p
+            ON p.product_id = sl.product_id
+        LEFT JOIN sale_driver_info sdi
+            ON sdi.sale_uid = s.sale_uid
+        LEFT JOIN scale_session_axles ax
+            ON ax.uuid_weight = sdi.match_key
+           AND sdi.identify_by = 'weight_uuid'
+        LEFT JOIN tickets t
+            ON t.sale_uid = s.sale_uid
+        WHERE s.sale_uid = @uid
+        ORDER BY t.ticket_id DESC
+        LIMIT 1;";
+
+        await using var conn = new MySqlConnector.MySqlConnection(GetConnectionString());
+        await conn.OpenAsync();
+
+        await using var cmd = new MySqlConnector.MySqlCommand(SQL, conn);
+        cmd.Parameters.AddWithValue("@uid", saleUid);
+
+        await using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync())
+            return null;
+
+        var data = new TicketData();
+
+        // Transaction / ticket
+        data.Transaction = saleUid;
+
+        var rawTicketNumber = SafeGetString(rd, "ticket_number");
+        data.TicketNumber = string.IsNullOrWhiteSpace(rawTicketNumber)
+            ? saleUid
+            : rawTicketNumber;
+
+        // Fecha segura
+        var rawDate = rd.IsDBNull("sale_date")
+            ? DateTime.MinValue
+            : rd.GetDateTime("sale_date");
+
+        if (rawDate.Year < 2000) // por si vino 0000-00-00 o algo raro
+            rawDate = DateTime.Now;
+
+        data.Date = rawDate;
+
+        // Producto / fee
+        data.Product = SafeGetString(rd, "product_description");
+        data.WeighFee = rd.IsDBNull("total") ? 0m : rd.GetDecimal("total");
+
+        // Driver
+        var first = SafeGetString(rd, "driver_first_name");
+        var last = SafeGetString(rd, "driver_last_name");
+        data.DriverName = $"{first} {last}".Trim();
+
+        data.DriverLicense = SafeGetString(rd, "license_number");
+        data.Plates = SafeGetString(rd, "vehicle_plates");
+        data.TractorNumber = SafeGetString(rd, "tractor_number");
+        data.TrailerNumber = SafeGetString(rd, "trailer_number");
+
+        // Pesos
+        data.Scale1 = rd.IsDBNull("eje1") ? 0 : rd.GetDouble("eje1");
+        data.Scale2 = rd.IsDBNull("eje2") ? 0 : rd.GetDouble("eje2");
+        data.Scale3 = rd.IsDBNull("eje3") ? 0 : rd.GetDouble("eje3");
+        data.TotalGross = rd.IsDBNull("peso_total") ? 0 : rd.GetDouble("peso_total");
+
+        var prodCode = SafeGetString(rd, "product_code");
+        data.IsReweigh = string.Equals(prodCode, "REWEIGH",
+            StringComparison.OrdinalIgnoreCase);
+
+        var currency = SafeGetString(rd, "currency");
+        if (string.IsNullOrWhiteSpace(currency))
+            currency = "USD";
+
+        string? ticketUid = null;
+        {
+            int ordTicketUid = rd.GetOrdinal("ticket_uid");
+            if (!rd.IsDBNull(ordTicketUid))
+            {
+                object value = rd.GetValue(ordTicketUid);
+                ticketUid = value?.ToString();
+            }
+        }
+
+            // Guardamos el ticketUid también en el modelo
+            data.TicketUid = ticketUid ?? "";
+
+        // JSON para el QR (aquí usamos el helper nuevo)
+        data.QrPayload = BuildTicketQrPayload(
+            saleUid: saleUid,
+            ticketUid: ticketUid,
+            ticketNumber: data.TicketNumber,
+            total: data.WeighFee,
+            currency: currency,
+            date: data.Date
+        );
+
+            // Weigher = operador actual
+            var opName = string.IsNullOrWhiteSpace(PosSession.FullName)
+            ? PosSession.Username
+            : PosSession.FullName;
+        data.Weigher = opName;
+
+        return data;
         }
 
 
+        private async Task<string> GenerateTicketNumberAsync(MySqlConnection conn, MySqlTransaction tx)
+        {
+            // TODO: reemplazar por llamada a sp_next_sequence('TICKETS.NUMBER')
+            // cuando tengas listo el SP.
+            await Task.CompletedTask; // para que no se queje el compilador al ser async
+            return "TS-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+        }
 
+
+        private static string BuildTicketQrPayload(
+            string saleUid,
+            string? ticketUid,
+            string ticketNumber,
+            decimal total,
+            string currency,
+            DateTime date)
+        {
+            var payload = new QrPayload
+            {
+                Version = 1,
+                TicketUid = string.IsNullOrWhiteSpace(ticketUid) ? saleUid : ticketUid,
+                SaleUid = saleUid,
+                TicketNumber = ticketNumber,
+                Total = total,
+                Currency = currency,
+                DateTimeIso = date.ToString("yyyy-MM-ddTHH:mm:ss")
+            };
+
+            var options = new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = false
+            };
+
+            return JsonSerializer.Serialize(payload, options);
+        }
+
+        private static string SafeGetString(IDataRecord r, string column)
+        {
+            int ordinal = r.GetOrdinal(column);
+            if (r.IsDBNull(ordinal))
+                return "";
+
+            object value = r.GetValue(ordinal);
+
+            // Si viene Guid, int, lo que sea, lo convertimos a string seguro
+            return value?.ToString() ?? "";
+        }
 
     }
 }

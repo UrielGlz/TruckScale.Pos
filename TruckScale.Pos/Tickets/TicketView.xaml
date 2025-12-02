@@ -1,0 +1,271 @@
+﻿<UserControl x:Class="TruckScale.Pos.Tickets.TicketView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:tickets="clr-namespace:TruckScale.Pos.Tickets"
+             Width="816"
+             Height="528"
+             Background="White">
+    <UserControl.Resources>
+        <tickets:QrCodeConverter x:Key="QrCodeConverter" />
+    </UserControl.Resources>
+
+
+    <Border Margin="12"
+            BorderBrush="Black"
+            BorderThickness="1"
+            Padding="16">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="3*"/>
+                <ColumnDefinition Width="2*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- HEADER IZQUIERDA: logo + empresa -->
+            <StackPanel Orientation="Horizontal" Grid.Row="0" Grid.Column="0">
+                <!-- Ajusta la ruta al logo real del proyecto -->
+                <Image Source="/Resources/logo.jpeg"
+                       Width="120" Height="70"
+                       Stretch="Uniform"
+                       Margin="0,0,10,0"/>
+                <StackPanel>
+                    <TextBlock Text="{Binding CompanyName}"
+                               FontWeight="Bold" FontSize="14"/>
+                    <TextBlock Text="{Binding CompanyAddress}"
+                               FontSize="11"/>
+                    <TextBlock Text="{Binding CompanyPhone}"
+                               FontSize="11"/>
+                    <TextBlock Text="{Binding CertificateNumber}"
+                               FontSize="11"/>
+                    <TextBlock Text="{Binding WebSite}" FontSize="11"  Margin="0,2,0,0"/>
+
+                </StackPanel>
+            </StackPanel>
+
+            <!-- HEADER DERECHA: número de ticket -->
+            <StackPanel Grid.Row="0" Grid.Column="1"
+                        HorizontalAlignment="Right">
+                <TextBlock Text="TICKET"
+                           FontWeight="Bold"
+                           HorizontalAlignment="Right"/>
+                <TextBlock Text="{Binding TicketNumber}"
+                           FontSize="20"
+                           FontWeight="Bold"
+                           HorizontalAlignment="Right"/>
+            </StackPanel>
+
+            <!-- FILA: datos chofer / tractor -->
+            <Grid Grid.Row="1" Grid.ColumnSpan="2" Margin="0,10,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="{Binding DriverName}"
+                               FontWeight="Bold"/>
+                    <TextBlock Text="Driver License:" FontWeight="Bold" FontSize="11"/>
+                    <TextBlock Text="{Binding DriverLicense}" FontSize="11" Margin="0,0,0,4"/>
+                    <TextBlock Text="Plates:" FontWeight="Bold" FontSize="11"/>
+                    <TextBlock Text="{Binding Plates}" FontSize="11"/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="Tractor#:" FontWeight="Bold" FontSize="11"/>
+                    <TextBlock Text="{Binding TractorNumber}" FontSize="11" Margin="0,0,0,4"/>
+                    <TextBlock Text="Trailer#:" FontWeight="Bold" FontSize="11"/>
+                    <TextBlock Text="{Binding TrailerNumber}" FontSize="11"/>
+                </StackPanel>
+            </Grid>
+
+            
+            <!-- FILA: Transaction / Date / Weigher -->
+            <Grid Grid.Row="2" Grid.ColumnSpan="2" Margin="0,10,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="2*"/>
+                    <ColumnDefinition Width="2*"/>
+                    <ColumnDefinition Width="2*"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="Transaction" FontWeight="Bold" FontSize="11"/>
+                    <Border BorderBrush="Black" BorderThickness="1" Padding="4,2">
+                        <TextBlock Text="{Binding Transaction}" FontSize="11"/>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="Date" FontWeight="Bold" FontSize="11"/>
+                    <Border BorderBrush="Black" BorderThickness="1" Padding="4,2">
+                        <!-- AQUÍ: 12 -> 11 -->
+                        <TextBlock Text="{Binding Date, StringFormat='{}{0:MM/dd/yyyy}'}" FontSize="11"/>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel Grid.Column="2">
+                    <TextBlock Text="Weigher" FontWeight="Bold" FontSize="11"/>
+                    <Border BorderBrush="Black" BorderThickness="1" Padding="4,2">
+                        <TextBlock Text="{Binding Weigher}" FontSize="11"/>
+                    </Border>
+                </StackPanel>
+            </Grid>
+
+            <!-- BLOQUE PRINCIPAL: producto / fee / pesadas / QR / reweigh -->
+            <Grid Grid.Row="3" Grid.ColumnSpan="2" Margin="0,10,0,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="3*"/>
+                    <ColumnDefinition Width="2*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Producto -->
+                <StackPanel Grid.Row="0" Grid.Column="0">
+                    <TextBlock Text="Product" FontWeight="Bold" FontSize="11"/>
+                    <Border BorderBrush="Black" BorderThickness="1" Padding="4,2">
+                        <TextBlock Text="{Binding Product}" FontSize="11"/>
+                    </Border>
+                </StackPanel>
+
+                <!-- Weigh fee -->
+                <StackPanel Grid.Row="0" Grid.Column="1" HorizontalAlignment="Right">
+                    <TextBlock Text="Weigh Fee" FontWeight="Bold" FontSize="11"/>
+                    <Border BorderBrush="Black" BorderThickness="1" Padding="4,2">
+                        <TextBlock Text="{Binding WeighFee, StringFormat=C}" FontSize="11"/>
+                    </Border>
+                </StackPanel>
+
+                <!-- Columna derecha: Pesadas + Reweigh Form -->
+                <Grid Grid.Row="1" Grid.Column="1" Margin="0,10,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <!-- tabla de pesadas -->
+                        <RowDefinition Height="Auto"/>
+                        <!-- reweigh form -->
+                    </Grid.RowDefinitions>
+
+                    <!-- Tabla de pesadas -->
+                    <Grid Grid.Row="0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="2*"/>
+                            <ColumnDefinition Width="3*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="SCALE 1:" FontWeight="Bold" FontSize="11"/>
+                        <Border Grid.Row="0" Grid.Column="1" BorderBrush="Black" BorderThickness="1" Padding="4,2">
+                            <TextBlock Text="{Binding Scale1, StringFormat=0}" FontSize="11"/>
+                        </Border>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="SCALE 2:" FontWeight="Bold" FontSize="11"/>
+                        <Border Grid.Row="1" Grid.Column="1" BorderBrush="Black" BorderThickness="1" Padding="4,2">
+                            <TextBlock Text="{Binding Scale2, StringFormat=0}" FontSize="11"/>
+                        </Border>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="SCALE 3:" FontWeight="Bold" FontSize="11"/>
+                        <Border Grid.Row="2" Grid.Column="1" BorderBrush="Black" BorderThickness="1" Padding="4,2">
+                            <TextBlock Text="{Binding Scale3, StringFormat=0}" FontSize="11"/>
+                        </Border>
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Total Gross:" FontWeight="Bold" FontSize="11"/>
+                        <Border Grid.Row="3" Grid.Column="1" BorderBrush="Black" BorderThickness="1" Padding="4,2">
+                            <TextBlock Text="{Binding TotalGross, StringFormat=0}" FontSize="11"/>
+                        </Border>
+                    </Grid>
+
+                    <!-- Reweigh form: solo se usa cuando es reweigh -->
+                    <Border x:Name="ReweighPanel"
+                        Grid.Row="1"
+                        Margin="0,10,0,0"
+                        BorderBrush="Black"
+                        BorderThickness="1">
+                        <StackPanel Margin="6">
+                            <TextBlock Text="Reweigh Form"
+                       FontWeight="Bold"
+                       FontSize="11"
+                       Margin="0,0,0,2"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                <TextBlock Text="Date and Time:" Width="90" FontSize="11"/>
+                                <!-- Solo muestra fecha/hora cuando IsReweigh = true -->
+                                <TextBlock Text="{Binding ReweighDateTimeText}" FontSize="11"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                <TextBlock Text="Initials:" Width="80" FontSize="10"/>
+                                <TextBlock Text="____________________" FontSize="10"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
+
+                <!-- Columna izquierda: QR + Signature + Warning + Time como "footer" -->
+                <StackPanel Grid.Row="1"
+                Grid.Column="0"
+                HorizontalAlignment="Left"
+                Margin="0,10,0,0">
+
+                    <!-- QR -->
+                    <Border Width="120"
+                        Height="120"
+                        BorderBrush="Black"
+                        BorderThickness="1">
+                        <Image Source="{Binding QrPayload, Converter={StaticResource QrCodeConverter}}" Stretch="Uniform" />
+                    </Border>
+
+                    <!-- Signature / Aviso / Time debajo del QR -->
+                    <StackPanel Margin="0,10,0,0">
+
+                        <!-- Signature + línea para firmar -->
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0"
+                       Text="Signature:"
+                       VerticalAlignment="Center"
+                       Margin="0,0,5,0"/>
+
+                            <!-- Línea de firma -->
+                            <TextBlock Grid.Column="1"
+                       Text="___________________________"
+                       VerticalAlignment="Center"/>
+                        </Grid>
+
+                        <!-- Frase ALL RE-WEIGHS... (en negritas, mayúsculas) -->
+                        <TextBlock Text="{Binding ReweighWarning}"
+                   FontSize="9"
+                   FontWeight="Bold"
+                   Margin="0,4,0,0"/>
+
+                        <!-- Time debajo del aviso -->
+                        <StackPanel Orientation="Horizontal"
+                    Margin="0,4,0,0">
+                            <TextBlock Text="Time:"
+                       VerticalAlignment="Center"
+                       Margin="0,0,5,0"/>
+                            <TextBlock VerticalAlignment="Center"
+                       Text="{Binding Date, StringFormat='{}{0:h:mm tt}'}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    
+    
+    </Border>
+</UserControl>
