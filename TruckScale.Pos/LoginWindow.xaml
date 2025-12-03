@@ -30,21 +30,12 @@
                         VerticalAlignment="Center"
                         Margin="0 0 24 0">
 
-                <!-- LOGO (placeholder cuadrado) -->
-                <Border Width="150"
-                        Height="150"
-                        CornerRadius="4"
-                        BorderBrush="{DynamicResource MaterialDesignDivider}"
-                        BorderThickness="1"
-                        Margin="0 0 0 24"
-                        Background="White">
-                    <TextBlock Text="LOGO"
-                               FontSize="18"
-                               FontWeight="SemiBold"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Center"
-                               Foreground="{DynamicResource MaterialDesignBodySecondary}" />
+                <!-- LOGO -->
+                <Border Width="150" Height="150" CornerRadius="12" Margin="0 0 0 24" Background="#E0E0E0" Padding="12">
+                                <Image Source="Resources/logo.jpeg" Stretch="Uniform" SnapsToDevicePixels="True" />
                 </Border>
+
+
 
                 <!-- Título principal -->
                 <TextBlock Text="TruckScale POS"

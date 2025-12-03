@@ -134,7 +134,7 @@ namespace TruckScale.Pos
 
         // Para activar los botones de servicio
         private bool _driverLinked = false;
-
+        private bool _hasAcceptedWeight;  
         // ==== Estado WAIT/OK y snapshot de peso estable ====
         private bool _canAccept = false;          // true cuando hay snapshot estable listo para guardar
         private double _snapAx1, _snapAx2, _snapAx3, _snapTotal;
@@ -171,6 +171,7 @@ namespace TruckScale.Pos
 
         //status_catalogo para TICKETS.PRINTED
         private const int STATUS_TICKET_PRINTED = 9;
+        private TaskCompletionSource<string?>? _reweighTicketTcs;
 
 
 
@@ -746,6 +747,8 @@ namespace TruckScale.Pos
         {
             // 1) Estado de chofer y toggles
             _driverLinked = false;
+            _hasAcceptedWeight = false;
+
             // Bloquea el formulario para el siguiente camión
             _formUnlocked = false;
 
@@ -1354,26 +1357,7 @@ namespace TruckScale.Pos
                         "Enter at least Plates or License number.",
                         PackIconKind.AlertOutline);
                     return;
-                }
-
-                //long driverId = await InsertDriverInfoWithFallbackAsync(
-                //    saleUid: null,
-                //    accountNumber: accountNumber,
-                //    accountName: accountName,
-                //    accountAddress: accountAddress,
-                //    accountCountry: accountCountry,
-                //    accountState: accountState,
-                //    firstName: first,
-                //    lastName: last,
-                //    licenseNo: licNo,
-                //    licenseState: licenseState,
-                //    plates: plates,
-                //    trailerNumber: trailerNumber,
-                //    tractorNumber: tractorNumber,
-                //    productDescription: productText,
-                //    identifyBy: "weight_uuid",
-                //    matchKey: uuid
-                //);
+                }         
 
                 long driverId = await InsertDriverInfoWithFallbackAsync(
                     saleUid: null,
@@ -1962,9 +1946,39 @@ namespace TruckScale.Pos
 
         private void ReweighToggle_Checked(object sender, RoutedEventArgs e)
         {
-            if (WeighToggle.IsChecked == true) WeighToggle.IsChecked = false;
-            ApplySelected("REWEIGH");
+            // 1) Validar que ya se aceptó un peso con OK
+            if (!_hasAcceptedWeight)
+            {
+                MessageBox.Show(
+                    "Primero capture un peso con el botón OK antes de usar REWEIGH.",
+                    "Reweigh",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+
+                ReweighToggle.IsChecked = false;
+                return;
+            }
+
+            // 2) Asegurar que no quede activo WEIGH
+            if (WeighToggle.IsChecked == true)
+                WeighToggle.IsChecked = false;
+
+            // 3) Abrir el modal bonito y enfocar el textbox
+            ReweighTicketInputTextBox.Text = string.Empty;
+
+            try
+            {
+                ReweighHost.IsOpen = true;
+            }
+            catch { }
+
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                ReweighTicketInputTextBox.Focus();
+                ReweighTicketInputTextBox.SelectAll();
+            }), System.Windows.Threading.DispatcherPriority.ContextIdle);
         }
+
 
         private async Task<string?> TryGetLastWeightUuidAsync(string connStr)
         {
@@ -2117,22 +2131,99 @@ namespace TruckScale.Pos
 
         public async Task<int> LinkDriverToSaleAsync(MySqlConnection conn, MySqlTransaction tx, string weightUuid, string saleUid)
         {
-            const string SQL = @"UPDATE sale_driver_info 
-                                 SET sale_uid = @sale 
-                                 WHERE identify_by = 'weight_uuid' AND match_key = @uuid;";
+            // 1) Flujo normal: intentar enlazar driver capturado por weight_uuid
+            const string SQL_UPDATE = @"
+            UPDATE sale_driver_info 
+               SET sale_uid = @sale 
+             WHERE identify_by = 'weight_uuid' 
+               AND match_key   = @uuid;";
+
+            // 2) Fallback REWEIGH: clonar el chofer de la venta original (_reweighSourceSaleUid)
+            const string SQL_CLONE_FROM_SOURCE = @"
+            INSERT INTO sale_driver_info (
+                sale_uid,
+                account_number,
+                account_name,
+                account_address,
+                account_country,
+                account_state,
+                driver_product_id,
+                driver_first_name,
+                driver_last_name,
+                driver_phone,
+                license_number,
+                license_state,
+                vehicle_plates,
+                trailer_number,
+                tractor_number,
+                identify_by,
+                match_key
+            )
+            SELECT
+                @new_sale_uid,
+                account_number,
+                account_name,
+                account_address,
+                account_country,
+                account_state,
+                driver_product_id,
+                driver_first_name,
+                driver_last_name,
+                driver_phone,
+                license_number,
+                license_state,
+                vehicle_plates,
+                trailer_number,
+                tractor_number,
+                'weight_uuid',
+                @weight_uuid
+            FROM sale_driver_info
+            WHERE sale_uid = @source_sale_uid
+            ORDER BY id_driver_info DESC
+            LIMIT 1;";
 
             try
             {
-                await using var cmd = new MySqlCommand(SQL, conn, tx);
-                cmd.CommandTimeout = 10;
-                cmd.Parameters.AddWithValue("@sale", saleUid);
-                cmd.Parameters.AddWithValue("@uuid", weightUuid);
+                int rows;
+                // --- Intento normal: driver capturado en esta pesada ---
+                await using (var cmd = new MySqlCommand(SQL_UPDATE, conn, tx))
+                {
+                    cmd.CommandTimeout = 10;
+                    cmd.Parameters.AddWithValue("@sale", saleUid);
+                    cmd.Parameters.AddWithValue("@uuid", weightUuid);
+                    rows = await cmd.ExecuteNonQueryAsync();
+                }
 
-                var rows = await cmd.ExecuteNonQueryAsync();
-                if (rows == 0)
-                    throw new InvalidOperationException(
-                        $"No rows updated for weight_uuid='{weightUuid}'. ¿Existe el registro previo?");
-                return rows;
+                if (rows > 0)
+                {
+                    AppendLog($"[Driver] LinkDriverToSaleAsync OK. rows={rows}, uuid='{weightUuid}', sale_uid='{saleUid}'");
+                    return rows;
+                }
+
+                // --- Fallback: si tenemos venta origen, estamos en REWEIGH →
+                //     clonar chofer de la venta original a la nueva venta ---
+                if (!string.IsNullOrEmpty(_reweighSourceSaleUid))
+                {
+                    AppendLog($"[Driver] No row for weight_uuid={weightUuid}. REWEIGH: cloning driver from sale_uid={_reweighSourceSaleUid} → {saleUid}…");
+
+                    await using var cmdClone = new MySqlCommand(SQL_CLONE_FROM_SOURCE, conn, tx);
+                    cmdClone.CommandTimeout = 10;
+                    cmdClone.Parameters.AddWithValue("@new_sale_uid", saleUid);
+                    cmdClone.Parameters.AddWithValue("@weight_uuid", weightUuid);
+                    cmdClone.Parameters.AddWithValue("@source_sale_uid", _reweighSourceSaleUid);
+
+                    var inserted = await cmdClone.ExecuteNonQueryAsync();
+                    if (inserted == 0)
+                        throw new InvalidOperationException(
+                            $"REWEIGH clone failed. No driver row found for source sale_uid='{_reweighSourceSaleUid}'.");
+
+                    AppendLog($"[Driver] REWEIGH clone OK. inserted={inserted}, new sale_uid='{saleUid}', src='{_reweighSourceSaleUid}'");
+                    return inserted;
+                }
+
+                // --- Ni encontró por weight_uuid ni hay venta origen: error real ---
+                throw new InvalidOperationException(
+                    $"No rows updated for weight_uuid='{weightUuid}'. ¿Existe el registro previo en sale_driver_info?");
             }
             catch (Exception ex)
             {
@@ -2141,6 +2232,7 @@ namespace TruckScale.Pos
                 throw new Exception(msg, ex);
             }
         }
+
         /*
              
                 COALESCE(
@@ -2169,7 +2261,7 @@ namespace TruckScale.Pos
                 sdi.tractor_number
             FROM sale_driver_info sdi
             LEFT JOIN driver_products dp
-                ON dp.product_id = sdi.driver_product_id   -- <-- ajusta el nombre si tu PK se llama distinto
+                ON dp.product_id = sdi.driver_product_id
             WHERE sdi.identify_by = 'weight_uuid'
                 AND sdi.match_key   = @uuid
             ORDER BY sdi.id_driver_info DESC
@@ -2532,8 +2624,11 @@ namespace TruckScale.Pos
             bool hasWeigh = _products.ContainsKey("WEIGH");
             bool hasReweigh = _products.ContainsKey("REWEIGH");
 
+            // WEIGH: requiere chofer
             WeighToggle.IsEnabled = _driverLinked && hasWeigh;
-            ReweighToggle.IsEnabled = _driverLinked && hasReweigh;
+
+            // REWEIGH: siempre habilitado si existe el producto
+            ReweighToggle.IsEnabled = hasReweigh;
 
             if (!WeighToggle.IsEnabled) WeighToggle.IsChecked = false;
             if (!ReweighToggle.IsEnabled) ReweighToggle.IsChecked = false;
@@ -2571,7 +2666,11 @@ namespace TruckScale.Pos
             var obj = await cmd.ExecuteScalarAsync();
             return (obj == null || obj == DBNull.Value) ? 1 : Convert.ToInt32(obj);
         }
-
+        const int STATUS_SALE_OPEN = 1;
+        const int STATUS_SALE_COMPLETED = 2; // SALES.COMPLETED
+        const int STATUS_SALE_CANCELLED = 3;
+        const int STATUS_PAY_RECEIVED = 6;   // PAYMENTS.RECEIVED
+        const int STATUS_SALE_REFUNDED = 4;
 
         private async Task<string> SaveSaleAsync()
         {
@@ -2590,14 +2689,12 @@ namespace TruckScale.Pos
 
 
             var (subtotal, tax, total) = ComputeTotals();
-            var recibido = SumReceived();
+            var recibido = SumReceived();   
             if (recibido < total) throw new InvalidOperationException("Received amount is less than order total.");
              
             var saleUid = Guid.NewGuid().ToString();
 
-            const int STATUS_SALE_COMPLETED = 2; // SALES.COMPLETED
-            const int STATUS_PAY_RECEIVED = 6;   // PAYMENTS.RECEIVED
-
+           
             await using var conn = new MySqlConnection(GetConnectionString());
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
@@ -2609,9 +2706,11 @@ namespace TruckScale.Pos
                 int operatorId = GetCurrentOperatorId();
 
                 const string SQL_SALE = @"INSERT INTO sales
-                         (sale_uid, site_id, terminal_id, operator_id, sale_status_id, currency, subtotal, tax_total, total, created_at)
-                         VALUES
-                         (@uid, @site, @term, @op, @st, @ccy, @sub, @tax, @tot, NOW());";
+                 (sale_uid, site_id, terminal_id, operator_id, sale_status_id, currency,
+                  subtotal, tax_total, total, reweigh_of_sale_id, created_at)
+                 VALUES
+                 (@uid, @site, @term, @op, @st, @ccy,
+                  @sub, @tax, @tot, @reweigh_of_sale_id, NOW());";
 
                 await using (var cmd = new MySqlCommand(SQL_SALE, conn, (MySqlTransaction)tx))
                 {
@@ -2624,6 +2723,12 @@ namespace TruckScale.Pos
                     cmd.Parameters.AddWithValue("@sub", subtotal);
                     cmd.Parameters.AddWithValue("@tax", tax);
                     cmd.Parameters.AddWithValue("@tot", total);
+                    cmd.Parameters.AddWithValue("@reweigh_of_sale_id",
+                        (_selectedProductCode != null &&
+                         string.Equals(_selectedProductCode, "REWEIGH", StringComparison.OrdinalIgnoreCase) &&
+                         _reweighSourceSaleId.HasValue)
+                            ? _reweighSourceSaleId.Value
+                            : (object)DBNull.Value);
                     await cmd.ExecuteNonQueryAsync();
                 }
 
@@ -2987,6 +3092,11 @@ namespace TruckScale.Pos
                 var id = await saveScaleData(ax1, ax2, ax3, total, raw, uuid);
                 AppendLog($"[DB] Insertado id={id} (uuid={uuid})");
 
+                // New [ A partir de aquí ya hay un peso aceptado
+                _hasAcceptedWeight = true;
+
+
+                UpdateProductButtonsEnabled();
                 // Reglas para siguiente camión
                 _lastPersistedTotal = total;
                 _canAccept = false;
@@ -3164,10 +3274,10 @@ namespace TruckScale.Pos
                 await conn.OpenAsync();
 
                 const string SQL = @"
-            SELECT id_state, country_code, state_code, state_name
-            FROM license_states
-            WHERE is_active = 1
-            ORDER BY country_code, state_name;";
+                SELECT id_state, country_code, state_code, state_name
+                FROM license_states
+                WHERE is_active = 1
+                ORDER BY country_code, state_name;";
 
                 using var cmd = new MySqlCommand(SQL, conn);
                 using var rd = await cmd.ExecuteReaderAsync();
@@ -3593,6 +3703,430 @@ namespace TruckScale.Pos
             // Si viene Guid, int, lo que sea, lo convertimos a string seguro
             return value?.ToString() ?? "";
         }
+        // ===== Reweigh settings (por ahora fijos; luego se TENEMOS q leer de settings) =====
+        private const int REWEIGH_WINDOW_MINUTES = 120; //TODO T_AGIN en minutos (necesitamos apuntar al campo de la tabla)
+        private const int REWEIGH_MAX_TIMES = 1;   // solo un REWEIGH por venta original
+        private sealed class ReweighCandidate
+        {
+            public int SaleId { get; init; }
+            public string SaleUid { get; init; } = "";
+            public int SaleStatusId { get; init; }
+            public int TicketId { get; init; }
+            public string TicketUid { get; init; } = "";
+            public string TicketNumber { get; init; } = "";
+            public int TicketStatusId { get; init; }
+            public string ProductCode { get; init; } = "";
+            public DateTime OccurredAt { get; init; }
+            public int ReweighCount { get; init; }
+        }
+
+        // Estado actual del REWEIGH en curso
+        private int? _reweighSourceSaleId;
+        private string? _reweighSourceSaleUid;
+        private string? _reweighSourceTicketNumber;
+
+        /// <summary>
+        /// Parsea el texto que viene del QR / captura manual y devuelve
+        /// posibles claves: ticketUid, saleUid, ticketNumber.
+        /// Soporta JSON (payload del QR) y texto plano (ticket_number).
+        /// </summary>
+        private static (string? ticketUid, string? saleUid, string? ticketNumber) ParseTicketKey(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return (null, null, null);
+
+            raw = raw.Trim();
+
+            // 1) Intentar JSON (payload del QR)
+            if (raw.StartsWith("{") && raw.EndsWith("}"))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(raw);
+                    var root = doc.RootElement;
+
+                    string? GetProp(params string[] names)
+                    {
+                        foreach (var n in names)
+                        {
+                            if (root.TryGetProperty(n, out var p) &&
+                                p.ValueKind == JsonValueKind.String)
+                            {
+                                return p.GetString();
+                            }
+                        }
+                        return null;
+                    }
+
+                    var ticketUid = GetProp("ticketUid", "ticket_uid");
+                    var saleUid = GetProp("saleUid", "sale_uid");
+                    var ticketNumber = GetProp("ticketNumber", "ticket_number", "ticket");
+
+                    // OJO: aquí NO usamos ningún "dt" del QR; la fecha la leemos siempre de BD.
+                    return (ticketUid, saleUid, ticketNumber);
+                }
+                catch
+                {
+                    // Si el JSON viene roto, caemos a la lógica de texto plano
+                }
+            }
+
+            // 2) Texto plano: normalmente será el ticket_number (ej. TS-20251101010101)
+            string? tNum = raw;
+
+            // Si parece GUID, lo usamos también como posible uid
+            string? guidLike = null;
+            if (Guid.TryParse(raw, out _))
+                guidLike = raw;
+
+            return (guidLike, guidLike, tNum);
+        }
+
+        /// <summary>
+        /// Busca el ticket/venta original que se quiere usar para REWEIGH.
+        /// Usa cualquiera de: ticket_uid, sale_uid o ticket_number.
+        /// </summary>
+        private async Task<ReweighCandidate?> GetReweighCandidateAsync(string rawKey)
+        {
+            var (ticketUid, saleUid, ticketNumber) = ParseTicketKey(rawKey);
+            if (ticketUid == null && saleUid == null && ticketNumber == null)
+                return null;
+
+            const string SQL = @"
+                SELECT
+                    s.sale_id,
+                    s.sale_uid,
+                    s.sale_status_id,
+                    s.reweigh_of_sale_id,
+                    -- Versión actual: usamos la fecha/hora de la venta como base de T_AGIN
+                    COALESCE(s.occurred_at, s.created_at) AS occurred_at,
+                    t.ticket_id,
+                    t.ticket_uid,
+                    t.ticket_number,
+                    t.ticket_status_id,
+                    p.code AS product_code,
+                    (
+                        SELECT COUNT(*)
+                        FROM sales r
+                        WHERE r.reweigh_of_sale_id = s.sale_id
+                          AND r.sale_status_id NOT IN (3,4) -- no CANCELLED / REFUNDED
+                    ) AS reweigh_count
+                FROM tickets t
+                JOIN sales s
+                    ON s.sale_uid = t.sale_uid
+                JOIN sale_lines sl
+                    ON sl.sale_uid = s.sale_uid AND sl.seq = 1
+                LEFT JOIN products p
+                    ON p.product_id = sl.product_id
+                WHERE
+                      (@ticket_uid IS NOT NULL AND t.ticket_uid    = @ticket_uid)
+                   OR (@sale_uid   IS NOT NULL AND s.sale_uid      = @sale_uid)
+                   OR (@ticket_num IS NOT NULL AND t.ticket_number = @ticket_num)
+                ORDER BY t.ticket_id DESC
+                LIMIT 1;
+                ";
+
+            /*
+             * NOTA IMPORTANTE (punto 2):
+             *
+             * Ahora mismo la base de tiempo T_AGIN la tomamos de:
+             *      COALESCE(s.occurred_at, s.created_at)
+             *
+             * Si en el futuro preferimos usar la fecha/hora de impresión del ticket
+             * como base del T_AGIN, puedes cambiar esa línea en el SELECT por:
+             *
+             *      COALESCE(t.printed_at, s.occurred_at, s.created_at) AS occurred_at
+             *
+             * y la lógica de C# sigue funcionando igual.
+             */
+
+            await using var conn = new MySqlConnection(GetConnectionString());
+            await conn.OpenAsync();
+
+            await using var cmd = new MySqlCommand(SQL, conn);
+            cmd.Parameters.AddWithValue("@ticket_uid", (object?)ticketUid ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@sale_uid", (object?)saleUid ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@ticket_num", (object?)ticketNumber ?? DBNull.Value);
+
+            await using var rd = await cmd.ExecuteReaderAsync();
+            if (!await rd.ReadAsync())
+                return null;
+
+            var occurred = rd.IsDBNull("occurred_at")
+                ? DateTime.MinValue
+                : rd.GetDateTime("occurred_at");
+
+            return new ReweighCandidate
+            {
+                SaleId = rd.GetInt32("sale_id"),
+                SaleUid = rd.IsDBNull("sale_uid") ? "" : rd.GetValue(rd.GetOrdinal("sale_uid")).ToString(),
+                SaleStatusId = rd.GetInt32("sale_status_id"),
+                TicketId = rd.GetInt32("ticket_id"),
+                TicketUid = rd.IsDBNull("ticket_uid")
+                      ? ""
+                      : rd.GetValue(rd.GetOrdinal("ticket_uid")).ToString(),
+                TicketNumber = rd.IsDBNull("ticket_number") ? "" : rd.GetString("ticket_number"),
+                TicketStatusId = rd.GetInt32("ticket_status_id"),
+                ProductCode = rd.IsDBNull("product_code") ? "" : rd.GetString("product_code"),
+                OccurredAt = occurred,
+                ReweighCount = rd.IsDBNull("reweigh_count") ? 0 : rd.GetInt32("reweigh_count")
+            };
+
+        }
+        /// <summary>
+        /// Valida si un ticket es elegible para REWEIGH.
+        /// Aplica todas las reglas de negocio:
+        /// - Venta OPEN
+        /// - Ticket PRINTED
+        /// - No CANCELLED / REFUNDED
+        /// - No producto REWEIGH
+        /// - No más de REWEIGH_MAX_TIMES
+        /// - Dentro de la ventana REWEIGH_WINDOW_MINUTES
+        /// Si es válido, llena _reweighSource* y devuelve true.
+        /// Si no, muestra mensaje (ShowAlertAsync) y devuelve false.
+        /// </summary>
+        private async Task<bool> PrepareReweighFromTicketAsync(string rawKey)
+        {
+            rawKey ??= string.Empty;
+            rawKey = rawKey.Trim();
+
+            if (string.IsNullOrEmpty(rawKey))
+            {
+                await ShowAlertAsync(
+                    "Ticket required",
+                    "Please scan the QR or type the ticket number to perform a reweigh.",
+                    PackIconKind.QrcodeScan);
+                return false;
+            }
+
+            var cand = await GetReweighCandidateAsync(rawKey);
+            if (cand == null)
+            {
+                await ShowAlertAsync(
+                    "Ticket not found",
+                    "The ticket could not be found. Check the number / QR and try again.",
+                    PackIconKind.AlertCircleOutline);
+                return false;
+            }
+
+            // 1) Ticket debe estar en PRINTED
+            if (cand.TicketStatusId != STATUS_TICKET_PRINTED)
+            {
+                await ShowAlertAsync(
+                    "Invalid ticket status",
+                    "Only tickets in PRINTED status can be reweighed.",
+                    PackIconKind.AlertCircleOutline);
+                return false;
+            }
+
+            // 2) Venta CANCELLED / REFUNDED no permite REWEIGH
+            if (cand.SaleStatusId == STATUS_SALE_CANCELLED ||
+                cand.SaleStatusId == STATUS_SALE_REFUNDED)
+            {
+                await ShowAlertAsync(
+                    "Not allowed",
+                    "This ticket belongs to a sale that is CANCELLED or REFUNDED and cannot be reweighed.",
+                    PackIconKind.BlockHelper);
+                return false;
+            }
+
+            // 3) Regla que definiste: sólo SALES.COMPLETE (status_id = 2) La venta tiene que esta complete
+            if (cand.SaleStatusId != STATUS_SALE_COMPLETED)
+            {
+                await ShowAlertAsync(
+                    "Not allowed",
+                    "Only tickets from OPEN sales can be used for a reweigh.",
+                    PackIconKind.BlockHelper);
+                return false;
+            }
+
+            // 4) No permitir usar un ticket que ya es de REWEIGH
+            if (string.Equals(cand.ProductCode, "REWEIGH", StringComparison.OrdinalIgnoreCase))
+            {
+                await ShowAlertAsync(
+                    "Reweigh already processed",
+                    "This ticket is already a REWEIGH operation. You must always use the original WEIGH ticket.",
+                    PackIconKind.Scale);
+                return false;
+            }
+
+            // 5) No re-pesar más veces que el límite
+            if (cand.ReweighCount >= REWEIGH_MAX_TIMES)
+            {
+                await ShowAlertAsync(
+                    "Reweigh limit reached",
+                    "This ticket already has a registered REWEIGH and cannot be used again.",
+                    PackIconKind.Scale);
+                return false;
+            }
+
+            // 6) Ventana de tiempo T_AGIN
+            var baseTime = cand.OccurredAt;
+            if (baseTime.Year < 2000) // por si en BD vino algo raro
+                baseTime = DateTime.Now;
+
+            var elapsedMinutes = (DateTime.UtcNow - baseTime.ToUniversalTime()).TotalMinutes;
+            if (elapsedMinutes > REWEIGH_WINDOW_MINUTES)
+            {
+                await ShowAlertAsync(
+                    "Reweigh window expired",
+                    $"The reweigh window of {REWEIGH_WINDOW_MINUTES} minutes has expired for this ticket.",
+                    PackIconKind.TimerSand);
+                return false;
+            }
+
+            // Si llegamos aquí, el ticket ES válido para REWEIGH
+            _reweighSourceSaleId = cand.SaleId;
+            _reweighSourceSaleUid = cand.SaleUid;
+            _reweighSourceTicketNumber = cand.TicketNumber;
+            // === Auto-cargar chofer del sale original ===
+            var drv = await GetDriverBySaleUidAsync(cand.SaleUid);
+
+            if (drv != null)
+            {
+                ShowDriverCard(drv);      // ya la tienes en RegisterSave_Click
+                _driverLinked = true;
+                UpdateProductButtonsEnabled();
+                lblEstado.Content = "Driver linked from original ticket.";
+            }
+            else
+            {
+                _driverLinked = false;
+                UpdateProductButtonsEnabled();
+                lblEstado.Content = "No driver info for original ticket.";
+            }
+            AppendLog($"[Reweigh] Ticket {cand.TicketNumber} OK for REWEIGH (sale_id={cand.SaleId}, sale_uid={cand.SaleUid}).");
+
+            return true;
+        }
+        private void ReweighCancelButton_Click(object sender, RoutedEventArgs e)
+        {
+            try { ReweighHost.IsOpen = false; } catch { }
+            try { ReweighToggle.IsChecked = false; } catch { }
+            ResetDriverContext();
+        }
+
+        private async void ReweighAcceptButton_Click(object sender, RoutedEventArgs e)
+        {
+            var raw = ReweighTicketInputTextBox.Text;
+
+            bool ok = await PrepareReweighFromTicketAsync(raw);
+
+            if (!ok)
+            {
+                // Cumplimos tu punto 4: cerramos modal y dejamos que el alert explique
+                try { ReweighHost.IsOpen = false; } catch { }
+                // Además desmarcamos el toggle, para volver a flujo normal
+                try { ReweighToggle.IsChecked = false; } catch { }
+                return;
+            }
+
+            // Si es válido:
+            // - Aquí YA tienes _reweighSourceSaleId / _reweighSourceSaleUid / _reweighSourceTicketNumber
+            // - Cierra el modal y deja que el operador capture chofer / pagos como siempre
+            try { ReweighHost.IsOpen = false; } catch { }
+
+            // Activar visualmente REWEIGH como producto seleccionado
+            ApplySelected("REWEIGH");
+        }
+
+        private void ReweighTicketInputTextBox_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter)
+            {
+                ReweighAcceptButton_Click(sender, e);
+            }
+        }
+        private async Task<DriverInfo?> GetDriverBySaleUidAsync(string saleUid)
+        {
+            if (string.IsNullOrWhiteSpace(saleUid))
+                return null;
+
+            const string SQL = @"
+                SELECT
+                    sdi.id_driver_info,
+                    sdi.driver_first_name,
+                    sdi.driver_last_name,
+                    sdi.account_name,
+                    sdi.account_address,
+                    sdi.account_country,
+                    sdi.account_state,
+                    sdi.driver_product_id,
+                    dp.name AS product_description,
+                    sdi.license_number,
+                    sdi.license_state,
+                    sdi.vehicle_plates,
+                    sdi.trailer_number,
+                    sdi.tractor_number
+                FROM sale_driver_info sdi
+                LEFT JOIN driver_products dp
+                       ON dp.product_id = sdi.driver_product_id
+                WHERE sdi.sale_uid = @sale_uid
+                ORDER BY sdi.id_driver_info DESC
+                LIMIT 1;
+            ";
+
+            async Task<DriverInfo?> TryOneAsync(string connStr)
+            {
+                await using var conn = new MySqlConnection(connStr);
+                await conn.OpenAsync();
+
+                await using var cmd = new MySqlCommand(SQL, conn);
+                cmd.Parameters.AddWithValue("@sale_uid", saleUid);
+
+                await using var rd = await cmd.ExecuteReaderAsync();
+                if (!await rd.ReadAsync())
+                    return null;
+
+                return new DriverInfo
+                {
+                    Id = rd.GetInt64("id_driver_info"),
+                    First = rd.GetString("driver_first_name"),
+                    Last = rd.GetString("driver_last_name"),
+                    AccountName = rd.IsDBNull("account_name") ? "" : rd.GetString("account_name"),
+                    AccountAddress = rd.IsDBNull("account_address") ? "" : rd.GetString("account_address"),
+                    AccountCountry = rd.IsDBNull("account_country") ? "" : rd.GetString("account_country"),
+                    AccountState = rd.IsDBNull("account_state") ? "" : rd.GetString("account_state"),
+
+                    DriverProductId = rd.IsDBNull("driver_product_id")
+                        ? (int?)null
+                        : rd.GetInt32("driver_product_id"),
+
+                    ProductDescription = rd.IsDBNull("product_description")
+                        ? ""
+                        : rd.GetString("product_description"),
+
+                    License = rd.IsDBNull("license_number") ? "" : rd.GetString("license_number"),
+                    LicenseStateCode = rd.IsDBNull("license_state") ? "" : rd.GetString("license_state"),
+                    Plates = rd.IsDBNull("vehicle_plates") ? "" : rd.GetString("vehicle_plates"),
+                    TrailerNumber = rd.IsDBNull("trailer_number") ? "" : rd.GetString("trailer_number"),
+                    TractorNumber = rd.IsDBNull("tractor_number") ? "" : rd.GetString("tractor_number"),
+                };
+            }
+
+            try
+            {
+                // Primaria
+                return await TryOneAsync(GetPrimaryConn());
+            }
+            catch (Exception exPrimary)
+            {
+                AppendLog("[Driver] Primary DB failed in GetDriverBySaleUidAsync: " + exPrimary.Message);
+
+                try
+                {
+                    // Fallback local
+                    return await TryOneAsync(GetLocalConn());
+                }
+                catch (Exception exLocal)
+                {
+                    AppendLog("[Driver] Local DB failed in GetDriverBySaleUidAsync: " + exLocal.Message);
+                    return null;
+                }
+            }
+        }
+
+
 
     }
 }

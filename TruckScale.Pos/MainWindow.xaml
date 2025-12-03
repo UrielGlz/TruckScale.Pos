@@ -795,22 +795,22 @@
 
                             <!-- Driver summary en la otra mitad -->
                             <md:Card x:Name="DriverCard"
-         Grid.Column="1"
-         Margin="8,0,0,0"
-         Padding="22"
-         UniformCornerRadius="12"
-         Visibility="Collapsed">
+                             Grid.Column="1"
+                             Margin="8,0,0,0"
+                             Padding="22"
+                             UniformCornerRadius="12"
+                             Visibility="Collapsed">
                                 <StackPanel>
 
                                     <!-- Header -->
                                     <StackPanel Orientation="Horizontal"
-                    VerticalAlignment="Center"
-                    Margin="0,0,0,6">
+                                    VerticalAlignment="Center"
+                                    Margin="0,0,0,6">
                                         <md:PackIcon Kind="AccountTie"
-                         Width="24"
-                         Height="24"
-                         Opacity="0.9"
-                         Margin="0,0,8,0"/>
+                                         Width="24"
+                                         Height="24"
+                                         Opacity="0.9"
+                                         Margin="0,0,8,0"/>
                                         <TextBlock Text="Driver summary"
                                            FontWeight="SemiBold"
                                            FontSize="16"
@@ -1071,9 +1071,9 @@
 
                 <!-- === GENERIC ALERT DIALOG (CENTERED) === -->
                 <md:DialogHost x:Name="AlertHost"
-               Grid.RowSpan="99"
-               Grid.ColumnSpan="99"
-               Panel.ZIndex="100">
+                   Grid.RowSpan="99"
+                   Grid.ColumnSpan="99"
+                   Panel.ZIndex="100">
                     <md:DialogHost.DialogContent>
                         <Grid Width="420"
               HorizontalAlignment="Center"
@@ -1131,6 +1131,88 @@
                     </md:DialogHost.DialogContent>
                 </md:DialogHost>
 
+                <!-- ================== REWEIGH TICKET DIALOG ================== -->
+                <md:DialogHost x:Name="ReweighHost"
+                    Identifier="ReweighHost"
+                    Grid.RowSpan="99"
+                    Grid.ColumnSpan="99"
+                    Panel.ZIndex="100">
+                    <md:DialogHost.DialogContent>
+                        <!-- Contenedor centrado -->
+                            <Grid Width="620"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center">
+                            <md:Card Padding="24"
+                             md:ElevationAssist.Elevation="Dp2"
+                             UniformCornerRadius="16">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Título -->
+                                    <StackPanel Grid.Row="0"
+                                Orientation="Horizontal"
+                                Margin="0,0,0,16">
+                                        <md:PackIcon Kind="QrCodeScan"
+                                     Width="32"
+                                     Height="32"
+                                     Margin="0,0,10,0"
+                                     VerticalAlignment="Center"/>
+                                        <TextBlock Text="Reweigh ticket"
+                                   FontSize="22"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center"/>
+                                    </StackPanel>
+
+                                    <!-- Descripción -->
+                                    <TextBlock Grid.Row="1"
+                               Text="Escanea el código QR del ticket original o pega el JSON completo."
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,18"
+                               Opacity="0.8"/>
+
+                                    <!-- Input grande para ticket / JSON -->
+                                    <TextBox Grid.Row="2"
+                             x:Name="ReweighTicketInputTextBox"
+                             md:HintAssist.Hint="Ticket / QR / JSON"
+                             Style="{StaticResource MaterialDesignFloatingHintTextBox}"
+                             md:TextFieldAssist.DecorationVisibility="Hidden"
+                             Margin="0,0,0,18"
+                             FontSize="18"
+                             Height="56"
+                             HorizontalAlignment="Stretch"
+                             VerticalContentAlignment="Center"
+                             TextWrapping="NoWrap"
+                             KeyDown="ReweighTicketInputTextBox_KeyDown"/>
+                                    <!-- si quieres limitar: MaxLength="512" -->
+
+                                    <!-- Botones -->
+                                    <StackPanel Grid.Row="3"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Right">
+                                        <Button Content="Cancelar"
+                                Margin="0,0,8,0"
+                                Padding="18,6"
+                                Command="{x:Static md:DialogHost.CloseDialogCommand}"
+                                CommandParameter="{x:Null}"
+                                Click="ReweighCancelButton_Click"/>
+
+                                        <Button Content="Continuar"
+                                Padding="18,6"
+                                Style="{StaticResource MaterialDesignRaisedButton}"
+                                Click="ReweighAcceptButton_Click"/>
+                                    </StackPanel>
+                                </Grid>
+                            </md:Card>
+                        </Grid>
+                    </md:DialogHost.DialogContent>
+                </md:DialogHost>
+
+
 
 
             </Grid>
@@ -1138,7 +1220,7 @@
         </md:DrawerHost>
 
 
-        <!-- ===== MODAL: Registrar chofer ===== -->
+     
         <!-- ===== MODAL: Registrar chofer ===== -->
         <md:DialogHost.DialogContent>
             <md:Card Padding="24" Width="980" MaxHeight="1100"  HorizontalAlignment="Center">
