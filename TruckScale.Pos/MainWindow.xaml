@@ -11,7 +11,7 @@
         Background="{DynamicResource MaterialDesignPaper}"
         Loaded="Window_Loaded"
         WindowState="Maximized"
-        
+        PreviewKeyDown="Window_PreviewKeyDown"
         ResizeMode="NoResize"
         WindowStyle="None">
 
@@ -969,12 +969,18 @@
                     <TextBlock x:Name="ScaleStateText" Text="{DynamicResource Scale.Simulated}"/>
                     <TextBlock Text="   |   " />
                     <TextBlock>
-                        <Run Text="{DynamicResource Operator}"/>
+                        <Run Text="{DynamicResource Operator}"/>    
                         <Run Text=": " />
                         <Run x:Name="OperatorNameRun" Text="admin"/>
                     </TextBlock>
                     <TextBlock Text="   |   " />
                     <TextBlock Text="{Binding ElementName=WeightText, Path=Text}" />
+
+                    <!-- NUEVO: Indicador de sincronización -->
+                    <TextBlock Text="   |   " />
+                    <TextBlock x:Name="SyncStatusText" 
+               Text="🟢 Sync: Active" 
+               ToolTip="Ctrl+Alt+F9 for sync debug"/>
                 </DockPanel>
 
                 <!-- === SALE COMPLETED DIALOG === -->

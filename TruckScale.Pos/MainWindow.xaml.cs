@@ -11,9 +11,11 @@ using System.Globalization;
 using System.IO;
 using System.IO.Ports;
 using System.Numerics;
+using System.Printing;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -22,12 +24,11 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Xps; // para XpsDocumentWriter
-using TruckScale.Pos.Tickets;
 using TruckScale.Pos.Config;
 using TruckScale.Pos.Data;
-using System.Printing;
 using TruckScale.Pos.Domain;
-using System.Text.Json;
+using TruckScale.Pos.Sync;
+using TruckScale.Pos.Tickets;
 
 namespace TruckScale.Pos
 {
@@ -134,7 +135,7 @@ namespace TruckScale.Pos
 
         // Para activar los botones de servicio
         private bool _driverLinked = false;
-        private bool _hasAcceptedWeight;  
+        private bool _hasAcceptedWeight;
         // ==== Estado WAIT/OK y snapshot de peso estable ====
         private bool _canAccept = false;          // true cuando hay snapshot estable listo para guardar
         private double _snapAx1, _snapAx2, _snapAx3, _snapTotal;
@@ -149,6 +150,12 @@ namespace TruckScale.Pos
         // ===== Driver phone lookup =====
         private string _driverPhoneDigits = "";
         private const int DRIVER_PHONE_LEN = 10;
+
+        // === SYNC SERVICE (nuevo) ===
+        private SyncService? _syncService;
+        private System.Windows.Threading.DispatcherTimer? _syncTimer;
+        private bool _syncInProgress = false;
+
 
         private static string OnlyDigits(string? s)
             => string.IsNullOrEmpty(s)
@@ -580,22 +587,31 @@ namespace TruckScale.Pos
         // ===== Conexión a BD para peso =====
         public static string GetConnectionString()
         {
-            // 1) Intentar leer desde config.json (PosConfigService)
-            var cfg = PosConfigService.Load();
-
-            if (!string.IsNullOrWhiteSpace(cfg.MainDbStrCon))
+            // 1) Intentar leer desde C:\ProgramData\TruckScale\config.json (ConfigManager)
+            try
             {
-                // Tomamos la cadena guardada y le inyectamos las opciones de fecha
-                var fromConfig = new MySqlConnectionStringBuilder(cfg.MainDbStrCon)
-                {
-                    AllowZeroDateTime = true,      // permite 0000-00-00...
-                    ConvertZeroDateTime = true     // los convierte a DateTime.MinValue
-                };
+                // Carga el config.json si no se ha cargado aún
+                ConfigManager.Load();
 
-                return fromConfig.ConnectionString;
+                if (ConfigManager.HasMainConnection)
+                {
+                    var fromConfig = new MySqlConnectionStringBuilder(ConfigManager.Current.MainDbStrCon)
+                    {
+                        AllowZeroDateTime = true,      // permite 0000-00-00...
+                        ConvertZeroDateTime = true,    // los convierte a DateTime.MinValue
+                        ConnectionTimeout = 8,
+                        DefaultCommandTimeout = 30
+                    };
+
+                    return fromConfig.ConnectionString;
+                }
+            }
+            catch
+            {
+                // Si algo falla al leer/parsear config, caemos al fallback
             }
 
-            // 2) Fallback legacy (lo que ya tenías), pero con las mismas opciones
+            // 2) Fallback legacy (env vars o valores por defecto)
             var builder = new MySqlConnectionStringBuilder
             {
                 Server = Environment.GetEnvironmentVariable("BAKEOPS_DB_HOST") ?? "lunisapp.com",
@@ -606,7 +622,6 @@ namespace TruckScale.Pos
                 ConnectionTimeout = 8,
                 DefaultCommandTimeout = 30,
 
-                // 👇 clave para quitar el error de impresión
                 AllowZeroDateTime = true,
                 ConvertZeroDateTime = true
             };
@@ -615,18 +630,70 @@ namespace TruckScale.Pos
         }
 
         private string? _currentWeightUuid;
-
-        // Guarda snapshot de peso en scale_session_axles
+        // Guarda snapshot de peso en scale_session_axles (online -> local)
         public async Task<long> saveScaleData(double eje1, double eje2, double eje3, double total, string rawLine, string uuid_weight)
+        {
+            _currentWeightUuid = uuid_weight; // se usa para vincular con sale_driver_info
+
+            // Cargamos config
+            TruckScale.Pos.Config.ConfigManager.Load();
+
+            Exception? lastConnEx = null;
+
+            // 1) Intentar BD PRIMARY (online)
+            if (!string.IsNullOrWhiteSpace(ConfigManager.Current.MainDbStrCon))
+            {
+                try
+                {
+                    AppendLog("[DB] Trying PRIMARY DB for scale_session_axles...");
+                    return await SaveScaleDataOnConnection(
+                        ConfigManager.Current.MainDbStrCon,
+                        eje1, eje2, eje3, total, rawLine, uuid_weight,
+                        isPrimary: true);
+                }
+                catch (Exception ex)
+                {
+                    lastConnEx = ex;
+                    AppendLog("[DB] PRIMARY DB failed: " + ex.Message);
+                }
+            }
+
+            // 2) Intentar BD LOCAL
+            if (!string.IsNullOrWhiteSpace(ConfigManager.Current.LocalDbStrCon))
+            {
+                try
+                {
+                    AppendLog("[DB] Trying LOCAL DB for scale_session_axles...");
+                    return await SaveScaleDataOnConnection(
+                        ConfigManager.Current.LocalDbStrCon,
+                        eje1, eje2, eje3, total, rawLine, uuid_weight,
+                        isPrimary: false);
+                }
+                catch (Exception ex)
+                {
+                    lastConnEx = ex;
+                    AppendLog("[DB] LOCAL DB failed: " + ex.Message);
+                }
+            }
+
+            // 3) Si ninguna BD respondió bien, re-lanzamos el último error
+            if (lastConnEx != null)
+                throw lastConnEx;
+
+            throw new InvalidOperationException(
+                "No database connection configured (primary/local) for scale_session_axles.");
+        }
+        // Guarda snapshot de peso en scale_session_axles
+        public async Task<long> saveScaleData_anterior(double eje1, double eje2, double eje3, double total, string rawLine, string uuid_weight)
         {
             string connStr = GetConnectionString();
 
             _currentWeightUuid = uuid_weight; // se usa para vincular con sale_driver_info
 
             const string SQL = @"INSERT INTO scale_session_axles (uuid_weight, axle_index, weight_lb,
-                                 captured_utc, captured_local, captured_local_time, raw_line, status_id, eje1, eje2, eje3, peso_total)
-                                VALUES 
-                                (@uuid_weight, 3, @weight_lb,@utc, @local, @local_time,@raw, 1, @e1, @e2, @e3, @total);";
+                                     captured_utc, captured_local, captured_local_time, raw_line, status_id, eje1, eje2, eje3, peso_total)
+                                    VALUES 
+                                    (@uuid_weight, 3, @weight_lb,@utc, @local, @local_time,@raw, 1, @e1, @e2, @e3, @total);";
 
             var nowLocal = DateTime.Now;
 
@@ -650,6 +717,58 @@ namespace TruckScale.Pos
 
             return (long)cmd.LastInsertedId;
         }
+        private static async Task<long> SaveScaleDataOnConnection(string connStr, double eje1, double eje2, double eje3, double total, string rawLine, string uuid_weight, bool isPrimary)
+        {
+            const string SQL = @"INSERT INTO scale_session_axles (
+                                 uuid_weight,axle_index,weight_lb,captured_utc, captured_local,
+                                 captured_local_time,
+                                 raw_line,
+                                 status_id,
+                                 eje1,
+                                 eje2,
+                                 eje3,
+                                 peso_total
+                             )
+                             VALUES (
+                                 @uuid_weight,
+                                 3,
+                                 @weight_lb,
+                                 @utc,
+                                 @local,
+                                 @local_time,
+                                 @raw,
+                                 1,
+                                 @e1,
+                                 @e2,
+                                 @e3,
+                                 @total
+                             );";
+
+            var nowLocal = DateTime.Now;
+
+            await using var conn = new MySqlConnection(connStr);
+            await conn.OpenAsync();
+
+            await using var cmd = new MySqlCommand(SQL, conn);
+            cmd.Parameters.AddWithValue("@uuid_weight", uuid_weight);
+            cmd.Parameters.AddWithValue("@weight_lb", Math.Round(total, 3));
+            cmd.Parameters.AddWithValue("@utc", DateTime.UtcNow);
+            cmd.Parameters.AddWithValue("@local", nowLocal);
+            cmd.Parameters.AddWithValue("@local_time", nowLocal.TimeOfDay);
+            cmd.Parameters.AddWithValue("@raw",
+                string.IsNullOrEmpty(rawLine)
+                    ? (object)DBNull.Value
+                    : (rawLine.Length > 128 ? rawLine[..128] : rawLine));
+            cmd.Parameters.AddWithValue("@e1", (int)Math.Round(eje1));
+            cmd.Parameters.AddWithValue("@e2", (int)Math.Round(eje2));
+            cmd.Parameters.AddWithValue("@e3", (int)Math.Round(eje3));
+            cmd.Parameters.AddWithValue("@total", (int)Math.Round(total));
+
+            await cmd.ExecuteNonQueryAsync();
+
+            return (long)cmd.LastInsertedId;
+        }
+
 
         private void AppendLog(string text)
         {
@@ -787,7 +906,7 @@ namespace TruckScale.Pos
             try { ChoferNombreText.Text = ""; } catch { }
             try { ChoferApellidosText.Text = ""; } catch { }
             try { LicenciaNumeroText.Text = ""; } catch { }
-          
+
             _driverPhoneDigits = "";
 
             try { RootDialog.IsOpen = false; } catch { }
@@ -796,9 +915,9 @@ namespace TruckScale.Pos
 
 
             try { DriverPhoneText.Text = ""; } catch { }
-           
 
-            
+
+
 
             // 3) Totales y producto seleccionado
             _ventaTotal = 0m;
@@ -1139,10 +1258,12 @@ namespace TruckScale.Pos
 
         private void RegisterCancel_Click(object sender, RoutedEventArgs e)
         {
-            try { 
+            try
+            {
                 RootDialog.IsOpen = false;
                 ResetDriverContext();
-            } catch { }
+            }
+            catch { }
         }
 
         // === Handler del botón WAIT/OK (antes Start) ===
@@ -1285,7 +1406,7 @@ namespace TruckScale.Pos
             return true;
         }
 
-        //UG save driver *sale_driver_info*
+        // UG save driver *sale_driver_info*
         private async void RegisterSave_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -1300,28 +1421,26 @@ namespace TruckScale.Pos
                     return;
                 }
 
+                // Validación de formulario (nombre, teléfono, etc.)
                 if (!await ValidateDriverFormAsync())
                     return;
-
-                
 
                 string first = ChoferNombreText?.Text?.Trim() ?? "";
                 string last = ChoferApellidosText?.Text?.Trim() ?? "";
                 string licNo = LicenciaNumeroText?.Text?.Trim() ?? "";
                 string plates = PlacasRegText?.Text?.Trim() ?? "";
 
-                // NUEVO: tomar tráiler y tractor del formulario
+                // NUEVO: tráiler y tractor del formulario
                 string trailerNumber = TrailerNumberText?.Text?.Trim() ?? "";
                 string tractorNumber = TractorNumberText?.Text?.Trim() ?? "";
 
-                // Estado de la placa (código, ej. "AZ")
+                // Estado de la licencia (código, ej. "TX")
                 var licenseState = (LicenseStateCombo.SelectedItem as LicenseState)?.Code ?? "";
 
                 var selectedProduct = ProductoRegText.SelectedItem as DriverProduct;
                 string productText = selectedProduct?.Name
                                      ?? ProductoRegText.Text?.Trim() ?? "";
                 int? driverProductId = selectedProduct?.Id;
-
 
                 string phoneDigits = _driverPhoneDigits;
 
@@ -1343,13 +1462,14 @@ namespace TruckScale.Pos
                 }
                 else
                 {
-                    // Cash sale / cuenta libre: usamos lo que capturó el operador
+                    // Venta de contado / sin cuenta: usar lo que capturó el operador
                     accountName = AccountNameText?.Text?.Trim() ?? "";
                     accountAddress = AccountAddressText?.Text?.Trim() ?? "";
                     accountCountry = AccountCountryText?.Text?.Trim() ?? "";
                     accountState = AccountStateText?.Text?.Trim() ?? "";
                 }
 
+                // Regla mínima: al menos placas o licencia
                 if (string.IsNullOrWhiteSpace(plates) && string.IsNullOrWhiteSpace(licNo))
                 {
                     await ShowAlertAsync(
@@ -1357,8 +1477,9 @@ namespace TruckScale.Pos
                         "Enter at least Plates or License number.",
                         PackIconKind.AlertOutline);
                     return;
-                }         
+                }
 
+                // INSERT con fallback (PRIMARY -> LOCAL)
                 long driverId = await InsertDriverInfoWithFallbackAsync(
                     saleUid: null,
                     accountNumber: accountNumber,
@@ -1374,13 +1495,14 @@ namespace TruckScale.Pos
                     plates: plates,
                     trailerNumber: trailerNumber,
                     tractorNumber: tractorNumber,
-                    driverProductId: driverProductId,                     
+                    driverProductId: driverProductId,
                     identifyBy: "weight_uuid",
                     matchKey: uuid
                 );
 
                 AppendLog($"[Driver] Saved id={driverId} linked to weight_uuid={uuid}");
 
+                // Refrescamos la tarjeta del chofer con lo recién guardado
                 var info = await GetDriverByWeightUuidAsync(uuid);
                 if (info != null)
                 {
@@ -1396,6 +1518,7 @@ namespace TruckScale.Pos
                     AppendLog("[Driver] Warning: driver not found right after insert.");
                 }
 
+                // Cerramos modal y mostramos popup de confirmación
                 RootDialog.IsOpen = false;
 
                 await ShowDriverSavedDialogAsync(
@@ -1406,48 +1529,237 @@ namespace TruckScale.Pos
             }
             catch (Exception ex)
             {
-                await ShowAlertAsync("Driver error", "Error saving driver: " + ex.Message, PackIconKind.AlertCircle);
+                // Aquí solo llegan errores “reales”: ambas BD fallaron, SQL roto, etc.
+                await ShowAlertAsync(
+                    "Driver error",
+                    "Error saving driver: " + ex.Message,
+                    PackIconKind.AlertCircle);
             }
         }
 
-
+        /// <summary>
+        /// Inserta en sale_driver_info usando fallback:
+        /// 1) Intenta PRIMARY (MainDbStrCon).
+        /// 2) Si falla, intenta LOCAL (LocalDbStrCon).
+        /// 3) Si ambas fallan, relanza la última excepción.
+        /// </summary>
         private async Task<long> InsertDriverInfoWithFallbackAsync(
-        string? saleUid,
-        string? accountNumber,
-        string accountName,
-        string accountAddress,
-        string accountCountry,
-        string accountState,
-        string firstName,
-        string lastName,
-        string driverPhone,
-        string licenseNo,
-        string licenseState,
-        string plates,
-        string trailerNumber,
-        string tractorNumber,
-        int? driverProductId,        
-        string identifyBy,
-        string matchKey)
+            string? saleUid,
+            string? accountNumber,
+            string accountName,
+            string accountAddress,
+            string accountCountry,
+            string accountState,
+            string firstName,
+            string lastName,
+            string driverPhone,
+            string licenseNo,
+            string licenseState,
+            string plates,
+            string trailerNumber,
+            string tractorNumber,
+            int? driverProductId,
+            string identifyBy,
+            string matchKey)
         {
-            try
-            {
-                return await InsertDriverInfoAsync(
-                saleUid, accountNumber, accountName, accountAddress, accountCountry, accountState,
-                firstName, lastName, driverPhone, licenseNo, licenseState,
-                plates, trailerNumber, tractorNumber, driverProductId,
-                identifyBy, matchKey);
-            }
-            catch (Exception ex1)
-            {
-                AppendLog("[Driver] Primary DB failed, trying local… " + ex1.Message);
+            Exception? lastEx = null;
 
-                var localCsb = new MySqlConnectionStringBuilder(GetLocalConn());
-                await using var conn = new MySqlConnection(localCsb.ConnectionString);
-                await conn.OpenAsync(); // si no hay MySQL local, aquí también truena
-                // Aquí se hará duplicar el INSERT para modo offline si lo necesitas.
-                throw;
+            // 1) PRIMARY (online)
+            var primaryConn = GetPrimaryConn();
+            if (!string.IsNullOrWhiteSpace(primaryConn))
+            {
+                try
+                {
+                    AppendLog("[Driver] Trying PRIMARY DB for sale_driver_info...");
+                    var id = await InsertDriverInfoOnConnectionAsync(
+                        primaryConn,
+                        saleUid,
+                        accountNumber,
+                        accountName,
+                        accountAddress,
+                        accountCountry,
+                        accountState,
+                        firstName,
+                        lastName,
+                        driverPhone,
+                        licenseNo,
+                        licenseState,
+                        plates,
+                        trailerNumber,
+                        tractorNumber,
+                        driverProductId,
+                        identifyBy,
+                        matchKey);
+
+                    AppendLog($"[Driver] Inserted in PRIMARY DB id={id}.");
+                    return id;
+                }
+                catch (MySqlException ex)
+                {
+                    lastEx = ex;
+                    AppendLog("[Driver] PRIMARY DB failed, trying LOCAL… " + ex.Message);
+                }
+                catch (Exception ex)
+                {
+                    lastEx = ex;
+                    AppendLog("[Driver] PRIMARY DB failed (non-MySQL), trying LOCAL… " + ex.Message);
+                }
             }
+
+            // 2) LOCAL (offline)
+            var localConn = ConfigManager.Current.LocalDbStrCon;
+
+            if (!string.IsNullOrWhiteSpace(localConn))
+            {
+                try
+                {
+                    AppendLog("[Driver] Trying LOCAL DB for sale_driver_info...");
+                    var id = await InsertDriverInfoOnConnectionAsync(
+                        localConn,
+                        saleUid,
+                        accountNumber,
+                        accountName,
+                        accountAddress,
+                        accountCountry,
+                        accountState,
+                        firstName,
+                        lastName,
+                        driverPhone,
+                        licenseNo,
+                        licenseState,
+                        plates,
+                        trailerNumber,
+                        tractorNumber,
+                        driverProductId,
+                        identifyBy,
+                        matchKey);
+
+                    AppendLog($"[Driver] Inserted in LOCAL DB id={id}.");
+                    return id;
+                }
+                catch (Exception ex)
+                {
+                    lastEx = ex;
+                    AppendLog("[Driver] LOCAL DB failed in InsertDriverInfoWithFallbackAsync: " + ex.Message);
+                }
+            }
+
+            // Si llegamos aquí, ninguna BD respondió bien
+            if (lastEx != null)
+                throw lastEx;
+
+            throw new InvalidOperationException("No database connection string configured for driver info.");
+        }
+
+        /// <summary>
+        /// Hace el INSERT real en sale_driver_info usando la cadena de conexión indicada.
+        /// No usa campos de sincronización; la misma instrucción funciona en online y local.
+        /// </summary>
+        private static async Task<long> InsertDriverInfoOnConnectionAsync(
+            string connStr,
+            string? saleUid,
+            string? accountNumber,
+            string accountName,
+            string accountAddress,
+            string accountCountry,
+            string accountState,
+            string firstName,
+            string lastName,
+            string driverPhone,
+            string licenseNo,
+            string licenseState,
+            string plates,
+            string trailerNumber,
+            string tractorNumber,
+            int? driverProductId,
+            string identifyBy,
+            string matchKey)
+        {
+            const string SQL = @"INSERT INTO sale_driver_info (
+                sale_uid,
+                account_number,
+                account_name,
+                account_address,
+                account_country,
+                account_state,
+                driver_first_name,
+                driver_last_name,
+                driver_phone,
+                license_number,
+                license_state,
+                vehicle_plates,
+                trailer_number,
+                tractor_number,
+                driver_product_id,
+                identify_by,
+                match_key
+            )
+            VALUES (
+                @sale_uid,
+                @account_number,
+                @account_name,
+                @account_address,
+                @account_country,
+                @account_state,
+                @first_name,
+                @last_name,
+                @driver_phone,
+                @license_no,
+                @license_state,
+                @plates,
+                @trailer_number,
+                @tractor_number,
+                @driver_product_id,
+                @identify_by,
+                @match_key
+            );";
+
+            await using var conn = new MySqlConnection(connStr);
+            await conn.OpenAsync();
+
+            await using var cmd = new MySqlCommand(SQL, conn);
+
+            // Campos opcionales → NULL si vienen vacíos
+            cmd.Parameters.AddWithValue("@sale_uid",
+                string.IsNullOrWhiteSpace(saleUid) ? (object)DBNull.Value : saleUid);
+
+            cmd.Parameters.AddWithValue("@account_number",
+                string.IsNullOrWhiteSpace(accountNumber) ? (object)DBNull.Value : accountNumber);
+
+            cmd.Parameters.AddWithValue("@account_name", accountName);
+            cmd.Parameters.AddWithValue("@account_address", accountAddress);
+            cmd.Parameters.AddWithValue("@account_country", accountCountry);
+            cmd.Parameters.AddWithValue("@account_state", accountState);
+
+            cmd.Parameters.AddWithValue("@first_name", firstName);
+            cmd.Parameters.AddWithValue("@last_name", lastName);
+
+            cmd.Parameters.AddWithValue("@driver_phone",
+                string.IsNullOrWhiteSpace(driverPhone) ? (object)DBNull.Value : driverPhone);
+
+            cmd.Parameters.AddWithValue("@license_no",
+                string.IsNullOrWhiteSpace(licenseNo) ? (object)DBNull.Value : licenseNo);
+
+            cmd.Parameters.AddWithValue("@license_state",
+                string.IsNullOrWhiteSpace(licenseState) ? (object)DBNull.Value : licenseState);
+
+            cmd.Parameters.AddWithValue("@plates",
+                string.IsNullOrWhiteSpace(plates) ? (object)DBNull.Value : plates);
+
+            cmd.Parameters.AddWithValue("@trailer_number",
+                string.IsNullOrWhiteSpace(trailerNumber) ? (object)DBNull.Value : trailerNumber);
+
+            cmd.Parameters.AddWithValue("@tractor_number",
+                string.IsNullOrWhiteSpace(tractorNumber) ? (object)DBNull.Value : tractorNumber);
+
+            cmd.Parameters.AddWithValue("@driver_product_id",
+                driverProductId.HasValue ? (object)driverProductId.Value : DBNull.Value);
+
+            cmd.Parameters.AddWithValue("@identify_by", identifyBy);
+            cmd.Parameters.AddWithValue("@match_key", matchKey);
+
+            await cmd.ExecuteNonQueryAsync();
+            return (long)cmd.LastInsertedId;
         }
 
 
@@ -1778,13 +2090,157 @@ namespace TruckScale.Pos
             PagosList.ItemsSource = _pagos;
             await LoadPaymentMethodsAsync();
 
+            // ========== SYNC SERVICE (NUEVO) ==========
+            InitializeSyncService();
+
             if (_isConnected)
             {
                 lblTemp.Content = "Waiting for truck…";
                 lblEstado.Content = "Scale ready.";
             }
         }
+        // ============================================================================
+        // SYNC SERVICE INITIALIZATION
+        // ============================================================================
+        // Inicializa el motor de sincronización LOCAL_DB ↔ MAIN_DB.
+        // - Carga configuración desde settings (intervalo del timer)
+        // - Arranca timer automático para PUSH periódico
+        // - No bloquea la app si falla (modo degradado)
+        // ============================================================================
 
+        private void InitializeSyncService()
+        {
+            try
+            {
+                var mainConn = GetConnectionString();
+                var localConn = GetLocalConn();
+
+                if (string.IsNullOrWhiteSpace(mainConn) || string.IsNullOrWhiteSpace(localConn))
+                {
+                    AppendLog("[Sync] No connection strings configured. Sync disabled.");
+                    UpdateSyncStatusUI("⚠️ Sync: Disabled");
+                    return;
+                }
+
+                // Leer intervalo del timer desde settings (default: 5 minutos)
+                int timerMinutes = 5;
+                try
+                {
+                    using var conn = new MySqlConnection(localConn);
+                    conn.Open();
+                    using var cmd = new MySqlCommand(
+                        "SELECT value FROM settings WHERE `key` = 'sync.push_timer_minutes' LIMIT 1;", conn);
+                    var result = cmd.ExecuteScalar();
+                    if (result != null && int.TryParse(result.ToString(), out var parsed))
+                        timerMinutes = Math.Max(1, parsed);
+                }
+                catch
+                {
+                    // Si no existe el setting, usa default
+                }
+
+                _syncService = new SyncService();   // usa MainDbStrCon y LocalDbStrCon del config.json
+
+
+                // Timer automático
+                _syncTimer = new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = TimeSpan.FromMinutes(timerMinutes)
+                };
+                _syncTimer.Tick += SyncTimer_Tick;
+                _syncTimer.Start();
+
+                AppendLog($"[Sync] Initialized. Auto-sync every {timerMinutes} minutes.");
+                UpdateSyncStatusUI("🟢 Sync: Active");
+
+                // PUSH inicial (por si quedaron pendientes de sesión anterior)
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(3000); // esperar 3s a que arranque todo
+                    await AutoSyncAsync();
+                });
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[Sync] Initialization failed: {ex.Message}");
+                UpdateSyncStatusUI("⚠️ Sync: Error");
+            }
+        }
+
+        // ============================================================================
+        // SYNC TIMER TICK
+        // ============================================================================
+        // Se ejecuta automáticamente cada X minutos (configurado en settings).
+        // Revisa si hay transacciones pendientes y las sincroniza.
+        // ============================================================================
+
+        private async void SyncTimer_Tick(object? sender, EventArgs e)
+        {
+            await AutoSyncAsync();
+        }
+
+        private async Task AutoSyncAsync()
+        {
+            if (_syncService == null || _syncInProgress)
+                return;
+
+            _syncInProgress = true;
+
+            try
+            {
+                var queueInfo = await _syncService.GetQueueInfoAsync();
+
+                if (queueInfo.Status == QueueStatus.DIRTY && queueInfo.TotalPending > 0)
+                {
+                    AppendLog($"[Sync] Auto-sync started. Pending: {queueInfo.TotalPending}");
+                    UpdateSyncStatusUI($"🔄 Syncing {queueInfo.TotalPending}...");
+
+                    var result = await _syncService.PushTransactionsAsync();
+
+                    if (result.Success)
+                    {
+                        AppendLog($"[Sync] ✅ Success. Synced: {result.RecordsSynced}");
+                        UpdateSyncStatusUI("🟢 Sync: Active");
+                    }
+                    else
+                    {
+                        AppendLog($"[Sync] ❌ Failed. {result.Message}");
+                        UpdateSyncStatusUI($"⚠️ Sync: {queueInfo.TotalPending} pending");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[Sync] Auto-sync error: {ex.Message}");
+                UpdateSyncStatusUI("⚠️ Sync: Error");
+            }
+            finally
+            {
+                _syncInProgress = false;
+            }
+        }
+
+        // ============================================================================
+        // SYNC STATUS UI
+        // ============================================================================
+        // Actualiza el indicador visual en el StatusBar.
+        // ============================================================================
+
+        private void UpdateSyncStatusUI(string status)
+        {
+            try
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    if (SyncStatusText != null)
+                        SyncStatusText.Text = status;
+                });
+            }
+            catch
+            {
+                // No romper la app si falla UI
+            }
+        }
         private void WarnAndLog(string kind, string userMessage, string? detail = null, string? raw = null)
         {
             _ = (_logger?.LogEventAsync(kind, rawLine: raw, note: detail ?? userMessage)) ?? Task.CompletedTask;
@@ -1848,39 +2304,69 @@ namespace TruckScale.Pos
         }
         private async Task LoadProductsAsync()
         {
-            if (!await TryLoadProductsAsync(GetPrimaryConn()))
+            // Limpieza previa
+            _productOptions.Clear();
+            _products.Clear();
+
+            // Leemos config.json (cadenas ya desencriptadas)
+            ConfigManager.Load();
+            var primaryConn = ConfigManager.Current.MainDbStrCon;
+            var localConn = ConfigManager.Current.LocalDbStrCon;
+
+            bool loaded = false;
+
+            // 1) Intentar BD ONLINE
+            if (!string.IsNullOrWhiteSpace(primaryConn))
             {
-                AppendLog("[Products] Primary DB failed, trying local…");
-                if (!await TryLoadProductsAsync(GetLocalConn()))
-                {
-                    AppendLog("[Products] Local DB failed. Products unavailable.");
-                    WeighToggle.IsEnabled = false;
-                    ReweighToggle.IsEnabled = false;
-                    lblEstado.Content = "Products unavailable (DB offline).";
-                    return;
-                }
+                AppendLog("[Products] Trying PRIMARY DB for products...");
+                loaded = await TryLoadProductsAsync(primaryConn);
             }
-            //ProductoRegCombo.ItemsSource = _productOptions;
-            //ProductoRegCombo.DisplayMemberPath = nameof(ProductInfo.Name);
-            //ProductoRegCombo.SelectedIndex = -1;
+
+            // 2) Si no se cargó nada o falló, intentar BD LOCAL
+            if (!loaded && !string.IsNullOrWhiteSpace(localConn))
+            {
+                AppendLog("[Products] PRIMARY DB failed/empty, trying LOCAL...");
+                loaded = await TryLoadProductsAsync(localConn);
+            }
+
+            // 3) Si ninguna funcionó, deshabilitamos botones
+            if (!loaded)
+            {
+                AppendLog("[Products] Both PRIMARY and LOCAL failed. Products unavailable.");
+                WeighToggle.IsEnabled = false;
+                ReweighToggle.IsEnabled = false;
+                lblEstado.Content = "Products unavailable (DB offline).";
+                return;
+            }
+
+            // Productos cargados OK
+            WeighToggle.IsEnabled = true;
+            ReweighToggle.IsEnabled = true;
             UpdateProductButtonsEnabled();
         }
 
         private async Task<bool> TryLoadProductsAsync(string connStr)
         {
+            if (string.IsNullOrWhiteSpace(connStr))
+                return false;
+
             try
             {
                 using var conn = new MySqlConnection(connStr);
                 await conn.OpenAsync();
 
-                const string SQL = @"SELECT product_id, code, name, default_price, currency 
-                                     FROM products 
-                                     WHERE is_active = 1 AND code IN ('WEIGH','REWEIGH');";
+                const string SQL = @"
+            SELECT product_id, code, name, default_price, currency 
+            FROM products 
+            WHERE is_active = 1 
+              AND code IN ('WEIGH','REWEIGH');";
 
                 using var cmd = new MySqlCommand(SQL, conn);
                 using var rd = await cmd.ExecuteReaderAsync();
 
                 _productOptions.Clear();
+                // opcional: también limpiar el diccionario
+                _products.Clear();
 
                 var found = 0;
                 while (await rd.ReadAsync())
@@ -1893,9 +2379,9 @@ namespace TruckScale.Pos
                         Price = rd.GetDecimal("default_price"),
                         Currency = rd.GetString("currency")
                     };
+
                     _products[p.Code] = p;
                     _productOptions.Add(p);
-
                     found++;
                 }
 
@@ -1908,6 +2394,7 @@ namespace TruckScale.Pos
                 return false;
             }
         }
+
 
         private void SetProduct(int id, string code, string name, decimal price, string currency = "USD")
         {
@@ -1983,9 +2470,9 @@ namespace TruckScale.Pos
         private async Task<string?> TryGetLastWeightUuidAsync(string connStr)
         {
             const string SQL = @"SELECT uuid_weight 
-                                 FROM scale_session_axles 
-                                 WHERE captured_local >= CURDATE() 
-                                 ORDER BY id DESC LIMIT 1;";
+                                     FROM scale_session_axles 
+                                     WHERE captured_local >= CURDATE() 
+                                     ORDER BY id DESC LIMIT 1;";
 
             try
             {
@@ -2046,46 +2533,46 @@ namespace TruckScale.Pos
         string plates,
         string trailerNumber,
         string tractorNumber,
-        int? driverProductId,      
+        int? driverProductId,
         string identifyBy,
         string matchKey)
         {
             string connStr = GetConnectionString();
 
             const string SQL = @"
-            INSERT INTO sale_driver_info
-                (sale_uid,
-                 account_number, account_name, account_address, account_country, account_state,
-                 driver_first_name, driver_last_name, driver_phone,
-                 license_number, license_state,
-                 vehicle_plates,
-                 trailer_number, tractor_number, driver_product_id,
-                 identify_by, match_key, created_at)
-            VALUES
-                (@sale_uid,
-                 @acc_no, @acc_name, @acc_addr, @acc_country, @acc_state,
-                 @first, @last, @phone,
-                 @lic, @lic_state,
-                 @plates,
-                 @trailer, @tractor, @product_id,
-                 @idby, @mkey, NOW())
-            ON DUPLICATE KEY UPDATE
-                sale_uid          = COALESCE(sale_driver_info.sale_uid, VALUES(sale_uid)),
-                account_number    = IF(sale_driver_info.sale_uid IS NULL, VALUES(account_number),   sale_driver_info.account_number),
-                account_name      = IF(sale_driver_info.sale_uid IS NULL, VALUES(account_name),     sale_driver_info.account_name),
-                account_address   = IF(sale_driver_info.sale_uid IS NULL, VALUES(account_address),  sale_driver_info.account_address),
-                account_country   = IF(sale_driver_info.sale_uid IS NULL, VALUES(account_country),  sale_driver_info.account_country),
-                account_state     = IF(sale_driver_info.sale_uid IS NULL, VALUES(account_state),    sale_driver_info.account_state),
-                driver_first_name = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_first_name),sale_driver_info.driver_first_name),
-                driver_last_name  = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_last_name), sale_driver_info.driver_last_name),
-                driver_phone      = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_phone),     sale_driver_info.driver_phone),
-                license_number    = IF(sale_driver_info.sale_uid IS NULL, VALUES(license_number),   sale_driver_info.license_number),
-                license_state     = IF(sale_driver_info.sale_uid IS NULL, VALUES(license_state),    sale_driver_info.license_state),
-                vehicle_plates    = IF(sale_driver_info.sale_uid IS NULL, VALUES(vehicle_plates),   sale_driver_info.vehicle_plates),
-                trailer_number    = IF(sale_driver_info.sale_uid IS NULL, VALUES(trailer_number),   sale_driver_info.trailer_number),
-                tractor_number    = IF(sale_driver_info.sale_uid IS NULL, VALUES(tractor_number),   sale_driver_info.tractor_number),
-                driver_product_id =
-                    IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_product_id), sale_driver_info.driver_product_id)";
+                INSERT INTO sale_driver_info
+                    (sale_uid,
+                     account_number, account_name, account_address, account_country, account_state,
+                     driver_first_name, driver_last_name, driver_phone,
+                     license_number, license_state,
+                     vehicle_plates,
+                     trailer_number, tractor_number, driver_product_id,
+                     identify_by, match_key, created_at)
+                VALUES
+                    (@sale_uid,
+                     @acc_no, @acc_name, @acc_addr, @acc_country, @acc_state,
+                     @first, @last, @phone,
+                     @lic, @lic_state,
+                     @plates,
+                     @trailer, @tractor, @product_id,
+                     @idby, @mkey, NOW())
+                ON DUPLICATE KEY UPDATE
+                    sale_uid          = COALESCE(sale_driver_info.sale_uid, VALUES(sale_uid)),
+                    account_number    = IF(sale_driver_info.sale_uid IS NULL, VALUES(account_number),   sale_driver_info.account_number),
+                    account_name      = IF(sale_driver_info.sale_uid IS NULL, VALUES(account_name),     sale_driver_info.account_name),
+                    account_address   = IF(sale_driver_info.sale_uid IS NULL, VALUES(account_address),  sale_driver_info.account_address),
+                    account_country   = IF(sale_driver_info.sale_uid IS NULL, VALUES(account_country),  sale_driver_info.account_country),
+                    account_state     = IF(sale_driver_info.sale_uid IS NULL, VALUES(account_state),    sale_driver_info.account_state),
+                    driver_first_name = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_first_name),sale_driver_info.driver_first_name),
+                    driver_last_name  = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_last_name), sale_driver_info.driver_last_name),
+                    driver_phone      = IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_phone),     sale_driver_info.driver_phone),
+                    license_number    = IF(sale_driver_info.sale_uid IS NULL, VALUES(license_number),   sale_driver_info.license_number),
+                    license_state     = IF(sale_driver_info.sale_uid IS NULL, VALUES(license_state),    sale_driver_info.license_state),
+                    vehicle_plates    = IF(sale_driver_info.sale_uid IS NULL, VALUES(vehicle_plates),   sale_driver_info.vehicle_plates),
+                    trailer_number    = IF(sale_driver_info.sale_uid IS NULL, VALUES(trailer_number),   sale_driver_info.trailer_number),
+                    tractor_number    = IF(sale_driver_info.sale_uid IS NULL, VALUES(tractor_number),   sale_driver_info.tractor_number),
+                    driver_product_id =
+                        IF(sale_driver_info.sale_uid IS NULL, VALUES(driver_product_id), sale_driver_info.driver_product_id)";
 
 
             await using var conn = new MySqlConnection(connStr);
@@ -2103,7 +2590,7 @@ namespace TruckScale.Pos
 
             cmd.Parameters.AddWithValue("@first", firstName);
             cmd.Parameters.AddWithValue("@last", lastName);
-       
+
             cmd.Parameters.AddWithValue("@phone",
                 string.IsNullOrWhiteSpace(driverPhone) ? (object)DBNull.Value : driverPhone);
             cmd.Parameters.AddWithValue("@lic", licenseNo);
@@ -2133,54 +2620,54 @@ namespace TruckScale.Pos
         {
             // 1) Flujo normal: intentar enlazar driver capturado por weight_uuid
             const string SQL_UPDATE = @"
-            UPDATE sale_driver_info 
-               SET sale_uid = @sale 
-             WHERE identify_by = 'weight_uuid' 
-               AND match_key   = @uuid;";
+                UPDATE sale_driver_info 
+                   SET sale_uid = @sale 
+                 WHERE identify_by = 'weight_uuid' 
+                   AND match_key   = @uuid;";
 
             // 2) Fallback REWEIGH: clonar el chofer de la venta original (_reweighSourceSaleUid)
             const string SQL_CLONE_FROM_SOURCE = @"
-            INSERT INTO sale_driver_info (
-                sale_uid,
-                account_number,
-                account_name,
-                account_address,
-                account_country,
-                account_state,
-                driver_product_id,
-                driver_first_name,
-                driver_last_name,
-                driver_phone,
-                license_number,
-                license_state,
-                vehicle_plates,
-                trailer_number,
-                tractor_number,
-                identify_by,
-                match_key
-            )
-            SELECT
-                @new_sale_uid,
-                account_number,
-                account_name,
-                account_address,
-                account_country,
-                account_state,
-                driver_product_id,
-                driver_first_name,
-                driver_last_name,
-                driver_phone,
-                license_number,
-                license_state,
-                vehicle_plates,
-                trailer_number,
-                tractor_number,
-                'weight_uuid',
-                @weight_uuid
-            FROM sale_driver_info
-            WHERE sale_uid = @source_sale_uid
-            ORDER BY id_driver_info DESC
-            LIMIT 1;";
+                INSERT INTO sale_driver_info (
+                    sale_uid,
+                    account_number,
+                    account_name,
+                    account_address,
+                    account_country,
+                    account_state,
+                    driver_product_id,
+                    driver_first_name,
+                    driver_last_name,
+                    driver_phone,
+                    license_number,
+                    license_state,
+                    vehicle_plates,
+                    trailer_number,
+                    tractor_number,
+                    identify_by,
+                    match_key
+                )
+                SELECT
+                    @new_sale_uid,
+                    account_number,
+                    account_name,
+                    account_address,
+                    account_country,
+                    account_state,
+                    driver_product_id,
+                    driver_first_name,
+                    driver_last_name,
+                    driver_phone,
+                    license_number,
+                    license_state,
+                    vehicle_plates,
+                    trailer_number,
+                    tractor_number,
+                    'weight_uuid',
+                    @weight_uuid
+                FROM sale_driver_info
+                WHERE sale_uid = @source_sale_uid
+                ORDER BY id_driver_info DESC
+                LIMIT 1;";
 
             try
             {
@@ -2234,7 +2721,7 @@ namespace TruckScale.Pos
         }
 
         /*
-             
+
                 COALESCE(
                     sdi.product_description,
                     CONCAT(dp.NAME, ' (', dp.code, ')'),
@@ -2243,32 +2730,35 @@ namespace TruckScale.Pos
          */
         private async Task<DriverInfo?> GetDriverByWeightUuidAsync(string uuid)
         {
-            const string SQL = @"
-            SELECT
-                sdi.id_driver_info,
-                sdi.driver_first_name,
-                sdi.driver_last_name,
-                sdi.account_name,
-                sdi.account_address,
-                sdi.account_country,
-                sdi.account_state,
-                sdi.driver_product_id,
-                dp.name AS product_description,
-                sdi.license_number,
-                sdi.license_state,
-                sdi.vehicle_plates,
-                sdi.trailer_number,
-                sdi.tractor_number
-            FROM sale_driver_info sdi
-            LEFT JOIN driver_products dp
-                ON dp.product_id = sdi.driver_product_id
-            WHERE sdi.identify_by = 'weight_uuid'
-                AND sdi.match_key   = @uuid
-            ORDER BY sdi.id_driver_info DESC
-            LIMIT 1;";
+            const string SQL = @"SELECT
+                    sdi.id_driver_info,
+                    sdi.driver_first_name,
+                    sdi.driver_last_name,
+                    sdi.account_name,
+                    sdi.account_address,
+                    sdi.account_country,
+                    sdi.account_state,
+                    sdi.driver_product_id,
+                    dp.name AS product_description,
+                    sdi.license_number,
+                    sdi.license_state,
+                    sdi.vehicle_plates,
+                    sdi.trailer_number,
+                    sdi.tractor_number
+                FROM sale_driver_info sdi
+                LEFT JOIN driver_products dp
+                    ON dp.product_id = sdi.driver_product_id
+                WHERE sdi.identify_by = 'weight_uuid'
+                  AND sdi.match_key   = @uuid
+                ORDER BY sdi.id_driver_info DESC
+                LIMIT 1;";
 
+            // Helper: ejecuta el SELECT en la conexión indicada
             async Task<DriverInfo?> TryOneAsync(string connStr)
             {
+                if (string.IsNullOrWhiteSpace(connStr))
+                    return null;
+
                 await using var conn = new MySqlConnection(connStr);
                 await conn.OpenAsync();
 
@@ -2277,13 +2767,14 @@ namespace TruckScale.Pos
 
                 await using var rd = await cmd.ExecuteReaderAsync();
                 if (!await rd.ReadAsync())
-                    return null;
+                    return null; // conexión OK pero no se encontró registro
 
                 return new DriverInfo
                 {
                     Id = rd.GetInt64("id_driver_info"),
                     First = rd.GetString("driver_first_name"),
                     Last = rd.GetString("driver_last_name"),
+
                     AccountName = rd.IsDBNull("account_name") ? "" : rd.GetString("account_name"),
                     AccountAddress = rd.IsDBNull("account_address") ? "" : rd.GetString("account_address"),
                     AccountCountry = rd.IsDBNull("account_country") ? "" : rd.GetString("account_country"),
@@ -2293,7 +2784,6 @@ namespace TruckScale.Pos
                         ? (int?)null
                         : rd.GetInt32("driver_product_id"),
 
-                    // ahora sí alimentamos la descripción que usa la tarjeta
                     ProductDescription = rd.IsDBNull("product_description")
                         ? ""
                         : rd.GetString("product_description"),
@@ -2306,16 +2796,55 @@ namespace TruckScale.Pos
                 };
             }
 
-            try
+            // Leemos las cadenas desde el config actual
+            ConfigManager.Load();
+            var localConn = ConfigManager.Current.LocalDbStrCon;
+            var primaryConn = ConfigManager.Current.MainDbStrCon;
+
+            Exception? lastEx = null;
+
+            // 1) Primero intentar en BD LOCAL (ahí se insertó cuando esta offline)
+            if (!string.IsNullOrWhiteSpace(localConn))
             {
-                return await TryOneAsync(GetPrimaryConn());
+                try
+                {
+                    AppendLog("[Driver] Looking up driver by weight_uuid in LOCAL DB…");
+                    var localResult = await TryOneAsync(localConn);
+                    if (localResult != null)
+                        return localResult;
+                }
+                catch (Exception ex)
+                {
+                    lastEx = ex;
+                    AppendLog("[Driver] Local DB failed in GetDriverByWeightUuidAsync: " + ex.Message);
+                }
             }
-            catch (Exception ex)
+
+            // 2) Si no se encontró o falló local, intentar en BD PRIMARIA
+            if (!string.IsNullOrWhiteSpace(primaryConn))
             {
-                AppendLog("[Driver] Primary DB failed, trying local… " + ex.Message);
-                return await TryOneAsync(GetLocalConn());
+                try
+                {
+                    AppendLog("[Driver] Looking up driver by weight_uuid in PRIMARY DB…");
+                    var primaryResult = await TryOneAsync(primaryConn);
+                    if (primaryResult != null)
+                        return primaryResult;
+                }
+                catch (Exception ex)
+                {
+                    lastEx = ex;
+                    AppendLog("[Driver] Primary DB failed in GetDriverByWeightUuidAsync: " + ex.Message);
+                }
             }
+
+            // 3) Si ambas conexiones tronaron, relanzamos el último error
+            if (lastEx != null)
+                throw lastEx;
+
+            // Conexiones OK pero no hubo registro en ninguna
+            return null;
         }
+
 
 
 
@@ -2427,9 +2956,9 @@ namespace TruckScale.Pos
                 await conn.OpenAsync();
 
                 const string SQL = @"SELECT vehicle_type_id, code, name  
-                                     FROM vehicle_types  
-                                     WHERE is_active = 1 
-                                     ORDER BY vehicle_type_id";
+                                         FROM vehicle_types  
+                                         WHERE is_active = 1 
+                                         ORDER BY vehicle_type_id";
 
                 using var cmd = new MySqlCommand(SQL, conn);
                 using var rd = await cmd.ExecuteReaderAsync();
@@ -2529,17 +3058,25 @@ namespace TruckScale.Pos
 
         private async Task LoadPaymentMethodsAsync()
         {
+            // Siempre arrancamos limpio
+            PaymentMethods.Clear();
+
+            // Helper: intenta cargar métodos desde UNA sola conexión
             async Task<bool> TryOneAsync(string connStr)
             {
+                if (string.IsNullOrWhiteSpace(connStr))
+                    return false;
+
                 try
                 {
                     using var conn = new MySqlConnection(connStr);
                     await conn.OpenAsync();
 
-                    const string SQL = @"SELECT method_id, code, name, is_cash, allow_reference, is_active 
-                                         FROM payment_methods 
-                                         WHERE is_active = 1 
-                                         ORDER BY method_id;";
+                    const string SQL = @"
+                SELECT method_id, code, name, is_cash, allow_reference, is_active 
+                FROM payment_methods 
+                WHERE is_active = 1 
+                ORDER BY method_id;";
 
                     using var cmd = new MySqlCommand(SQL, conn);
                     using var rd = await cmd.ExecuteReaderAsync();
@@ -2548,6 +3085,7 @@ namespace TruckScale.Pos
                     while (await rd.ReadAsync())
                     {
                         var code = rd.GetString("code");
+
                         PaymentMethods.Add(new PaymentMethod
                         {
                             Id = rd.GetInt32("method_id"),
@@ -2557,10 +3095,11 @@ namespace TruckScale.Pos
                             AllowReference = rd.GetBoolean("allow_reference"),
                             IsActive = rd.GetBoolean("is_active"),
                             IconKind = _methodIconMap.TryGetValue(code, out var kind)
-                                ? kind
-                                : PackIconKind.CashRegister
+                                                ? kind
+                                                : PackIconKind.CashRegister
                         });
                     }
+
                     AppendLog($"[Payments] Loaded {PaymentMethods.Count} method(s) from {conn.DataSource}.");
                     return PaymentMethods.Count > 0;
                 }
@@ -2571,17 +3110,32 @@ namespace TruckScale.Pos
                 }
             }
 
-            if (!await TryOneAsync(GetPrimaryConn()))
+            // Leemos las cadenas desde config.json (ya desencriptadas)
+            ConfigManager.Load();
+            var primaryConn = ConfigManager.Current.MainDbStrCon;
+            var localConn = ConfigManager.Current.LocalDbStrCon;
+
+            bool loaded = false;
+
+            // 1) Intentar BD ONLINE
+            if (!string.IsNullOrWhiteSpace(primaryConn))
             {
-                AppendLog("[Payments] Primary DB failed, trying local…");
-                await TryOneAsync(GetLocalConn());
+                AppendLog("[Payments] Trying PRIMARY DB for payment_methods...");
+                loaded = await TryOneAsync(primaryConn);
             }
 
+            // 2) Si no cargó nada o falló, ir a BD LOCAL
+            if (!loaded && !string.IsNullOrWhiteSpace(localConn))
+            {
+                AppendLog("[Payments] PRIMARY DB failed or returned 0, trying LOCAL...");
+                loaded = await TryOneAsync(localConn);
+            }
 
-            // Al terminar de cargar métodos, dejamos TODO sin seleccionar:
+            // Si ambas fallan, PaymentMethods se queda vacío, pero la app no truena.
+            // Dejamos todo sin seleccionar.
             SelectPaymentByCode(null);
-
         }
+
 
         private void SelectPaymentByCode(string? code)
         {
@@ -2666,6 +3220,7 @@ namespace TruckScale.Pos
             var obj = await cmd.ExecuteScalarAsync();
             return (obj == null || obj == DBNull.Value) ? 1 : Convert.ToInt32(obj);
         }
+
         const int STATUS_SALE_OPEN = 1;
         const int STATUS_SALE_COMPLETED = 2; // SALES.COMPLETED
         const int STATUS_SALE_CANCELLED = 3;
@@ -2674,197 +3229,266 @@ namespace TruckScale.Pos
 
         private async Task<string> SaveSaleAsync()
         {
-            // TODO OFFLINE:
-            //  - En una fase futura, envolver este método en un try/catch
-            //    y, si falla la conexión principal (GetConnectionString()),
-            //    repetir los mismos INSERTs usando GetLocalConn(),
-            //    igual que se hace en InsertDriverInfoWithFallbackAsync.
-            //  - Por ahora sólo se guarda en la BD principal.
-
+            // Validaciones previas
             if (!_driverLinked)
                 throw new InvalidOperationException("Please register the driver before completing the sale.");
 
             if (_selectedProductId <= 0)
                 throw new InvalidOperationException("No service selected. Please select a service before completing the sale.");
 
-
             var (subtotal, tax, total) = ComputeTotals();
-            var recibido = SumReceived();   
-            if (recibido < total) throw new InvalidOperationException("Received amount is less than order total.");
-             
+            var recibido = SumReceived();
+            if (recibido < total)
+                throw new InvalidOperationException("Received amount is less than order total.");
+
             var saleUid = Guid.NewGuid().ToString();
 
-           
-            await using var conn = new MySqlConnection(GetConnectionString());
-            await conn.OpenAsync();
-            await using var tx = await conn.BeginTransactionAsync();
+            // ==== Selección de conexión: MAIN → LOCAL (offline) ====
+            var mainConn = GetPrimaryConn();  // normalmente: BD ONLINE
+            var localConn = ConfigManager.Current.LocalDbStrCon;    // normalmente: BD LOCAL (offline cache)
+
+            if (string.IsNullOrWhiteSpace(mainConn) && string.IsNullOrWhiteSpace(localConn))
+                throw new InvalidOperationException("No database connection configured. Please contact IT.");
+
+            MySqlConnection conn;
+            bool usedLocal = false;
 
             try
             {
-                int siteId = _siteId > 0 ? _siteId : await GetDefaultSiteIdAsync(conn, (MySqlTransaction)tx);
-                int terminalId = _terminalId > 0 ? _terminalId : await GetDefaultTerminalIdAsync(conn, (MySqlTransaction)tx);
-                int operatorId = GetCurrentOperatorId();
+                if (string.IsNullOrWhiteSpace(mainConn))
+                    throw new InvalidOperationException("MAIN_DB connection string is empty.");
 
-                const string SQL_SALE = @"INSERT INTO sales
-                 (sale_uid, site_id, terminal_id, operator_id, sale_status_id, currency,
-                  subtotal, tax_total, total, reweigh_of_sale_id, created_at)
-                 VALUES
-                 (@uid, @site, @term, @op, @st, @ccy,
-                  @sub, @tax, @tot, @reweigh_of_sale_id, NOW());";
+                conn = new MySqlConnection(mainConn);
+                await conn.OpenAsync();
+                AppendLog("[SaveSale] Using MAIN_DB.");
+            }
+            catch (Exception exMain)
+            {
+                AppendLog($"[SaveSale] MAIN_DB failed: {exMain.Message}. Trying LOCAL_DB...");
 
-                await using (var cmd = new MySqlCommand(SQL_SALE, conn, (MySqlTransaction)tx))
-                {
-                    cmd.Parameters.AddWithValue("@uid", saleUid);
-                    cmd.Parameters.AddWithValue("@site", siteId);
-                    cmd.Parameters.AddWithValue("@term", terminalId);
-                    cmd.Parameters.AddWithValue("@op", operatorId);
-                    cmd.Parameters.AddWithValue("@st", STATUS_SALE_COMPLETED);
-                    cmd.Parameters.AddWithValue("@ccy", _selectedCurrency ?? "USD");
-                    cmd.Parameters.AddWithValue("@sub", subtotal);
-                    cmd.Parameters.AddWithValue("@tax", tax);
-                    cmd.Parameters.AddWithValue("@tot", total);
-                    cmd.Parameters.AddWithValue("@reweigh_of_sale_id",
-                        (_selectedProductCode != null &&
-                         string.Equals(_selectedProductCode, "REWEIGH", StringComparison.OrdinalIgnoreCase) &&
-                         _reweighSourceSaleId.HasValue)
-                            ? _reweighSourceSaleId.Value
-                            : (object)DBNull.Value);
-                    await cmd.ExecuteNonQueryAsync();
-                }
-
-                var qty = 1m;
-                var unit = "EA";
-                var lineSubtotal = _selectedProductPrice * qty;
-                var discount = 0m;
-                var taxable = 0;
-                var taxRatePct = 0m;
-                var taxAmount = 0m;
-                var lineTotal = lineSubtotal - discount + taxAmount;
-
-                const string SQL_LINE = @"INSERT INTO sale_lines
-                                            (sale_uid, seq, product_id, description, qty, unit, unit_price,
-                                             line_subtotal, discount_amount, taxable, tax_rate_percent, tax_amount, line_total)
-                                        VALUES
-                                            (@uid, @seq, @pid, @desc, @qty, @unit, @price,
-                                             @lsub, @disc, @taxable, @trate, @tamt, @ltot);";
-
-                await using (var cmd = new MySqlCommand(SQL_LINE, conn, (MySqlTransaction)tx))
-                {
-                    cmd.Parameters.AddWithValue("@uid", saleUid);
-                    cmd.Parameters.AddWithValue("@seq", 1);
-                    cmd.Parameters.AddWithValue("@pid", _selectedProductId);
-                    cmd.Parameters.AddWithValue("@desc", _selectedProductName ?? "Service");
-                    cmd.Parameters.AddWithValue("@qty", qty);
-                    cmd.Parameters.AddWithValue("@unit", unit);
-                    cmd.Parameters.AddWithValue("@price", _selectedProductPrice);
-                    cmd.Parameters.AddWithValue("@lsub", lineSubtotal);
-                    cmd.Parameters.AddWithValue("@disc", discount);
-                    cmd.Parameters.AddWithValue("@taxable", taxable);
-                    cmd.Parameters.AddWithValue("@trate", taxRatePct);
-                    cmd.Parameters.AddWithValue("@tamt", taxAmount);
-                    cmd.Parameters.AddWithValue("@ltot", lineTotal);
-                    await cmd.ExecuteNonQueryAsync();
-                }
-
-                const string SQL_PAY = @"INSERT INTO payments
-                                            (payment_uid, sale_uid, method_id, payment_status_id, amount, currency,
-                                             exchange_rate, reference_number, received_by, received_at)
-                                        VALUES
-                                            (@puid, @uid, @mid, @st, @amt, @ccy,
-                                             @rate, @ref, @rcvby, NOW());";
-
-                foreach (var p in _pagos)
-                {
-                    int? methodId = FindPaymentMethodIdByCode(p.Code);
-                    if (methodId == null)
-                        throw new InvalidOperationException($"Payment method '{p.Code}' not found/mapped.");
-
-                    await using var cmd = new MySqlCommand(SQL_PAY, conn, (MySqlTransaction)tx);
-                    cmd.Parameters.AddWithValue("@puid", Guid.NewGuid().ToString());
-                    cmd.Parameters.AddWithValue("@uid", saleUid);
-                    cmd.Parameters.AddWithValue("@mid", methodId.Value);
-                    cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
-                    cmd.Parameters.AddWithValue("@amt", p.Monto);
-                    cmd.Parameters.AddWithValue("@ccy", _selectedCurrency ?? "USD");
-                    cmd.Parameters.AddWithValue("@rate", 1m);
-                    cmd.Parameters.AddWithValue("@ref", (object?)p.Ref ?? DBNull.Value);
-                    cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
-                    await cmd.ExecuteNonQueryAsync();
-                }
+                if (string.IsNullOrWhiteSpace(localConn))
+                    throw new InvalidOperationException(
+                        "Failed to connect to MAIN_DB and LOCAL_DB is not configured.",
+                        exMain);
 
                 try
                 {
-                    if (!string.IsNullOrWhiteSpace(_currentWeightUuid))
-                        await LinkDriverToSaleAsync(conn, (MySqlTransaction)tx, _currentWeightUuid!, saleUid);
+                    conn = new MySqlConnection(localConn);
+                    await conn.OpenAsync();
+                    usedLocal = true;
+
+                    // Marcamos la cola local como “sucia” para que el sincronizador sepa que hay ventas que subir
+                    await DatabaseHelper.UpdateQueueStatusAsync(localConn, QueueStatus.DIRTY);
+                    UpdateSyncStatusUI("⚠ Offline mode – sale stored locally");
+                    AppendLog("[SaveSale] Using LOCAL_DB (offline mode).");
                 }
-                catch (Exception ex)
+                catch (Exception exLocal)
                 {
-                    throw new Exception(
-                        $"Error linking driver (weight_uuid='{_currentWeightUuid}', sale_uid='{saleUid}'). {ex.Message}", ex);
+                    throw new InvalidOperationException(
+                        $"Failed to connect to both MAIN_DB and LOCAL_DB. " +
+                        $"Main: {exMain.Message}. Local: {exLocal.Message}",
+                        exLocal);
                 }
-
-                var amountPaid = recibido;
-                var balanceDue = Math.Max(total - amountPaid, 0m);
-
-                const string SQL_SALE_UPDATE = @"UPDATE sales
-                                                    SET amount_paid = @paid,
-                                                        balance_due = @bal,
-                                                        occurred_at = COALESCE(occurred_at, NOW())
-                                                WHERE sale_uid = @uid;";
-
-                await using (var up = new MySqlCommand(SQL_SALE_UPDATE, conn, (MySqlTransaction)tx))
-                {
-                    up.Parameters.AddWithValue("@paid", amountPaid);
-                    up.Parameters.AddWithValue("@bal", balanceDue);
-                    up.Parameters.AddWithValue("@uid", saleUid);
-                    await up.ExecuteNonQueryAsync();
-                }
-
-                // ================== TICKET ==================
-                var ticketUid = Guid.NewGuid().ToString();
-                var ticketNumber = await GenerateTicketNumberAsync(conn, (MySqlTransaction)tx);
-
-                const string SQL_TICKET = @"INSERT INTO tickets
-                     (ticket_uid, sale_uid, ticket_status_id, ticket_number, reprint_count, printed_at)
-                     VALUES
-                     (@tuid, @suid, @st, @tnum, 0, NOW());";
-
-                await using (var tcmd = new MySqlCommand(SQL_TICKET, conn, (MySqlTransaction)tx))
-                {
-                    tcmd.Parameters.AddWithValue("@tuid", ticketUid);
-                    tcmd.Parameters.AddWithValue("@suid", saleUid);
-                    tcmd.Parameters.AddWithValue("@st", STATUS_TICKET_PRINTED);
-                    tcmd.Parameters.AddWithValue("@tnum", ticketNumber);
-                    await tcmd.ExecuteNonQueryAsync();
-                }
-
-                await tx.CommitAsync();
-
-                // Guardamos datos en memoria para impresión (TicketView)
-                _lastTicketUid = ticketUid;
-                _lastTicketNumber = ticketNumber;
-
-                // Moneda actual
-                var currency = _selectedCurrency ?? "USD";
-
-                // JSON para QR en memoria (para uso inmediato si lo necesitas)
-                _lastTicketQrJson = BuildTicketQrPayload(
-                    saleUid: saleUid,
-                    ticketUid: ticketUid,
-                    ticketNumber: ticketNumber,
-                    total: total,
-                    currency: currency,
-                    date: DateTime.Now   // aquí usamos la fecha actual
-                );
-
-                return saleUid;
             }
-            catch
+
+            await using (conn)
+            await using (var tx = await conn.BeginTransactionAsync())
             {
-                await tx.RollbackAsync();
-                throw;
+                try
+                {
+                    int siteId = _siteId > 0
+                        ? _siteId
+                        : await GetDefaultSiteIdAsync(conn, (MySqlTransaction)tx);
+
+                    int terminalId = _terminalId > 0
+                        ? _terminalId
+                        : await GetDefaultTerminalIdAsync(conn, (MySqlTransaction)tx);
+
+                    int operatorId = GetCurrentOperatorId();
+
+                    // ========== INSERT EN sales ==========
+                    const string SQL_SALE = @"INSERT INTO sales
+                  (sale_uid, site_id, terminal_id, operator_id, sale_status_id, currency,
+                   subtotal, tax_total, total, reweigh_of_sale_id, created_at)
+                  VALUES
+                  (@uid, @site, @term, @op, @st, @ccy,
+                   @sub, @tax, @tot, @reweigh_of_sale_id, NOW());";
+
+                    await using (var cmd = new MySqlCommand(SQL_SALE, conn, (MySqlTransaction)tx))
+                    {
+                        cmd.Parameters.AddWithValue("@uid", saleUid);
+                        cmd.Parameters.AddWithValue("@site", siteId);
+                        cmd.Parameters.AddWithValue("@term", terminalId);
+                        cmd.Parameters.AddWithValue("@op", operatorId);
+                        cmd.Parameters.AddWithValue("@st", STATUS_SALE_COMPLETED);
+                        cmd.Parameters.AddWithValue("@ccy", _selectedCurrency ?? "USD");
+                        cmd.Parameters.AddWithValue("@sub", subtotal);
+                        cmd.Parameters.AddWithValue("@tax", tax);
+                        cmd.Parameters.AddWithValue("@tot", total);
+
+                        //UG usamos el UID de la venta origen
+                        string? reweighSourceUid =
+                            _selectedProductCode != null
+                            && string.Equals(_selectedProductCode, "REWEIGH", StringComparison.OrdinalIgnoreCase)
+                            && !string.IsNullOrWhiteSpace(_reweighSourceSaleUid)
+                                ? _reweighSourceSaleUid
+                                : null;
+
+                        cmd.Parameters.AddWithValue("@reweigh_of_sale_id",
+                            (object?)reweighSourceUid ?? DBNull.Value);
+
+                        //cmd.Parameters.AddWithValue("@reweigh_of_sale_id",
+                        //    (_selectedProductCode != null &&
+                        //     string.Equals(_selectedProductCode, "REWEIGH", StringComparison.OrdinalIgnoreCase) &&
+                        //     _reweighSourceSaleId.HasValue)
+                        //        ? _reweighSourceSaleId.Value
+                        //        : (object)DBNull.Value);
+
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+
+                    // ========== INSERT EN sale_lines ==========
+                    var qty = 1m;
+                    var unit = "EA";
+                    var lineSubtotal = _selectedProductPrice * qty;
+                    var discount = 0m;
+                    var taxable = 0;
+                    var taxRatePct = 0m;
+                    var taxAmount = 0m;
+                    var lineTotal = lineSubtotal - discount + taxAmount;
+
+                    const string SQL_LINE = @"INSERT INTO sale_lines
+                        (sale_uid, seq, product_id, description, qty, unit, unit_price,
+                         line_subtotal, discount_amount, taxable, tax_rate_percent, tax_amount, line_total)
+                    VALUES
+                        (@uid, @seq, @pid, @desc, @qty, @unit, @price,
+                         @lsub, @disc, @taxable, @trate, @tamt, @ltot);";
+
+                    await using (var cmd = new MySqlCommand(SQL_LINE, conn, (MySqlTransaction)tx))
+                    {
+                        cmd.Parameters.AddWithValue("@uid", saleUid);
+                        cmd.Parameters.AddWithValue("@seq", 1);
+                        cmd.Parameters.AddWithValue("@pid", _selectedProductId);
+                        cmd.Parameters.AddWithValue("@desc", _selectedProductName ?? "Service");
+                        cmd.Parameters.AddWithValue("@qty", qty);
+                        cmd.Parameters.AddWithValue("@unit", unit);
+                        cmd.Parameters.AddWithValue("@price", _selectedProductPrice);
+                        cmd.Parameters.AddWithValue("@lsub", lineSubtotal);
+                        cmd.Parameters.AddWithValue("@disc", discount);
+                        cmd.Parameters.AddWithValue("@taxable", taxable);
+                        cmd.Parameters.AddWithValue("@trate", taxRatePct);
+                        cmd.Parameters.AddWithValue("@tamt", taxAmount);
+                        cmd.Parameters.AddWithValue("@ltot", lineTotal);
+
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+
+                    // ========== INSERT EN payments ==========
+                    const string SQL_PAY = @"INSERT INTO payments
+                        (payment_uid, sale_uid, method_id, payment_status_id, amount, currency,
+                         exchange_rate, reference_number, received_by, received_at)
+                    VALUES
+                        (@puid, @uid, @mid, @st, @amt, @ccy,
+                         @rate, @ref, @rcvby, NOW());";
+
+                    foreach (var p in _pagos)
+                    {
+                        int? methodId = FindPaymentMethodIdByCode(p.Code);
+                        if (methodId == null)
+                            throw new InvalidOperationException($"Payment method '{p.Code}' not found/mapped.");
+
+                        await using var cmd = new MySqlCommand(SQL_PAY, conn, (MySqlTransaction)tx);
+                        cmd.Parameters.AddWithValue("@puid", Guid.NewGuid().ToString());
+                        cmd.Parameters.AddWithValue("@uid", saleUid);
+                        cmd.Parameters.AddWithValue("@mid", methodId.Value);
+                        cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
+                        cmd.Parameters.AddWithValue("@amt", p.Monto);
+                        cmd.Parameters.AddWithValue("@ccy", _selectedCurrency ?? "USD");
+                        cmd.Parameters.AddWithValue("@rate", 1m);
+                        cmd.Parameters.AddWithValue("@ref", (object?)p.Ref ?? DBNull.Value);
+                        cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
+
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+
+                    // ========== Link driver a la venta ==========
+                    try
+                    {
+                        if (!string.IsNullOrWhiteSpace(_currentWeightUuid))
+                            await LinkDriverToSaleAsync(conn, (MySqlTransaction)tx, _currentWeightUuid!, saleUid);
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new Exception(
+                            $"Error linking driver (weight_uuid='{_currentWeightUuid}', sale_uid='{saleUid}'). {ex.Message}", ex);
+                    }
+
+                    // ========== Actualizar montos en sales ==========
+                    var amountPaid = recibido;
+                    var balanceDue = Math.Max(total - amountPaid, 0m);
+
+                    const string SQL_SALE_UPDATE = @"UPDATE sales
+                        SET amount_paid = @paid,
+                            balance_due = @bal,
+                            occurred_at = COALESCE(occurred_at, NOW())
+                    WHERE sale_uid = @uid;";
+
+                    await using (var up = new MySqlCommand(SQL_SALE_UPDATE, conn, (MySqlTransaction)tx))
+                    {
+                        up.Parameters.AddWithValue("@paid", amountPaid);
+                        up.Parameters.AddWithValue("@bal", balanceDue);
+                        up.Parameters.AddWithValue("@uid", saleUid);
+                        await up.ExecuteNonQueryAsync();
+                    }
+
+                    // ========== Ticket ==========
+                    var ticketUid = Guid.NewGuid().ToString();
+                    var ticketNumber = await GenerateTicketNumberAsync(conn, (MySqlTransaction)tx);
+
+                    const string SQL_TICKET = @"INSERT INTO tickets
+                        (ticket_uid, sale_uid, ticket_status_id, ticket_number, reprint_count, printed_at)
+                    VALUES
+                        (@tuid, @suid, @st, @tnum, 0, NOW());";
+
+                    await using (var tcmd = new MySqlCommand(SQL_TICKET, conn, (MySqlTransaction)tx))
+                    {
+                        tcmd.Parameters.AddWithValue("@tuid", ticketUid);
+                        tcmd.Parameters.AddWithValue("@suid", saleUid);
+                        tcmd.Parameters.AddWithValue("@st", STATUS_TICKET_PRINTED);
+                        tcmd.Parameters.AddWithValue("@tnum", ticketNumber);
+                        await tcmd.ExecuteNonQueryAsync();
+                    }
+
+                    await tx.CommitAsync();
+
+                    // Guardar en memoria para impresión / QR
+                    _lastTicketUid = ticketUid;
+                    _lastTicketNumber = ticketNumber;
+
+                    var currency = _selectedCurrency ?? "USD";
+                    _lastTicketQrJson = BuildTicketQrPayload(
+                        saleUid: saleUid,
+                        ticketUid: ticketUid,
+                        ticketNumber: ticketNumber,
+                        total: total,
+                        currency: currency,
+                        date: DateTime.Now);
+
+                    if (usedLocal)
+                        AppendLog($"[SaveSale] Sale {saleUid} saved in LOCAL_DB (offline).");
+                    else
+                        AppendLog($"[SaveSale] Sale {saleUid} saved in MAIN_DB.");
+
+                    return saleUid;
+                }
+                catch
+                {
+                    await tx.RollbackAsync();
+                    throw;
+                }
             }
         }
+
 
         // Campos para señales de cierre
         private TaskCompletionSource<bool>? _saleDialogTcs;
@@ -3152,32 +3776,18 @@ namespace TruckScale.Pos
         {
             _accounts.Clear();
 
-            var connStr = GetConnectionString();
-            if (string.IsNullOrWhiteSpace(connStr))
-            {
-                AppendLog("[Accounts] Missing connection string.");
-                return;
-            }
+            const string SQL = @"SELECT id_customer,account_number, account_name, account_address, account_country, account_state FROM customers ORDER BY account_name;";
 
-            try
+            async Task<int> LoadFromAsync(string connStr, string sourceLabel)
             {
-                using var conn = new MySqlConnection(connStr);
+                var count = 0;
+
+                await using var conn = new MySqlConnection(connStr);
                 await conn.OpenAsync();
 
-                const string SQL = @"SELECT 
-                                    id_customer,
-                                    account_number,
-                                    account_name,
-                                    account_address,
-                                    account_country,
-                                    account_state
-                                FROM customers
-                                ORDER BY account_name;";
+                await using var cmd = new MySqlCommand(SQL, conn);
+                await using var rd = await cmd.ExecuteReaderAsync();
 
-                using var cmd = new MySqlCommand(SQL, conn);
-                using var rd = await cmd.ExecuteReaderAsync();
-
-                var count = 0;
                 while (await rd.ReadAsync())
                 {
                     var acc = new TransportAccount
@@ -3194,29 +3804,73 @@ namespace TruckScale.Pos
                     count++;
                 }
 
-                AppendLog($"[Accounts] Loaded {count} account(s) from {conn.DataSource}.");
+                AppendLog($"[Accounts] Loaded {count} account(s) from {sourceLabel}.");
+                return count;
+            }
 
-                // Opción CASH / sin cuenta al inicio
-                _accounts.Insert(0, new TransportAccount
+            ConfigManager.Load();
+            var primary = ConfigManager.Current.MainDbStrCon;
+            var local = ConfigManager.Current.LocalDbStrCon;
+
+            var totalLoaded = 0;
+
+            try
+            {
+                // 1) Intentar PRIMARY
+                if (!string.IsNullOrWhiteSpace(primary))
                 {
-                    IdCustomer = 0,
-                    AccountNumber = "",
-                    AccountName = "(Cash sale – no account)",
-                    AccountAddress = "",
-                    AccountCountry = "",
-                    AccountState = ""
-                });
+                    try
+                    {
+                        totalLoaded = await LoadFromAsync(primary, "PRIMARY");
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendLog($"[Accounts] PRIMARY failed, trying LOCAL… {ex.Message}");
+                        _accounts.Clear();
+                    }
+                }
 
-                // Refrescar combo
-                ClienteRegCombo.ItemsSource = null;
-                ClienteRegCombo.ItemsSource = _accounts;
-                ClienteRegCombo.DisplayMemberPath = nameof(TransportAccount.Display);
-                ClienteRegCombo.SelectedIndex = 0;
+                // 2) Si no cargó nada o no había PRIMARY, intentar LOCAL
+                if (totalLoaded == 0 && !string.IsNullOrWhiteSpace(local))
+                {
+                    try
+                    {
+                        totalLoaded = await LoadFromAsync(local, "LOCAL");
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendLog($"[Accounts] LOCAL failed: {ex.GetType().Name}: {ex.Message}");
+                        _accounts.Clear();
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(primary) && string.IsNullOrWhiteSpace(local))
+                {
+                    AppendLog("[Accounts] No PRIMARY/LOCAL connection string configured.");
+                }
             }
             catch (Exception ex)
             {
                 AppendLog($"[Accounts] {ex.GetType().Name}: {ex.Message}");
+                _accounts.Clear();
             }
+
+            // Siempre agregamos opción CASH / sin cuenta al inicio
+            _accounts.Insert(0, new TransportAccount
+            {
+                IdCustomer = 0,
+                AccountNumber = "",
+                AccountName = "(Cash sale – no account)",
+                AccountAddress = "",
+                AccountCountry = "",
+                AccountState = ""
+            });
+
+            // Refrescar combo
+            ClienteRegCombo.ItemsSource = null;
+            ClienteRegCombo.ItemsSource = _accounts;
+            ClienteRegCombo.DisplayMemberPath = nameof(TransportAccount.Display);
+            ClienteRegCombo.SelectedIndex = 0;
         }
 
         private void ClienteRegCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -3266,21 +3920,15 @@ namespace TruckScale.Pos
         {
             _licenseStates.Clear();
 
-            var connStr = GetConnectionString();
+            const string SQL = @"SELECT id_state, country_code, state_code, state_name FROM license_states WHERE is_active = 1 ORDER BY country_code, state_name;";
 
-            try
+            async Task LoadFromAsync(string connStr)
             {
-                using var conn = new MySqlConnection(connStr);
+                await using var conn = new MySqlConnection(connStr);
                 await conn.OpenAsync();
 
-                const string SQL = @"
-                SELECT id_state, country_code, state_code, state_name
-                FROM license_states
-                WHERE is_active = 1
-                ORDER BY country_code, state_name;";
-
-                using var cmd = new MySqlCommand(SQL, conn);
-                using var rd = await cmd.ExecuteReaderAsync();
+                await using var cmd = new MySqlCommand(SQL, conn);
+                await using var rd = await cmd.ExecuteReaderAsync();
 
                 while (await rd.ReadAsync())
                 {
@@ -3293,11 +3941,47 @@ namespace TruckScale.Pos
                     };
                     _licenseStates.Add(st);
                 }
+            }
 
-                AppendLog($"[LicenseStates] Loaded {_licenseStates.Count} state(s).");
+            ConfigManager.Load();
+            var primary = ConfigManager.Current.MainDbStrCon;
+            var local = ConfigManager.Current.LocalDbStrCon;
+
+            try
+            {
+                // 1) Intentar PRIMARY
+                if (!string.IsNullOrWhiteSpace(primary))
+                {
+                    try
+                    {
+                        await LoadFromAsync(primary);
+                        AppendLog($"[LicenseStates] Loaded {_licenseStates.Count} state(s) from PRIMARY.");
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendLog($"[LicenseStates] PRIMARY failed, trying LOCAL… {ex.Message}");
+                        _licenseStates.Clear();
+                    }
+                }
+
+                // 2) Si no cargó nada o no había PRIMARY, intentar LOCAL
+                if (_licenseStates.Count == 0 && !string.IsNullOrWhiteSpace(local))
+                {
+                    try
+                    {
+                        await LoadFromAsync(local);
+                        AppendLog($"[LicenseStates] Loaded {_licenseStates.Count} state(s) from LOCAL.");
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendLog($"[LicenseStates] LOCAL failed: {ex.GetType().Name}: {ex.Message}");
+                        _licenseStates.Clear();
+                    }
+                }
             }
             catch (Exception ex)
             {
+                // catch de seguridad por si algo raro se escapa
                 AppendLog($"[LicenseStates] {ex.GetType().Name}: {ex.Message}");
             }
 
@@ -3306,7 +3990,7 @@ namespace TruckScale.Pos
         }
         private async Task<DriverInfo?> GetDriverByPhoneAsync(string phoneDigits)
         {
-            const string SQL = @"SELECT
+                const string SQL = @"SELECT
                 sdi.id_driver_info,
                 sdi.driver_first_name,
                 sdi.driver_last_name,
@@ -3326,16 +4010,18 @@ namespace TruckScale.Pos
             ORDER BY sdi.id_driver_info DESC
             LIMIT 1;";
 
+            // Helper: intenta en una sola conexión
             async Task<DriverInfo?> TryOneAsync(string connStr)
             {
                 await using var conn = new MySqlConnection(connStr);
                 await conn.OpenAsync();
+
                 await using var cmd = new MySqlCommand(SQL, conn);
                 cmd.Parameters.AddWithValue("@phone", phoneDigits);
 
                 await using var rd = await cmd.ExecuteReaderAsync();
                 if (!await rd.ReadAsync())
-                    return null;
+                    return null; // sin registros, pero conexión OK
 
                 return new DriverInfo
                 {
@@ -3347,7 +4033,6 @@ namespace TruckScale.Pos
                     AccountAddress = rd.IsDBNull("account_address") ? "" : rd.GetString("account_address"),
                     AccountCountry = rd.IsDBNull("account_country") ? "" : rd.GetString("account_country"),
                     AccountState = rd.IsDBNull("account_state") ? "" : rd.GetString("account_state"),
-                  
                     License = rd.IsDBNull("license_number") ? "" : rd.GetString("license_number"),
                     LicenseStateCode = rd.IsDBNull("license_state") ? "" : rd.GetString("license_state"),
                     Plates = rd.IsDBNull("vehicle_plates") ? "" : rd.GetString("vehicle_plates"),
@@ -3357,15 +4042,47 @@ namespace TruckScale.Pos
                 };
             }
 
-            try
+            // === PRIMARY -> LOCAL ===
+            ConfigManager.Load();
+            var primary = ConfigManager.Current.MainDbStrCon;
+            var local = ConfigManager.Current.LocalDbStrCon;
+
+            Exception? lastConnEx = null;
+
+            // 1) Intentar PRIMARY (online)
+            if (!string.IsNullOrWhiteSpace(primary))
             {
-                return await TryOneAsync(GetPrimaryConn());
+                try
+                {
+                    return await TryOneAsync(primary);   // si hay 0 rows, regresa null y ya
+                }
+                catch (Exception ex)
+                {
+                    lastConnEx = ex;
+                    AppendLog("[Driver] Phone lookup PRIMARY failed, trying LOCAL… " + ex.Message);
+                }
             }
-            catch (Exception ex)
+
+            // 2) Intentar LOCAL
+            if (!string.IsNullOrWhiteSpace(local))
             {
-                AppendLog("[Driver] Phone lookup primary failed, trying local… " + ex.Message);
-                return await TryOneAsync(GetLocalConn());
+                try
+                {
+                    return await TryOneAsync(local);
+                }
+                catch (Exception ex)
+                {
+                    lastConnEx = ex;
+                    AppendLog("[Driver] Phone lookup LOCAL failed. " + ex.Message);
+                }
             }
+
+            // 3) Si fallaron las dos conexiones, lanza error (para que el UI muestre mensaje de BD)
+            if (lastConnEx != null)
+                throw lastConnEx;
+
+            // Si no hay conexiones configuradas o simplemente no hay registros
+            return null;
         }
 
         private void FillDriverFormFromInfo(DriverInfo d)
@@ -3416,7 +4133,7 @@ namespace TruckScale.Pos
                 var dp = _driverProducts.FirstOrDefault(x => x.Id == d.DriverProductId.Value);
                 if (dp != null)
                     ProductoRegText.SelectedItem = dp;
-            }            
+            }
         }
         private async void DriverPhoneText_LostFocus(object sender, RoutedEventArgs e)
         {
@@ -3474,185 +4191,259 @@ namespace TruckScale.Pos
         {
             _driverProducts.Clear();
 
-            async Task<bool> TryOneAsync(string connStr)
+            const string SQL = @"SELECT product_id, code, name FROM driver_products WHERE is_active = 1 ORDER BY name;";
+
+            async Task<int> TryOneAsync(string connStr, string sourceLabel)
             {
-                try
+                var loadedHere = 0;
+
+                await using var conn = new MySqlConnection(connStr);
+                await conn.OpenAsync();
+
+                await using var cmd = new MySqlCommand(SQL, conn);
+                await using var rd = await cmd.ExecuteReaderAsync();
+
+                while (await rd.ReadAsync())
                 {
-                    using var conn = new MySqlConnection(connStr);
-                    await conn.OpenAsync();
-
-                    const string SQL = @"SELECT product_id, code, name FROM driver_products WHERE is_active = 1 ORDER BY name;";
-
-                    using var cmd = new MySqlCommand(SQL, conn);
-                    using var rd = await cmd.ExecuteReaderAsync();
-
-                    while (await rd.ReadAsync())
+                    _driverProducts.Add(new DriverProduct
                     {
-                        _driverProducts.Add(new DriverProduct
-                        {
-                            Id = rd.GetInt32("product_id"),
-                            Code = rd.GetString("code"),
-                            Name = rd.GetString("name")
-                        });
-                    }
+                        Id = rd.GetInt32(rd.GetOrdinal("product_id")),
+                        Code = rd.GetString(rd.GetOrdinal("code")),
+                        Name = rd.GetString(rd.GetOrdinal("name"))
+                    });
 
-                    AppendLog($"[DrvProducts] Loaded {_driverProducts.Count} product(s).");
-                    return _driverProducts.Count > 0;
+                    loadedHere++;
                 }
-                catch (Exception ex)
-                {
-                    AppendLog($"[DrvProducts] {ex.GetType().Name}: {ex.Message}");
-                    return false;
-                }
+
+                AppendLog($"[DrvProducts] Loaded {loadedHere} product(s) from {sourceLabel}.");
+                return loadedHere;
             }
 
-            if (!await TryOneAsync(GetPrimaryConn()))
+            ConfigManager.Load();
+            var primary = ConfigManager.Current.MainDbStrCon;
+            var local = ConfigManager.Current.LocalDbStrCon;
+
+            var totalLoaded = 0;
+
+            try
             {
-                AppendLog("[DrvProducts] Primary DB failed, trying local…");
-                await TryOneAsync(GetLocalConn());
+                // 1) Intentar PRIMARY
+                if (!string.IsNullOrWhiteSpace(primary))
+                {
+                    try
+                    {
+                        totalLoaded = await TryOneAsync(primary, "PRIMARY");
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendLog($"[DrvProducts] PRIMARY failed, trying LOCAL… {ex.Message}");
+                        _driverProducts.Clear();
+                    }
+                }
+
+                // 2) Si no cargó nada o no hay PRIMARY, intentar LOCAL
+                if (totalLoaded == 0 && !string.IsNullOrWhiteSpace(local))
+                {
+                    try
+                    {
+                        totalLoaded = await TryOneAsync(local, "LOCAL");
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendLog($"[DrvProducts] LOCAL failed: {ex.GetType().Name}: {ex.Message}");
+                        _driverProducts.Clear();
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(primary) && string.IsNullOrWhiteSpace(local))
+                {
+                    AppendLog("[DrvProducts] No PRIMARY/LOCAL connection string configured.");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[DrvProducts] {ex.GetType().Name}: {ex.Message}");
+                _driverProducts.Clear();
+            }
+
+            if (totalLoaded == 0)
+            {
+                AppendLog("[DrvProducts] No products found in PRIMARY/LOCAL database.");
             }
 
             // Bind al ComboBox del modal
             ProductoRegText.ItemsSource = _driverProducts;
             ProductoRegText.DisplayMemberPath = nameof(DriverProduct.Display);
-            //ProductoRegText.SelectedIndex = -1;
+            //ProductoRegText.SelectedIndex = -1; // si luego quieres limpiar selección
         }
 
         private async void DoneButton_Click(object sender, RoutedEventArgs e)
         {
             await TryAutoCompleteSaleAsync();
         }
-      
 
-    private async Task<TicketData?> LoadTicketDataAsync(string saleUid)
-    {
-        const string SQL = @"SELECT
-            s.sale_uid,
-            s.total,
-            s.currency,
-            COALESCE(s.occurred_at, s.created_at) AS sale_date,
-            sl.description AS product_description,
-            p.code AS product_code,
 
-            sdi.driver_first_name,
-            sdi.driver_last_name,
-            sdi.license_number,
-            sdi.vehicle_plates,
-            sdi.tractor_number,
-            sdi.trailer_number,
-
-            ax.eje1,
-            ax.eje2,
-            ax.eje3,
-            ax.peso_total,
-
-            t.ticket_number,
-            t.ticket_uid
-        FROM sales s
-        JOIN sale_lines sl
-            ON sl.sale_uid = s.sale_uid AND sl.seq = 1
-        LEFT JOIN products p
-            ON p.product_id = sl.product_id
-        LEFT JOIN sale_driver_info sdi
-            ON sdi.sale_uid = s.sale_uid
-        LEFT JOIN scale_session_axles ax
-            ON ax.uuid_weight = sdi.match_key
-           AND sdi.identify_by = 'weight_uuid'
-        LEFT JOIN tickets t
-            ON t.sale_uid = s.sale_uid
-        WHERE s.sale_uid = @uid
-        ORDER BY t.ticket_id DESC
-        LIMIT 1;";
-
-        await using var conn = new MySqlConnector.MySqlConnection(GetConnectionString());
-        await conn.OpenAsync();
-
-        await using var cmd = new MySqlConnector.MySqlCommand(SQL, conn);
-        cmd.Parameters.AddWithValue("@uid", saleUid);
-
-        await using var rd = await cmd.ExecuteReaderAsync();
-        if (!await rd.ReadAsync())
-            return null;
-
-        var data = new TicketData();
-
-        // Transaction / ticket
-        data.Transaction = saleUid;
-
-        var rawTicketNumber = SafeGetString(rd, "ticket_number");
-        data.TicketNumber = string.IsNullOrWhiteSpace(rawTicketNumber)
-            ? saleUid
-            : rawTicketNumber;
-
-        // Fecha segura
-        var rawDate = rd.IsDBNull("sale_date")
-            ? DateTime.MinValue
-            : rd.GetDateTime("sale_date");
-
-        if (rawDate.Year < 2000) // por si vino 0000-00-00 o algo raro
-            rawDate = DateTime.Now;
-
-        data.Date = rawDate;
-
-        // Producto / fee
-        data.Product = SafeGetString(rd, "product_description");
-        data.WeighFee = rd.IsDBNull("total") ? 0m : rd.GetDecimal("total");
-
-        // Driver
-        var first = SafeGetString(rd, "driver_first_name");
-        var last = SafeGetString(rd, "driver_last_name");
-        data.DriverName = $"{first} {last}".Trim();
-
-        data.DriverLicense = SafeGetString(rd, "license_number");
-        data.Plates = SafeGetString(rd, "vehicle_plates");
-        data.TractorNumber = SafeGetString(rd, "tractor_number");
-        data.TrailerNumber = SafeGetString(rd, "trailer_number");
-
-        // Pesos
-        data.Scale1 = rd.IsDBNull("eje1") ? 0 : rd.GetDouble("eje1");
-        data.Scale2 = rd.IsDBNull("eje2") ? 0 : rd.GetDouble("eje2");
-        data.Scale3 = rd.IsDBNull("eje3") ? 0 : rd.GetDouble("eje3");
-        data.TotalGross = rd.IsDBNull("peso_total") ? 0 : rd.GetDouble("peso_total");
-
-        var prodCode = SafeGetString(rd, "product_code");
-        data.IsReweigh = string.Equals(prodCode, "REWEIGH",
-            StringComparison.OrdinalIgnoreCase);
-
-        var currency = SafeGetString(rd, "currency");
-        if (string.IsNullOrWhiteSpace(currency))
-            currency = "USD";
-
-        string? ticketUid = null;
+        // Helper para MySqlConnector: fuerza AllowZeroDateTime/ConvertZeroDateTime
+        private static string BuildSafeConnectorConnStr(string? raw)
         {
-            int ordTicketUid = rd.GetOrdinal("ticket_uid");
-            if (!rd.IsDBNull(ordTicketUid))
+            if (string.IsNullOrWhiteSpace(raw))
+                return string.Empty;
+
+            var csb = new MySqlConnector.MySqlConnectionStringBuilder(raw)
             {
-                object value = rd.GetValue(ordTicketUid);
-                ticketUid = value?.ToString();
+                AllowZeroDateTime = true,
+                ConvertZeroDateTime = true
+            };
+            return csb.ConnectionString;
+        }
+
+        private async Task<TicketData?> LoadTicketDataAsync(string saleUid)
+        {
+            const string SQL = @"SELECT
+                s.sale_uid,
+                s.total,
+                s.currency,
+                COALESCE(s.occurred_at, s.created_at) AS sale_date,
+                sl.description AS product_description,
+                p.code AS product_code,
+
+                sdi.driver_first_name,
+                sdi.driver_last_name,
+                sdi.license_number,
+                sdi.vehicle_plates,
+                sdi.tractor_number,
+                sdi.trailer_number,
+
+                ax.eje1,
+                ax.eje2,
+                ax.eje3,
+                ax.peso_total,
+
+                t.ticket_number,
+                t.ticket_uid
+            FROM sales s
+            JOIN sale_lines sl
+                ON sl.sale_uid = s.sale_uid AND sl.seq = 1
+            LEFT JOIN products p
+                ON p.product_id = sl.product_id
+            LEFT JOIN sale_driver_info sdi
+                ON sdi.sale_uid = s.sale_uid
+            LEFT JOIN scale_session_axles ax
+                ON ax.uuid_weight = sdi.match_key
+               AND sdi.identify_by = 'weight_uuid'
+            LEFT JOIN tickets t
+                ON t.sale_uid = s.sale_uid
+            WHERE s.sale_uid = @uid
+            ORDER BY t.ticket_id DESC
+            LIMIT 1;";
+
+            async Task<TicketData?> TryOneAsync(string? rawConn, string label)
+            {
+                if (string.IsNullOrWhiteSpace(rawConn))
+                    return null;
+
+                var connStr = BuildSafeConnectorConnStr(rawConn);
+
+                await using var conn = new MySqlConnector.MySqlConnection(connStr);
+                await conn.OpenAsync();
+
+                await using var cmd = new MySqlConnector.MySqlCommand(SQL, conn);
+                cmd.Parameters.AddWithValue("@uid", saleUid);
+
+                await using var rd = await cmd.ExecuteReaderAsync();
+                if (!await rd.ReadAsync())
+                {
+                    AppendLog($"[Ticket] No row for sale_uid={saleUid} on {label}.");
+                    return null;
+                }
+
+                var data = new TicketData();
+
+                // Transaction / ticket
+                data.Transaction = saleUid;
+
+                var rawTicketNumber = SafeGetString(rd, "ticket_number");
+                data.TicketNumber = string.IsNullOrWhiteSpace(rawTicketNumber)
+                    ? saleUid
+                    : rawTicketNumber;
+
+                // Fecha segura (ahora sí admite 0000-00-00 por ConvertZeroDateTime = true)
+                var rawDate = rd.IsDBNull("sale_date")
+                    ? DateTime.MinValue
+                    : rd.GetDateTime("sale_date");
+
+                if (rawDate.Year < 2000)
+                    rawDate = DateTime.Now;
+
+                data.Date = rawDate;
+
+                // Producto / fee
+                data.Product = SafeGetString(rd, "product_description");
+                data.WeighFee = rd.IsDBNull("total") ? 0m : rd.GetDecimal("total");
+
+                // Driver
+                var first = SafeGetString(rd, "driver_first_name");
+                var last = SafeGetString(rd, "driver_last_name");
+                data.DriverName = $"{first} {last}".Trim();
+
+                data.DriverLicense = SafeGetString(rd, "license_number");
+                data.Plates = SafeGetString(rd, "vehicle_plates");
+                data.TractorNumber = SafeGetString(rd, "tractor_number");
+                data.TrailerNumber = SafeGetString(rd, "trailer_number");
+
+                // Pesos
+                data.Scale1 = rd.IsDBNull("eje1") ? 0 : rd.GetDouble("eje1");
+                data.Scale2 = rd.IsDBNull("eje2") ? 0 : rd.GetDouble("eje2");
+                data.Scale3 = rd.IsDBNull("eje3") ? 0 : rd.GetDouble("eje3");
+                data.TotalGross = rd.IsDBNull("peso_total") ? 0 : rd.GetDouble("peso_total");
+
+                var prodCode = SafeGetString(rd, "product_code");
+                data.IsReweigh = string.Equals(prodCode, "REWEIGH", StringComparison.OrdinalIgnoreCase);
+
+                var currency = SafeGetString(rd, "currency");
+                if (string.IsNullOrWhiteSpace(currency))
+                    currency = "USD";
+
+                string? ticketUid = null;
+                int ordTicketUid = rd.GetOrdinal("ticket_uid");
+                if (!rd.IsDBNull(ordTicketUid))
+                {
+                    object value = rd.GetValue(ordTicketUid);
+                    ticketUid = value?.ToString();
+                }
+
+                data.TicketUid = ticketUid ?? "";
+
+                data.QrPayload = BuildTicketQrPayload(
+                    saleUid: saleUid,
+                    ticketUid: ticketUid,
+                    ticketNumber: data.TicketNumber,
+                    total: data.WeighFee,
+                    currency: currency,
+                    date: data.Date
+                );
+
+                // Weigher = operador actual
+                var opName = string.IsNullOrWhiteSpace(PosSession.FullName)
+                    ? PosSession.Username
+                    : PosSession.FullName;
+                data.Weigher = opName;
+
+                AppendLog($"[Ticket] Loaded ticket data for sale_uid={saleUid} from {label}.");
+                return data;
             }
+
+            // Primero LOCAL (porque la venta pudo guardarse offline), luego MAIN
+            var local = TruckScale.Pos.Config.ConfigManager.Current.LocalDbStrCon;
+            var main = TruckScale.Pos.Config.ConfigManager.Current.MainDbStrCon;
+
+            var fromLocal = await TryOneAsync(local, "LOCAL_DB");
+            if (fromLocal != null)
+                return fromLocal;
+
+            return await TryOneAsync(main, "MAIN_DB");
         }
 
-            // Guardamos el ticketUid también en el modelo
-            data.TicketUid = ticketUid ?? "";
-
-        // JSON para el QR (aquí usamos el helper nuevo)
-        data.QrPayload = BuildTicketQrPayload(
-            saleUid: saleUid,
-            ticketUid: ticketUid,
-            ticketNumber: data.TicketNumber,
-            total: data.WeighFee,
-            currency: currency,
-            date: data.Date
-        );
-
-            // Weigher = operador actual
-            var opName = string.IsNullOrWhiteSpace(PosSession.FullName)
-            ? PosSession.Username
-            : PosSession.FullName;
-        data.Weigher = opName;
-
-        return data;
-        }
 
 
         private async Task<string> GenerateTicketNumberAsync(MySqlConnection conn, MySqlTransaction tx)
@@ -3781,7 +4572,6 @@ namespace TruckScale.Pos
 
             return (guidLike, guidLike, tNum);
         }
-
         /// <summary>
         /// Busca el ticket/venta original que se quiere usar para REWEIGH.
         /// Usa cualquiera de: ticket_uid, sale_uid o ticket_number.
@@ -3792,8 +4582,7 @@ namespace TruckScale.Pos
             if (ticketUid == null && saleUid == null && ticketNumber == null)
                 return null;
 
-            const string SQL = @"
-                SELECT
+            const string SQL = @"SELECT
                     s.sale_id,
                     s.sale_uid,
                     s.sale_status_id,
@@ -3808,7 +4597,7 @@ namespace TruckScale.Pos
                     (
                         SELECT COUNT(*)
                         FROM sales r
-                        WHERE r.reweigh_of_sale_id = s.sale_id
+                        WHERE r.reweigh_of_sale_id = s.sale_uid
                           AND r.sale_status_id NOT IN (3,4) -- no CANCELLED / REFUNDED
                     ) AS reweigh_count
                 FROM tickets t
@@ -3823,56 +4612,103 @@ namespace TruckScale.Pos
                    OR (@sale_uid   IS NOT NULL AND s.sale_uid      = @sale_uid)
                    OR (@ticket_num IS NOT NULL AND t.ticket_number = @ticket_num)
                 ORDER BY t.ticket_id DESC
-                LIMIT 1;
-                ";
+                LIMIT 1";
 
-            /*
-             * NOTA IMPORTANTE (punto 2):
-             *
-             * Ahora mismo la base de tiempo T_AGIN la tomamos de:
-             *      COALESCE(s.occurred_at, s.created_at)
-             *
-             * Si en el futuro preferimos usar la fecha/hora de impresión del ticket
-             * como base del T_AGIN, puedes cambiar esa línea en el SELECT por:
-             *
-             *      COALESCE(t.printed_at, s.occurred_at, s.created_at) AS occurred_at
-             *
-             * y la lógica de C# sigue funcionando igual.
-             */
-
-            await using var conn = new MySqlConnection(GetConnectionString());
-            await conn.OpenAsync();
-
-            await using var cmd = new MySqlCommand(SQL, conn);
-            cmd.Parameters.AddWithValue("@ticket_uid", (object?)ticketUid ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@sale_uid", (object?)saleUid ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@ticket_num", (object?)ticketNumber ?? DBNull.Value);
-
-            await using var rd = await cmd.ExecuteReaderAsync();
-            if (!await rd.ReadAsync())
-                return null;
-
-            var occurred = rd.IsDBNull("occurred_at")
-                ? DateTime.MinValue
-                : rd.GetDateTime("occurred_at");
-
-            return new ReweighCandidate
+            // helper para no repetir mapeo
+            async Task<ReweighCandidate?> TryOneAsync(string connStr, string label)
             {
-                SaleId = rd.GetInt32("sale_id"),
-                SaleUid = rd.IsDBNull("sale_uid") ? "" : rd.GetValue(rd.GetOrdinal("sale_uid")).ToString(),
-                SaleStatusId = rd.GetInt32("sale_status_id"),
-                TicketId = rd.GetInt32("ticket_id"),
-                TicketUid = rd.IsDBNull("ticket_uid")
-                      ? ""
-                      : rd.GetValue(rd.GetOrdinal("ticket_uid")).ToString(),
-                TicketNumber = rd.IsDBNull("ticket_number") ? "" : rd.GetString("ticket_number"),
-                TicketStatusId = rd.GetInt32("ticket_status_id"),
-                ProductCode = rd.IsDBNull("product_code") ? "" : rd.GetString("product_code"),
-                OccurredAt = occurred,
-                ReweighCount = rd.IsDBNull("reweigh_count") ? 0 : rd.GetInt32("reweigh_count")
-            };
+                await using var conn = new MySqlConnection(connStr);
+                await conn.OpenAsync();
 
+                await using var cmd = new MySqlCommand(SQL, conn);
+                cmd.Parameters.AddWithValue("@ticket_uid", (object?)ticketUid ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@sale_uid", (object?)saleUid ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@ticket_num", (object?)ticketNumber ?? DBNull.Value);
+
+                await using var rd = await cmd.ExecuteReaderAsync();
+                if (!await rd.ReadAsync())
+                {
+                    AppendLog($"[Reweigh] No candidate found in {label} for key='{rawKey}'.");
+                    return null;
+                }
+
+                var occurred = rd.IsDBNull("occurred_at")
+                    ? DateTime.MinValue
+                    : rd.GetDateTime("occurred_at");
+
+                var candidate = new ReweighCandidate
+                {
+                    SaleId = rd.GetInt32("sale_id"),
+                    SaleUid = rd.IsDBNull("sale_uid")
+                                        ? ""
+                                        : rd.GetValue(rd.GetOrdinal("sale_uid")).ToString(),
+                    SaleStatusId = rd.GetInt32("sale_status_id"),
+                    TicketId = rd.GetInt32("ticket_id"),
+                    TicketUid = rd.IsDBNull("ticket_uid")
+                                        ? ""
+                                        : rd.GetValue(rd.GetOrdinal("ticket_uid")).ToString(),
+                    TicketNumber = rd.IsDBNull("ticket_number") ? "" : rd.GetString("ticket_number"),
+                    TicketStatusId = rd.GetInt32("ticket_status_id"),
+                    ProductCode = rd.IsDBNull("product_code") ? "" : rd.GetString("product_code"),
+                    OccurredAt = occurred,
+                    ReweighCount = rd.IsDBNull("reweigh_count") ? 0 : rd.GetInt32("reweigh_count")
+                };
+
+                AppendLog($"[Reweigh] Candidate from {label}: sale_uid={candidate.SaleUid}, ticket={candidate.TicketNumber}.");
+                return candidate;
+            }
+
+            // === PRIMARY → LOCAL ===
+            ConfigManager.Load();
+            var primary = ConfigManager.Current.MainDbStrCon;
+            var local = ConfigManager.Current.LocalDbStrCon;
+
+            ReweighCandidate? result = null;
+            Exception? lastEx = null;
+
+            // 1) PRIMARY
+            if (!string.IsNullOrWhiteSpace(primary))
+            {
+                try
+                {
+                    result = await TryOneAsync(primary, "PRIMARY");
+                }
+                catch (Exception ex)
+                {
+                    lastEx = ex;
+                    AppendLog($"[Reweigh] PRIMARY failed: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+            else
+            {
+                AppendLog("[Reweigh] PRIMARY connection string not configured.");
+            }
+
+            // 2) LOCAL (si no hubo resultado)
+            if (result == null && !string.IsNullOrWhiteSpace(local))
+            {
+                try
+                {
+                    result = await TryOneAsync(local, "LOCAL");
+                }
+                catch (Exception ex)
+                {
+                    lastEx = ex;
+                    AppendLog($"[Reweigh] LOCAL failed: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+            else if (result == null && string.IsNullOrWhiteSpace(local))
+            {
+                AppendLog("[Reweigh] LOCAL connection string not configured.");
+            }
+
+            // 3) si ambas conexiones tronaron, propagamos el error
+            if (result == null && lastEx != null)
+                throw lastEx;
+
+            return result;
         }
+
         /// <summary>
         /// Valida si un ticket es elegible para REWEIGH.
         /// Aplica todas las reglas de negocio:
@@ -4042,8 +4878,7 @@ namespace TruckScale.Pos
             if (string.IsNullOrWhiteSpace(saleUid))
                 return null;
 
-            const string SQL = @"
-                SELECT
+            const string SQL = @"SELECT
                     sdi.id_driver_info,
                     sdi.driver_first_name,
                     sdi.driver_last_name,
@@ -4061,72 +4896,192 @@ namespace TruckScale.Pos
                 FROM sale_driver_info sdi
                 LEFT JOIN driver_products dp
                        ON dp.product_id = sdi.driver_product_id
-                WHERE sdi.sale_uid = @sale_uid
-                ORDER BY sdi.id_driver_info DESC
-                LIMIT 1;
-            ";
+                WHERE sdi.sale_uid = @sale_uid ORDER BY sdi.id_driver_info DESC LIMIT 1";
 
-            async Task<DriverInfo?> TryOneAsync(string connStr)
+            async Task<DriverInfo?> TryOneAsync(string connStr, string label)
             {
-                await using var conn = new MySqlConnection(connStr);
-                await conn.OpenAsync();
-
-                await using var cmd = new MySqlCommand(SQL, conn);
-                cmd.Parameters.AddWithValue("@sale_uid", saleUid);
-
-                await using var rd = await cmd.ExecuteReaderAsync();
-                if (!await rd.ReadAsync())
-                    return null;
-
-                return new DriverInfo
+                if (string.IsNullOrWhiteSpace(connStr))
                 {
-                    Id = rd.GetInt64("id_driver_info"),
-                    First = rd.GetString("driver_first_name"),
-                    Last = rd.GetString("driver_last_name"),
-                    AccountName = rd.IsDBNull("account_name") ? "" : rd.GetString("account_name"),
-                    AccountAddress = rd.IsDBNull("account_address") ? "" : rd.GetString("account_address"),
-                    AccountCountry = rd.IsDBNull("account_country") ? "" : rd.GetString("account_country"),
-                    AccountState = rd.IsDBNull("account_state") ? "" : rd.GetString("account_state"),
+                    AppendLog($"[Driver] {label} connection string not configured in GetDriverBySaleUidAsync.");
+                    return null;
+                }
 
-                    DriverProductId = rd.IsDBNull("driver_product_id")
-                        ? (int?)null
-                        : rd.GetInt32("driver_product_id"),
+                try
+                {
+                    await using var conn = new MySqlConnection(connStr);
+                    await conn.OpenAsync();
 
-                    ProductDescription = rd.IsDBNull("product_description")
-                        ? ""
-                        : rd.GetString("product_description"),
+                    await using var cmd = new MySqlCommand(SQL, conn);
+                    cmd.Parameters.AddWithValue("@sale_uid", saleUid);
 
-                    License = rd.IsDBNull("license_number") ? "" : rd.GetString("license_number"),
-                    LicenseStateCode = rd.IsDBNull("license_state") ? "" : rd.GetString("license_state"),
-                    Plates = rd.IsDBNull("vehicle_plates") ? "" : rd.GetString("vehicle_plates"),
-                    TrailerNumber = rd.IsDBNull("trailer_number") ? "" : rd.GetString("trailer_number"),
-                    TractorNumber = rd.IsDBNull("tractor_number") ? "" : rd.GetString("tractor_number"),
-                };
+                    await using var rd = await cmd.ExecuteReaderAsync();
+                    if (!await rd.ReadAsync())
+                    {
+                        AppendLog($"[Driver] No driver found in {label} for sale_uid={saleUid}.");
+                        return null;
+                    }
+
+                    var info = new DriverInfo
+                    {
+                        Id = rd.GetInt64("id_driver_info"),
+                        First = rd.GetString("driver_first_name"),
+                        Last = rd.GetString("driver_last_name"),
+
+                        AccountName = rd.IsDBNull("account_name") ? "" : rd.GetString("account_name"),
+                        AccountAddress = rd.IsDBNull("account_address") ? "" : rd.GetString("account_address"),
+                        AccountCountry = rd.IsDBNull("account_country") ? "" : rd.GetString("account_country"),
+                        AccountState = rd.IsDBNull("account_state") ? "" : rd.GetString("account_state"),
+
+                        DriverProductId = rd.IsDBNull("driver_product_id")
+                            ? (int?)null
+                            : rd.GetInt32("driver_product_id"),
+
+                        ProductDescription = rd.IsDBNull("product_description")
+                            ? ""
+                            : rd.GetString("product_description"),
+
+                        License = rd.IsDBNull("license_number") ? "" : rd.GetString("license_number"),
+                        LicenseStateCode = rd.IsDBNull("license_state") ? "" : rd.GetString("license_state"),
+                        Plates = rd.IsDBNull("vehicle_plates") ? "" : rd.GetString("vehicle_plates"),
+                        TrailerNumber = rd.IsDBNull("trailer_number") ? "" : rd.GetString("trailer_number"),
+                        TractorNumber = rd.IsDBNull("tractor_number") ? "" : rd.GetString("tractor_number"),
+                    };
+
+                    AppendLog($"[Driver] Loaded driver by sale_uid from {label}: id={info.Id}.");
+                    return info;
+                }
+                catch (Exception ex)
+                {
+                    AppendLog($"[Driver] {label} failed in GetDriverBySaleUidAsync: {ex.GetType().Name}: {ex.Message}");
+                    throw;
+                }
+            }
+
+            // === PRIMARY → LOCAL ===
+            ConfigManager.Load();
+            var primaryConn = ConfigManager.Current.MainDbStrCon;
+            var localConn = ConfigManager.Current.LocalDbStrCon;
+
+            DriverInfo? result = null;
+            Exception? lastEx = null;
+
+            // 1) PRIMARY
+            if (!string.IsNullOrWhiteSpace(primaryConn))
+            {
+                try
+                {
+                    result = await TryOneAsync(primaryConn, "PRIMARY");
+                }
+                catch (Exception ex)
+                {
+                    lastEx = ex;
+                }
+            }
+            else
+            {
+                AppendLog("[Driver] PRIMARY connection string empty in GetDriverBySaleUidAsync.");
+            }
+
+            // 2) LOCAL (solo si no se encontró nada en PRIMARY)
+            if (result == null && !string.IsNullOrWhiteSpace(localConn))
+            {
+                try
+                {
+                    result = await TryOneAsync(localConn, "LOCAL");
+                }
+                catch (Exception ex)
+                {
+                    lastEx = ex;
+                }
+            }
+            else if (result == null && string.IsNullOrWhiteSpace(localConn))
+            {
+                AppendLog("[Driver] LOCAL connection string empty in GetDriverBySaleUidAsync.");
+            }
+
+            // Si ambas conexiones tronaron, propagamos el último error
+            if (result == null && lastEx != null)
+                throw lastEx;
+
+            return result;
+        }
+
+        private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            // === NUEVO: Ctrl+Alt+F9 para modal de sincronización ===
+            if (e.Key == Key.F9 &&
+                Keyboard.Modifiers.HasFlag(ModifierKeys.Control) &&
+                Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
+            {
+                e.Handled = true;
+                ShowSyncDebugDialog();
+            }
+        }
+        // ============================================================================
+        // SYNC DEBUG DIALOG (Developer Tool)
+        // ============================================================================
+        // Modal para desarrolladores (Ctrl+Alt+F9) que muestra:
+        // - Estado de la cola (FREE/DIRTY)
+        // - Registros pendientes por tabla
+        // - Última sincronización exitosa
+        // - Botón manual para forzar PUSH
+        // ============================================================================
+
+        private async void ShowSyncDebugDialog()
+        {
+            if (_syncService == null)
+            {
+                MessageBox.Show("Sync service not initialized.", "Sync Debug",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
             }
 
             try
             {
-                // Primaria
-                return await TryOneAsync(GetPrimaryConn());
-            }
-            catch (Exception exPrimary)
-            {
-                AppendLog("[Driver] Primary DB failed in GetDriverBySaleUidAsync: " + exPrimary.Message);
+                var queueInfo = await _syncService.GetQueueInfoAsync();
 
-                try
+                var msg = $"=== SYNC STATUS DEBUG ===\n\n" +
+                          $"Queue Status: {queueInfo.Status}\n" +
+                          $"Total Pending: {queueInfo.TotalPending}\n\n" +
+                          $"Pending by Table:\n" +
+                          $"  • Axles: {queueInfo.PendingAxles}\n" +
+                          $"  • Sales: {queueInfo.PendingSales}\n" +
+                          $"  • Payments: {queueInfo.PendingPayments}\n" +
+                          $"  • Drivers: {queueInfo.PendingDrivers}\n" +
+                          $"  • Tickets: {queueInfo.PendingTickets}\n" +
+                          $"  • Logs: {queueInfo.PendingLogs}\n\n" +
+                          $"Last Push Attempt: {queueInfo.LastPushAttempt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "Never"}\n" +
+                          $"Last Push Success: {queueInfo.LastPushSuccess?.ToString("yyyy-MM-dd HH:mm:ss") ?? "Never"}\n\n" +
+                          $"Force sync now?";
+
+                var result = MessageBox.Show(msg, "Sync Debug (Ctrl+Alt+F9)",
+                    MessageBoxButton.YesNo, MessageBoxImage.Information);
+
+                if (result == MessageBoxResult.Yes)
                 {
-                    // Fallback local
-                    return await TryOneAsync(GetLocalConn());
+                    UpdateSyncStatusUI("🔄 Manual sync...");
+                    var syncResult = await _syncService.PushTransactionsAsync();
+
+                    if (syncResult.Success)
+                    {
+                        MessageBox.Show($"✅ Sync successful!\n\nRecords synced: {syncResult.RecordsSynced}",
+                            "Sync Debug", MessageBoxButton.OK, MessageBoxImage.Information);
+                        UpdateSyncStatusUI("🟢 Sync: Active");
+                    }
+                    else
+                    {
+                        MessageBox.Show($"❌ Sync failed!\n\n{syncResult.Message}\n\nErrors:\n{string.Join("\n", syncResult.Errors)}",
+                            "Sync Debug", MessageBoxButton.OK, MessageBoxImage.Error);
+                        UpdateSyncStatusUI("⚠️ Sync: Error");
+                    }
                 }
-                catch (Exception exLocal)
-                {
-                    AppendLog("[Driver] Local DB failed in GetDriverBySaleUidAsync: " + exLocal.Message);
-                    return null;
-                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error: {ex.Message}", "Sync Debug",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
-
-
 
     }
 }
