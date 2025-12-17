@@ -2179,46 +2179,89 @@ namespace TruckScale.Pos
             await AutoSyncAsync();
         }
 
+        // Auto-sync (timer): primero PUSH (LOCAL -> MAIN) y luego PULL (MAIN -> LOCAL)
         private async Task AutoSyncAsync()
         {
             if (_syncService == null || _syncInProgress)
-                return;
+                return; // Evitar reentradas
 
             _syncInProgress = true;
 
             try
             {
-                var queueInfo = await _syncService.GetQueueInfoAsync();
+                AppendLog("[Sync] Auto-sync triggered by timer.");
 
-                if (queueInfo.Status == QueueStatus.DIRTY && queueInfo.TotalPending > 0)
+                // ---------------------------------------------------------------------
+                // 1) PUSH: subir transacciones pendientes LOCAL -> MAIN
+                // ---------------------------------------------------------------------
+                QueueInfo? queueInfo = null;
+
+                try
                 {
-                    AppendLog($"[Sync] Auto-sync started. Pending: {queueInfo.TotalPending}");
-                    UpdateSyncStatusUI($"🔄 Syncing {queueInfo.TotalPending}...");
+                    queueInfo = await _syncService.GetQueueInfoAsync();
+                }
+                catch (Exception exQueue)
+                {
+                    AppendLog($"[Sync] GetQueueInfo ERROR: {exQueue.Message}");
+                }
 
-                    var result = await _syncService.PushTransactionsAsync();
+                if (queueInfo != null &&
+                    queueInfo.Status == QueueStatus.DIRTY &&
+                    queueInfo.TotalPending > 0)
+                {
+                    AppendLog($"[Sync] Pending to PUSH: {queueInfo.TotalPending} records.");
+                    UpdateSyncStatusUI($"🔄 Sync: uploading {queueInfo.TotalPending}...");
 
-                    if (result.Success)
+                    var pushResult = await _syncService.PushTransactionsAsync();
+
+                    if (pushResult.Success)
                     {
-                        AppendLog($"[Sync] ✅ Success. Synced: {result.RecordsSynced}");
-                        UpdateSyncStatusUI("🟢 Sync: Active");
+                        AppendLog($"[Sync] PUSH OK. Records synced: {pushResult.RecordsSynced}.");
                     }
                     else
                     {
-                        AppendLog($"[Sync] ❌ Failed. {result.Message}");
-                        UpdateSyncStatusUI($"⚠️ Sync: {queueInfo.TotalPending} pending");
+                        AppendLog($"[Sync] PUSH ERROR: {pushResult.Message}");
+                        if (pushResult.Errors.Count > 0)
+                            AppendLog("[Sync] PUSH detail: " + string.Join(" | ", pushResult.Errors));
                     }
+                }
+                else
+                {
+                    AppendLog("[Sync] Nothing to PUSH (queue FREE or 0 pending).");
+                }
+
+                // ---------------------------------------------------------------------
+                // 2) PULL: bajar cambios MAIN -> LOCAL (catálogos + transacciones nuevas)
+                // ---------------------------------------------------------------------
+                UpdateSyncStatusUI("🔁 Sync: downloading updates...");
+
+                var pullResult = await _syncService.PullUpdatesAsync(); // <-- tu nuevo método
+
+                if (pullResult.Success)
+                {
+                    AppendLog($"[Sync] PULL OK. Records synced/updated: {pullResult.RecordsSynced}.");
+                    UpdateSyncStatusUI("🟢 Sync: Active");
+                }
+                else
+                {
+                    AppendLog($"[Sync] PULL ERROR: {pullResult.Message}");
+                    if (pullResult.Errors.Count > 0)
+                        AppendLog("[Sync] PULL detail: " + string.Join(" | ", pullResult.Errors));
+
+                    UpdateSyncStatusUI("⚠️ Sync error");
                 }
             }
             catch (Exception ex)
             {
-                AppendLog($"[Sync] Auto-sync error: {ex.Message}");
-                UpdateSyncStatusUI("⚠️ Sync: Error");
+                AppendLog($"[Sync] AutoSync ERROR: {ex.Message}");
+                UpdateSyncStatusUI("⚠️ Sync error");
             }
             finally
             {
                 _syncInProgress = false;
             }
         }
+
 
         // ============================================================================
         // SYNC STATUS UI
@@ -5027,61 +5070,118 @@ namespace TruckScale.Pos
         // - Botón manual para forzar PUSH
         // ============================================================================
 
+        // Ctrl+Alt+F9 → ventana de debug de sincronización (PUSH + PULL manual)
         private async void ShowSyncDebugDialog()
         {
             if (_syncService == null)
             {
-                MessageBox.Show("Sync service not initialized.", "Sync Debug",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(
+                    "Sync service not initialized.",
+                    "Sync Debug",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
                 return;
             }
 
             try
             {
+                // ---------------------------------------------------------------------
+                // 1) Mostrar estado actual de la cola (pendientes en LOCAL)
+                // ---------------------------------------------------------------------
                 var queueInfo = await _syncService.GetQueueInfoAsync();
 
                 var msg = $"=== SYNC STATUS DEBUG ===\n\n" +
-                          $"Queue Status: {queueInfo.Status}\n" +
-                          $"Total Pending: {queueInfo.TotalPending}\n\n" +
-                          $"Pending by Table:\n" +
-                          $"  • Axles: {queueInfo.PendingAxles}\n" +
-                          $"  • Sales: {queueInfo.PendingSales}\n" +
-                          $"  • Payments: {queueInfo.PendingPayments}\n" +
-                          $"  • Drivers: {queueInfo.PendingDrivers}\n" +
-                          $"  • Tickets: {queueInfo.PendingTickets}\n" +
-                          $"  • Logs: {queueInfo.PendingLogs}\n\n" +
-                          $"Last Push Attempt: {queueInfo.LastPushAttempt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "Never"}\n" +
-                          $"Last Push Success: {queueInfo.LastPushSuccess?.ToString("yyyy-MM-dd HH:mm:ss") ?? "Never"}\n\n" +
-                          $"Force sync now?";
+                          $"Queue Status      : {queueInfo.Status}\n" +
+                          $"Total Pending     : {queueInfo.TotalPending}\n" +
+                          $"Pending Axles     : {queueInfo.PendingAxles}\n" +
+                          $"Pending Sales     : {queueInfo.PendingSales}\n" +
+                          $"Pending Payments  : {queueInfo.PendingPayments}\n" +
+                          $"Pending Drivers   : {queueInfo.PendingDrivers}\n" +
+                          $"Pending Tickets   : {queueInfo.PendingTickets}\n" +
+                          $"Pending Logs      : {queueInfo.PendingLogs}\n\n" +
+                          $"Last Push Attempt : {queueInfo.LastPushAttempt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "(never)"}\n" +
+                          $"Last Push Success : {queueInfo.LastPushSuccess?.ToString("yyyy-MM-dd HH:mm:ss") ?? "(never)"}\n\n" +
+                          $"¿Run full sync now? (PUSH local→main + PULL main→local)";
 
-                var result = MessageBox.Show(msg, "Sync Debug (Ctrl+Alt+F9)",
-                    MessageBoxButton.YesNo, MessageBoxImage.Information);
+                var r = MessageBox.Show(
+                    msg,
+                    "Sync Debug",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question);
 
-                if (result == MessageBoxResult.Yes)
+                if (r != MessageBoxResult.Yes)
+                    return;
+
+                // ---------------------------------------------------------------------
+                // 2) Ejecutar PUSH + PULL manual
+                // ---------------------------------------------------------------------
+                UpdateSyncStatusUI("🔄 Manual sync in progress...");
+
+                AppendLog("[Sync] Manual sync requested (Ctrl+Alt+F9).");
+
+                // 2.1 PUSH
+                var pushResult = await _syncService.PushTransactionsAsync();
+
+                // 2.2 PULL
+                var pullResult = await _syncService.PullUpdatesAsync();
+
+                // ---------------------------------------------------------------------
+                // 3) Armar mensaje de resultado
+                // ---------------------------------------------------------------------
+                var summary =
+                    "=== MANUAL SYNC RESULT ===\n\n" +
+                    $"PUSH → MAIN_DB:\n" +
+                    (pushResult.Success
+                        ? $"  ✅ OK. Records synced: {pushResult.RecordsSynced}.\n"
+                        : $"  ❌ ERROR: {pushResult.Message}\n") +
+                    (pushResult.Errors.Count > 0
+                        ? $"  Details: {string.Join(" | ", pushResult.Errors)}\n"
+                        : "") +
+                    "\n" +
+                    $"PULL ← MAIN_DB:\n" +
+                    (pullResult.Success
+                        ? $"  ✅ OK. Records synced/updated: {pullResult.RecordsSynced}.\n"
+                        : $"  ❌ ERROR: {pullResult.Message}\n") +
+                    (pullResult.Errors.Count > 0
+                        ? $"  Details: {string.Join(" | ", pullResult.Errors)}\n"
+                        : "");
+
+                var allOk = pushResult.Success && pullResult.Success;
+
+                MessageBox.Show(
+                    summary,
+                    "Sync Debug",
+                    MessageBoxButton.OK,
+                    allOk ? MessageBoxImage.Information : MessageBoxImage.Warning);
+
+                // ---------------------------------------------------------------------
+                // 4) Actualizar UI final
+                // ---------------------------------------------------------------------
+                if (allOk)
                 {
-                    UpdateSyncStatusUI("🔄 Manual sync...");
-                    var syncResult = await _syncService.PushTransactionsAsync();
-
-                    if (syncResult.Success)
-                    {
-                        MessageBox.Show($"✅ Sync successful!\n\nRecords synced: {syncResult.RecordsSynced}",
-                            "Sync Debug", MessageBoxButton.OK, MessageBoxImage.Information);
-                        UpdateSyncStatusUI("🟢 Sync: Active");
-                    }
-                    else
-                    {
-                        MessageBox.Show($"❌ Sync failed!\n\n{syncResult.Message}\n\nErrors:\n{string.Join("\n", syncResult.Errors)}",
-                            "Sync Debug", MessageBoxButton.OK, MessageBoxImage.Error);
-                        UpdateSyncStatusUI("⚠️ Sync: Error");
-                    }
+                    AppendLog("[Sync] Manual sync completed successfully (PUSH + PULL).");
+                    UpdateSyncStatusUI("🟢 Sync: Active");
+                }
+                else
+                {
+                    AppendLog("[Sync] Manual sync finished with errors.");
+                    UpdateSyncStatusUI("⚠️ Sync error");
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error: {ex.Message}", "Sync Debug",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
+                AppendLog($"[Sync] ShowSyncDebugDialog ERROR: {ex.Message}");
+
+                MessageBox.Show(
+                    $"Unexpected error during manual sync:\n{ex.Message}",
+                    "Sync Debug",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+
+                UpdateSyncStatusUI("⚠️ Sync error");
             }
         }
+
 
     }
 }

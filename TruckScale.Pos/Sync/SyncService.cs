@@ -97,9 +97,15 @@ namespace TruckScale.Pos.Sync
             {
                 // 1. Verificar si hay algo que sincronizar
                 var queueInfo = await GetQueueInfoAsync();
-                if (queueInfo.Status == QueueStatus.FREE || queueInfo.TotalPending == 0)
+                //if (queueInfo.Status == QueueStatus.FREE || queueInfo.TotalPending == 0)
+                //{
+                //    return SyncResult.Ok(0, "Queue is FREE, nothing to sync.");
+                //}
+                
+                // El Status FREE ya no bloquea el push si hay registros con synced = 0.
+                if (queueInfo.TotalPending == 0)
                 {
-                    return SyncResult.Ok(0, "Queue is FREE, nothing to sync.");
+                    return SyncResult.Ok(0, "Nothing to sync (queue empty).");
                 }
 
                 // 2. Abrir conexiones
@@ -192,18 +198,21 @@ namespace TruckScale.Pos.Sync
         {
             try
             {
-                await using var mainConn = new MySqlConnection(_mainConnStr);
-                await using var localConn = new MySqlConnection(_localConnStr);
+                await using var mainConn = CreateMainConnection();
+                await using var localConn = CreateLocalConnection();
 
                 await mainConn.OpenAsync();
                 await localConn.OpenAsync();
 
+                // Catálogos "clásicos" → full refresh (sin filtro de fecha)
+                DateTime? lastTs = null;
                 int total = 0;
-                total += await SyncCatalogAsync(mainConn, localConn, "customers", "id_customer");
-                total += await SyncCatalogAsync(mainConn, localConn, "products", "product_id");
-                total += await SyncCatalogAsync(mainConn, localConn, "payment_methods", "method_id");
-                total += await SyncCatalogAsync(mainConn, localConn, "license_states", "id_state");
-                total += await SyncCatalogAsync(mainConn, localConn, "driver_products", "product_id");
+
+                total += await PullTableUpsertAsync(mainConn, localConn, "customers", "id_customer", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "products", "product_id", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "payment_methods", "method_id", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "license_states", "id_state", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "driver_products", "product_id", lastTs);
 
                 await UpdateLastSyncTimestampAsync(localConn, "sync.last_catalog_sync");
 
@@ -214,6 +223,7 @@ namespace TruckScale.Pos.Sync
                 return SyncResult.Fail($"Catalog sync failed: {ex.Message}");
             }
         }
+
 
         // ========================================================================
         // NÚCLEO: Sincronización tabla por tabla
@@ -346,156 +356,105 @@ namespace TruckScale.Pos.Sync
             return uids;
         }
 
-        // ========================================================================
-        // CATÁLOGOS (MAIN → LOCAL)
-        // ========================================================================
-
-        /// <summary>
-        /// Wrapper de conveniencia para catálogos.
-        /// Internamente usa PullTableAsync con lastPull = null
-        /// (full sync del catálogo).
-        /// </summary>
-        private Task<int> SyncCatalogAsync(
-            MySqlConnection mainConn,
-            MySqlConnection localConn,
-            string tableName,
-            string pkColumn)
-        {
-            // pkColumn lo dejamos como parámetro por si después queremos
-            // lógica especial; hoy no lo usamos aquí.
-            return PullTableAsync(mainConn, localConn, tableName, lastPull: null);
-        }
 
         // ========================================================================
         // MAIN → LOCAL (transaccional + catálogos) INCREMENTAL POR updated_at
         // ========================================================================
 
         /// <summary>
-        /// Descarga cambios desde MAIN_DB hacia LOCAL_DB usando updated_at.
-        /// Solo se ejecuta si la cola está FREE (no hay cambios locales pendientes).
-        /// Usa REPLACE INTO, por lo que es idempotente: si algo ya existía, se
-        /// sobreescribe con la versión de MAIN.
+        /// PULL incremental desde MAIN_DB → LOCAL_DB.
+        /// Usa updated_at y UPSERT (sin REPLACE).
+        /// Se ejecuta después del Push (LOCAL → MAIN).
         /// </summary>
         public async Task<SyncResult> PullUpdatesAsync()
         {
-            var stats = new SyncStats { StartTime = DateTime.UtcNow };
-
             try
             {
-                // 1. No bajar nada si tenemos cosas pendientes por subir
-                var queueStatus = await DatabaseHelper.GetQueueStatusAsync(_localConnStr);
-                if (queueStatus == QueueStatus.DIRTY)
-                {
-                    return SyncResult.Fail(
-                        "Cannot pull updates while queue_status = DIRTY. " +
-                        "Push local transactions first.");
-                }
-
-                // 2. Abrir conexiones usando los helpers que ya creaste
                 await using var mainConn = CreateMainConnection();
                 await using var localConn = CreateLocalConnection();
 
                 await mainConn.OpenAsync();
                 await localConn.OpenAsync();
 
-                // 3. Leer el último timestamp de pull
-                var lastPull = await GetTimestampAsync(localConn, "sync.last_pull_ts");
+                // Último pull exitoso
+                var lastTs = await GetTimestampAsync(localConn, "sync.last_pull_ts");
 
                 int total = 0;
 
-                // ------------------------------------------------------------
-                // 3.1 Catálogos / maestros (padres primero por FKs)
-                // ------------------------------------------------------------
-                total += await PullTableAsync(mainConn, localConn, "sites", lastPull);
-                total += await PullTableAsync(mainConn, localConn, "tax_rates", lastPull);
-                total += await PullTableAsync(mainConn, localConn, "status_catalogo", lastPull);
-                total += await PullTableAsync(mainConn, localConn, "vehicle_types", lastPull);
-                total += await PullTableAsync(mainConn, localConn, "license_states", lastPull);
-                total += await PullTableAsync(mainConn, localConn, "products", lastPull);
-                total += await PullTableAsync(mainConn, localConn, "driver_products", lastPull);
-                total += await PullTableAsync(mainConn, localConn, "payment_methods", lastPull);
-                total += await PullTableAsync(mainConn, localConn, "users", lastPull);
-                total += await PullTableAsync(mainConn, localConn, "customers", lastPull);
-                total += await PullTableAsync(mainConn, localConn, "settings", lastPull);
-                total += await PullTableAsync(mainConn, localConn, "number_sequences", lastPull);
+                // 1) Tablas padre / catálogos base
+                total += await PullTableUpsertAsync(mainConn, localConn, "sites", "site_id", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "status_catalogo", "status_id", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "tax_rates", "tax_rate_id", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "products", "product_id", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "customers", "id_customer", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "vehicle_types", "vehicle_type_id", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "driver_products", "product_id", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "license_states", "id_state", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "payment_methods", "method_id", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "number_sequences", "sequence_id", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "users", "user_id", lastTs);
 
-                // ------------------------------------------------------------
-                // 3.2 Transaccionales (respetando dependencias)
-                // ------------------------------------------------------------
-                total += await PullTableAsync(mainConn, localConn, "sales", lastPull);
-                total += await PullTableAsync(mainConn, localConn, "sale_driver_info", lastPull);
-                total += await PullTableAsync(mainConn, localConn, "sale_lines", lastPull);
-                total += await PullTableAsync(mainConn, localConn, "payments", lastPull);
-                total += await PullTableAsync(mainConn, localConn, "tickets", lastPull);
+                // ⚠ Opcional: settings lleva llaves compuestas y claves 'sync.*'.
+                // Si los tienes iguales en MAIN/LOCAL, puedes activar esta línea.
+                // Si prefieres no tocarlos aún, déjala comentada.
+                // total += await PullTableUpsertAsync(mainConn, localConn, "settings",        "setting_id",     lastTs);
 
-                // scale_session_axles: si la estás replicando también hacia MAIN
-                // y quieres que otra terminal pueda ver ese histórico, se deja.
-                total += await PullTableAsync(mainConn, localConn, "scale_session_axles", lastPull);
+                // 2) Tablas transaccionales (usamos UIDs)
+                total += await PullTableUpsertAsync(mainConn, localConn, "sales", "sale_uid", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "sale_driver_info", "id_driver_info", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "sale_lines", "line_id", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "payments", "payment_uid", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "tickets", "ticket_uid", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "scale_session_axles", "uuid_weight", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "sync_logs", "log_uid", lastTs);
 
-                // Logs (opcional: tener también los logs globales en local)
-                total += await PullTableAsync(mainConn, localConn, "sync_logs", lastPull);
-
-                // 4. Actualizar timestamp global de pull SOLO si todo fue bien
+                // Nuevo timestamp de pull
                 await UpdateLastSyncTimestampAsync(localConn, "sync.last_pull_ts");
 
-                stats.EndTime = DateTime.UtcNow;
-
-                await LogSyncEventAsync(
-                    "PULL_SUCCESS",
-                    $"Pulled {total} records from MAIN_DB since {lastPull?.ToString("u") ?? "beginning"}. " +
-                    $"Duration: {stats.Duration.TotalSeconds:0.0}s",
+                await LogSyncEventAsync("PULL_SUCCESS",
+                    $"Pull completed. Records upserted: {total}.",
                     total);
 
-                return SyncResult.Ok(total,
-                    $"Pulled {total} records from MAIN_DB.");
+                return SyncResult.Ok(total, $"Pull completed. Records upserted: {total}.");
             }
             catch (Exception ex)
             {
-                stats.Errors.Add(ex.Message);
-                stats.EndTime = DateTime.UtcNow;
-
                 await LogSyncEventAsync("PULL_ERROR", ex.Message, 0);
-
                 return SyncResult.Fail($"Pull failed: {ex.Message}");
             }
         }
+
 
         // ========================================================================
         // HELPERS
         // ========================================================================
 
         /// <summary>
-        /// Descarga filas cambiadas de MAIN_DB → LOCAL_DB para una tabla.
-        /// Si lastPull es null, hace un full sync de la tabla.
-        /// Usa REPLACE INTO en LOCAL:
-        ///   - Si la PK/UNIQUE ya existe → borra y vuelve a insertar
-        ///   - Si no existe → inserta
-        /// Además, si la tabla local tiene columnas de sync (synced, synced_at, etc),
-        /// las rellena para no romper la cola.
+        /// Lee filas de MAIN_DB y hace UPSERT en LOCAL_DB:
+        /// INSERT ... ON DUPLICATE KEY UPDATE (sin REPLACE).
+        /// Si lastTs es null → full table.
+        /// Si lastTs tiene valor → solo updated_at > lastTs.
         /// </summary>
-        private async Task<int> PullTableAsync(
-            MySqlConnection mainConn,
-            MySqlConnection localConn,
-            string tableName,
-            DateTime? lastPull)
+        private async Task<int> PullTableUpsertAsync(
+    MySqlConnection mainConn,
+    MySqlConnection localConn,
+    string tableName,
+    string pkColumn,
+    DateTime? lastTs)
         {
-            // 1) Leer filas cambiadas en MAIN
-            string sqlSelect;
             var rows = new List<Dictionary<string, object?>>();
 
-            if (lastPull.HasValue)
-            {
-                sqlSelect = $"SELECT * FROM {tableName} WHERE updated_at > @ts;";
-            }
-            else
-            {
-                sqlSelect = $"SELECT * FROM {tableName};";
-            }
+            // 0) Saber qué columnas de sync existen en la tabla LOCAL
+            var syncCols = await GetLocalSyncColumnsAsync(localConn, tableName);
+
+            // 1. Leer de MAIN (con filtro de updated_at si aplica)
+            var where = lastTs.HasValue ? "WHERE updated_at > @ts" : "";
+            var sqlSelect = $"SELECT * FROM {tableName} {where};";
 
             await using (var cmd = new MySqlCommand(sqlSelect, mainConn))
             {
-                if (lastPull.HasValue)
-                    cmd.Parameters.AddWithValue("@ts", lastPull.Value);
+                if (lastTs.HasValue)
+                    cmd.Parameters.AddWithValue("@ts", lastTs.Value);
 
                 await using var rd = await cmd.ExecuteReaderAsync();
                 while (await rd.ReadAsync())
@@ -506,6 +465,21 @@ namespace TruckScale.Pos.Sync
                         var colName = rd.GetName(i);
                         row[colName] = rd.IsDBNull(i) ? null : rd.GetValue(i);
                     }
+
+                    // 🔹 Muy importante: si la tabla LOCAL tiene columnas de sync,
+                    // marcamos estos registros como "ya sincronizados"
+                    if (syncCols.Contains("synced") && !row.ContainsKey("synced"))
+                        row["synced"] = 1;
+
+                    if (syncCols.Contains("synced_at") && !row.ContainsKey("synced_at"))
+                        row["synced_at"] = DateTime.UtcNow;
+
+                    if (syncCols.Contains("sync_attempts") && !row.ContainsKey("sync_attempts"))
+                        row["sync_attempts"] = 0;
+
+                    if (syncCols.Contains("last_sync_error") && !row.ContainsKey("last_sync_error"))
+                        row["last_sync_error"] = null;
+
                     rows.Add(row);
                 }
             }
@@ -513,43 +487,32 @@ namespace TruckScale.Pos.Sync
             if (rows.Count == 0)
                 return 0;
 
-            // 2) Detectar si la tabla local tiene columnas de sync
-            var syncCols = await GetLocalSyncColumnsAsync(localConn, tableName);
-
-            // 3) Grabar en LOCAL con REPLACE INTO
-            foreach (var remoteRow in rows)
+            // 2. UPSERT en LOCAL (INSERT ... ON DUPLICATE KEY UPDATE)
+            foreach (var row in rows)
             {
-                // Clonamos el diccionario para poder agregar columnas extra
-                var row = new Dictionary<string, object?>(remoteRow);
-
-                // Si la tabla local tiene columnas de sync, las rellenamos
-                if (syncCols.Contains("synced"))
-                    row["synced"] = 1; // viene alineado con MAIN
-
-                if (syncCols.Contains("synced_at"))
-                    row["synced_at"] = DateTime.UtcNow;
-
-                if (syncCols.Contains("sync_attempts"))
-                    row["sync_attempts"] = 0;
-
-                if (syncCols.Contains("last_sync_error"))
-                    row["last_sync_error"] = null;
-
                 var columns = string.Join(", ", row.Keys.Select(k => $"`{k}`"));
                 var values = string.Join(", ", row.Keys.Select(k => $"@{k}"));
-                var sqlReplace = $"REPLACE INTO {tableName} ({columns}) VALUES ({values});";
 
-                await using var cmdLocal = new MySqlCommand(sqlReplace, localConn);
+                var updateSet = string.Join(", ",
+                    row.Keys
+                       .Where(k => !string.Equals(k, pkColumn, StringComparison.OrdinalIgnoreCase))
+                       .Select(k => $"`{k}` = VALUES(`{k}`)")
+                );
+
+                var sqlUpsert = $@"INSERT INTO {tableName} ({columns}) VALUES ({values}) ON DUPLICATE KEY UPDATE {updateSet};";
+
+                await using var cmd = new MySqlCommand(sqlUpsert, localConn);
+                cmd.Parameters.Clear();
                 foreach (var kvp in row)
-                {
-                    cmdLocal.Parameters.AddWithValue($"@{kvp.Key}", kvp.Value ?? DBNull.Value);
-                }
+                    cmd.Parameters.AddWithValue($"@{kvp.Key}", kvp.Value ?? DBNull.Value);
 
-                await cmdLocal.ExecuteNonQueryAsync();
+                await cmd.ExecuteNonQueryAsync();
             }
 
             return rows.Count;
         }
+
+
 
         private async Task<int> CountPendingAsync(MySqlConnection conn, string tableName)
         {
@@ -617,6 +580,8 @@ namespace TruckScale.Pos.Sync
         /// Devuelve qué columnas de sync existen en la tabla local
         /// (synced, synced_at, sync_attempts, last_sync_error).
         /// Lo usamos para que PullTableAsync sepa qué rellenar.
+        /// /// Lo podríam usar en el futuro si es necesario que PullTableUpsertAsync
+        /// rellene también columnas de sync (synced, synced_at, etc.) según la tabla local
         /// </summary>
         private async Task<HashSet<string>> GetLocalSyncColumnsAsync(
             MySqlConnection localConn,
