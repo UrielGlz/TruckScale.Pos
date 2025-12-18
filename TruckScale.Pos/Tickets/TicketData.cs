@@ -8,6 +8,8 @@ namespace TruckScale.Pos.Tickets
         // Header
         public string CompanyName { get; set; } =
             "McAllen Foreign Trade Zone Certified Public Truck Scale";
+        public string CompanyName_2 { get; set; } =
+           "Public Truck Scale";
         public string CompanyAddress { get; set; } =
             "6401 S. 33rd Street · McAllen, Texas 78503";
         public string CompanyPhone { get; set; } =

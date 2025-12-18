@@ -4347,7 +4347,7 @@ namespace TruckScale.Pos
                 s.total,
                 s.currency,
                 COALESCE(s.occurred_at, s.created_at) AS sale_date,
-                sl.description AS product_description,
+                dp.name AS product_description,
                 p.code AS product_code,
 
                 sdi.driver_first_name,
@@ -4371,6 +4371,8 @@ namespace TruckScale.Pos
                 ON p.product_id = sl.product_id
             LEFT JOIN sale_driver_info sdi
                 ON sdi.sale_uid = s.sale_uid
+            JOIN driver_products dp 
+			    ON sdi.driver_product_id = dp.product_id
             LEFT JOIN scale_session_axles ax
                 ON ax.uuid_weight = sdi.match_key
                AND sdi.identify_by = 'weight_uuid'
@@ -4489,13 +4491,38 @@ namespace TruckScale.Pos
 
 
 
-        private async Task<string> GenerateTicketNumberAsync(MySqlConnection conn, MySqlTransaction tx)
+        //private async Task<string> GenerateTicketNumberAsync(MySqlConnection conn, MySqlTransaction tx)
+        //{
+        //    // TODO: reemplazar por llamada a sp_next_sequence('TICKETS.NUMBER')
+        //    // cuando tengas listo el SP.
+        //    await Task.CompletedTask; // para que no se queje el compilador al ser async
+        //    return "TS-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+        //}
+        private async Task<string> GenerateTicketNumberAsync(MySqlConnection conn, MySqlTransaction tx, int siteId = 1)
         {
-            // TODO: reemplazar por llamada a sp_next_sequence('TICKETS.NUMBER')
-            // cuando tengas listo el SP.
-            await Task.CompletedTask; // para que no se queje el compilador al ser async
-            return "TS-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+            const string scope = "TICKETS.NUMBER";
+
+            // Incremento atómico + obtención del nuevo valor
+            var sql = @"UPDATE number_sequences SET current_value = LAST_INSERT_ID(current_value + step) WHERE site_id = @siteId AND scope = @scope; SELECT LAST_INSERT_ID();";
+
+            long next;
+            using (var cmd = new MySqlCommand(sql, conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@siteId", siteId);
+                cmd.Parameters.AddWithValue("@scope", scope);
+
+                var obj = await cmd.ExecuteScalarAsync();
+                next = Convert.ToInt64(obj);
+            }
+
+            // Traer prefix/suffix (opcional; o hardcode TS- si siempre será así)
+            string prefix = "TS-";
+            string suffix = "";
+
+            // Formato: TS-0000001234 (ajusta el D10 a lo que quieras)
+            return $"{prefix}{next:D10}{suffix}";
         }
+
 
 
         private static string BuildTicketQrPayload(
@@ -4586,7 +4613,9 @@ namespace TruckScale.Pos
                             if (root.TryGetProperty(n, out var p) &&
                                 p.ValueKind == JsonValueKind.String)
                             {
-                                return p.GetString();
+                                var val = p.GetString();
+                                if (!string.IsNullOrWhiteSpace(val))
+                                    return val!.Trim();
                             }
                         }
                         return null;
@@ -4595,6 +4624,9 @@ namespace TruckScale.Pos
                     var ticketUid = GetProp("ticketUid", "ticket_uid");
                     var saleUid = GetProp("saleUid", "sale_uid");
                     var ticketNumber = GetProp("ticketNumber", "ticket_number", "ticket");
+
+                    // Normaliza ticketNumber si vino como dígitos (raro en QR, pero por si acaso)
+                    ticketNumber = NormalizeTicketNumber(ticketNumber);
 
                     // OJO: aquí NO usamos ningún "dt" del QR; la fecha la leemos siempre de BD.
                     return (ticketUid, saleUid, ticketNumber);
@@ -4605,16 +4637,48 @@ namespace TruckScale.Pos
                 }
             }
 
-            // 2) Texto plano: normalmente será el ticket_number (ej. TS-20251101010101)
-            string? tNum = raw;
+            // 2) Texto plano
+            // Limpieza básica: quitar espacios internos, mayúsculas
+            var s = System.Text.RegularExpressions.Regex.Replace(raw, @"\s+", "");
+            s = s.ToUpperInvariant();
 
             // Si parece GUID, lo usamos también como posible uid
             string? guidLike = null;
-            if (Guid.TryParse(raw, out _))
-                guidLike = raw;
+            if (Guid.TryParse(s, out _))
+                guidLike = s;
+
+            // Normalizar ticket number para que:
+            //  - "2" -> "TS-0000000002"
+            //  - "0000000002" -> "TS-0000000002"
+            //  - "TS0000000002" -> "TS-0000000002"
+            //  - "TS-0000000002" -> "TS-0000000002"
+            //  - Si no matchea, se queda tal cual (por compatibilidad con formatos viejos TS-YYYYMMDDHHMMSS, etc.)
+            var tNum = NormalizeTicketNumber(s);
 
             return (guidLike, guidLike, tNum);
         }
+
+        private static string? NormalizeTicketNumber(string? input)
+        {
+            if (string.IsNullOrWhiteSpace(input))
+                return null;
+
+            var s = input.Trim();
+            s = System.Text.RegularExpressions.Regex.Replace(s, @"\s+", "");
+            s = s.ToUpperInvariant();
+
+            // Match: (opcional TS o TS-) + 1 a 10 dígitos
+            var m = System.Text.RegularExpressions.Regex.Match(s, @"^(TS-?)?(?<n>\d{1,10})$");
+            if (m.Success)
+            {
+                var digits = m.Groups["n"].Value.PadLeft(10, '0');
+                return $"TS-{digits}";
+            }
+
+            return s;
+        }
+
+
         /// <summary>
         /// Busca el ticket/venta original que se quiere usar para REWEIGH.
         /// Usa cualquiera de: ticket_uid, sale_uid o ticket_number.
