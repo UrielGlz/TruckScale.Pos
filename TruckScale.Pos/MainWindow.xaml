@@ -706,26 +706,31 @@
                                        VerticalAlignment="Center"/>
 
                                     <!-- Botones de método de pago -->
-                                    <ItemsControl Grid.Row="1" x:Name="PaymentMethodsItems" ItemsSource="{Binding PaymentMethods, RelativeSource={RelativeSource AncestorType=Window}}">
+                                    <ItemsControl Grid.Row="1" x:Name="PaymentMethodsItems"
+              ItemsSource="{Binding PaymentMethods, RelativeSource={RelativeSource AncestorType=Window}}">
                                         <ItemsControl.ItemsPanel>
                                             <ItemsPanelTemplate>
                                                 <WrapPanel/>
                                             </ItemsPanelTemplate>
                                         </ItemsControl.ItemsPanel>
+
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <Button Click="PaymentMethod_Click" Style="{StaticResource PaymentButton}">
+                                                <Button Click="PaymentMethod_Click"
+                    Style="{StaticResource PaymentButton}"
+                    IsEnabled="{Binding IsEnabled}">
                                                     <StackPanel Orientation="Horizontal">
                                                         <md:PackIcon Kind="{Binding IconKind}"
-                                                         Width="18"
-                                                         Height="18"
-                                                         Margin="0,0,8,0"/>
+                                 Width="18"
+                                 Height="18"
+                                 Margin="0,0,8,0"/>
                                                         <TextBlock Text="{Binding Name}"/>
                                                     </StackPanel>
                                                 </Button>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
+
 
                                     <!-- Referencia (Credit / Business account) -->
                                     <StackPanel x:Name="RefPanel"

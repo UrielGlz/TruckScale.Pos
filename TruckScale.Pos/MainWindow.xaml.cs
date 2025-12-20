@@ -2486,6 +2486,8 @@ namespace TruckScale.Pos
             {
                 lblEstado.Content = "Product not available.";
             }
+            EnablePaymentMethodsForService();
+
         }
 
         private void WeighToggle_Checked(object sender, RoutedEventArgs e)
@@ -5534,6 +5536,54 @@ ORDER BY c.account_name;";
             {
                 throw new InvalidOperationException($"Unknown creditType '{creditType}'. Expected POSTPAID or PREPAID.");
             }
+        }
+        private void DisableAllPaymentMethods()
+        {
+            foreach (var m in PaymentMethods)
+                m.IsEnabled = false;
+
+             SelectPaymentByCode(null);
+        }
+        private void EnablePaymentMethodsForService()
+        {
+            // Si no hay servicio seleccionado, NO habilitar nada
+            if (_selectedProductId <= 0)
+            {
+                DisableAllPaymentMethods();
+                return;
+            }
+
+            // Habilitar Cash y Card siempre que haya servicio
+            foreach (var m in PaymentMethods)
+            {
+                if (m.Code.Equals("cash", StringComparison.OrdinalIgnoreCase) ||
+                    m.Code.Equals("card", StringComparison.OrdinalIgnoreCase))
+                {
+                    m.IsEnabled = true;
+                }
+            }
+
+            // Business: usa tu regla existente (ahora con guard de servicio)
+            var canUseBusiness = CanSelectedCustomerUseBusiness();
+            UpdatePaymentMethodsVisibility(canUseBusiness);
+        }
+        private bool CanSelectedCustomerUseBusiness()
+        {
+            if (ClienteRegCombo?.SelectedItem is not TransportAccount acc || acc.IdCustomer <= 0)
+                return false;
+
+            if (!acc.HasCredit) return false;
+            if (acc.IsSuspended) return false;
+
+            if (acc.ExpiryDate.HasValue && acc.ExpiryDate.Value.Date < DateTime.Today)
+                return false;
+
+            // Para habilitar el botón, basta con que tenga algo de crédito disponible.
+            // La validación contra monto_transaccion la haces cuando ya tengas total.
+            if (acc.AvailableCredit <= 0m)
+                return false;
+
+            return true;
         }
 
     }
