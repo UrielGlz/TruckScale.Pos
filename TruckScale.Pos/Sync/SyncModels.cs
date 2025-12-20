@@ -95,6 +95,9 @@ namespace TruckScale.Pos.Sync
         public int PaymentsSynced { get; set; }
         public int TicketsSynced { get; set; }
         public int LogsSynced { get; set; }
+        public int WhateverSynced { get; set; }
+
+        
 
         public int TotalSynced =>
             AxlesSynced + SalesSynced + LinesSynced +

@@ -125,6 +125,8 @@ namespace TruckScale.Pos.Sync
                 stats.PaymentsSynced = await SyncTableAsync(localConn, mainConn, "payments", "payment_uid");
                 stats.TicketsSynced = await SyncTableAsync(localConn, mainConn, "tickets", "ticket_uid");
                 stats.LogsSynced = await SyncTableAsync(localConn, mainConn, "sync_logs", "log_uid");
+                stats.WhateverSynced += await SyncTableAsync(localConn, mainConn, "customer_credit", "credit_id");
+
 
                 // 4. Actualizar queue_status a FREE
                 await DatabaseHelper.UpdateQueueStatusAsync(_localConnStr, QueueStatus.FREE);
@@ -394,6 +396,12 @@ namespace TruckScale.Pos.Sync
                 total += await PullTableUpsertAsync(mainConn, localConn, "number_sequences", "sequence_id", lastTs);
                 total += await PullTableUpsertAsync(mainConn, localConn, "users", "user_id", lastTs);
 
+                // NUEVO: customer_credit (depende de customers)
+                // Como es tabla chica y muy sensible, hacemos full upsert (sin filtro por fecha).
+                total += await PullTableUpsertAsync(mainConn, localConn, "customer_credit", "credit_id", null);
+
+
+
                 // ⚠ Opcional: settings lleva llaves compuestas y claves 'sync.*'.
                 // Si los tienes iguales en MAIN/LOCAL, puedes activar esta línea.
                 // Si prefieres no tocarlos aún, déjala comentada.
@@ -403,7 +411,10 @@ namespace TruckScale.Pos.Sync
                 total += await PullTableUpsertAsync(mainConn, localConn, "sales", "sale_uid", lastTs);
                 total += await PullTableUpsertAsync(mainConn, localConn, "sale_driver_info", "id_driver_info", lastTs);
                 total += await PullTableUpsertAsync(mainConn, localConn, "sale_lines", "line_id", lastTs);
-                total += await PullTableUpsertAsync(mainConn, localConn, "payments", "payment_uid", lastTs);
+
+                // IMPORTANTE: payments → full upsert (sin depender de updated_at / last_pull_ts)
+                total += await PullTableUpsertAsync(mainConn, localConn, "payments", "payment_uid", null);
+
                 total += await PullTableUpsertAsync(mainConn, localConn, "tickets", "ticket_uid", lastTs);
                 total += await PullTableUpsertAsync(mainConn, localConn, "scale_session_axles", "uuid_weight", lastTs);
                 total += await PullTableUpsertAsync(mainConn, localConn, "sync_logs", "log_uid", lastTs);
