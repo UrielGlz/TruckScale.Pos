@@ -3214,8 +3214,6 @@ namespace TruckScale.Pos
             UpdatePaymentMethodsVisibility(canUseBusinessAccount: false);
         }
 
-
-
         private void SelectPaymentByCode(string? code)
         {
             PaymentMethod? sel = null;
@@ -3229,16 +3227,28 @@ namespace TruckScale.Pos
                 if (isSel) sel = m;
             }
 
+            // RefPanel SIEMPRE oculto
+            RefPanel.Visibility = Visibility.Collapsed;
+
             if (sel != null)
             {
                 _selectedPaymentId = sel.Code;
-                RefPanel.Visibility = sel.AllowReference ? Visibility.Visible : Visibility.Collapsed;
+
+                // ===== Auto pago total: Business + Card =====
+                if (string.Equals(sel.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(sel.Code, CARD_CODE, StringComparison.OrdinalIgnoreCase))
+                {
+                    _pagos.Clear();
+
+                    var (_, _, total) = ComputeTotals();
+                    AppendLog($"[AutoPay] Selected={sel.Code}. Total={total:0.00}");
+
+                    AddPayment(sel.Code, total);
+                }
             }
             else
             {
-                // Nada seleccionado
                 _selectedPaymentId = "";
-                RefPanel.Visibility = Visibility.Collapsed;
             }
         }
 
@@ -3490,6 +3500,28 @@ namespace TruckScale.Pos
                         await cmd.ExecuteNonQueryAsync();
                     }
 
+                    // ====== UPDATE customer_credit (solo si hubo Business Account) ======
+                    var businessAmount = _pagos
+                        .Where(p => string.Equals(p.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
+                        .Sum(p => p.Monto);
+
+                    if (businessAmount > 0m)
+                    {
+                        if (ClienteRegCombo?.SelectedItem is not TransportAccount acc || acc.IdCustomer <= 0)
+                            throw new InvalidOperationException("Business Account payment requires a selected customer.");
+
+                        var creditType = string.IsNullOrWhiteSpace(acc.CreditType) ? "POSTPAID" : acc.CreditType!;
+
+                        await UpdateCustomerCreditAsync(
+                            conn,
+                            (MySqlTransaction)tx,
+                            acc.IdCustomer,
+                            businessAmount,
+                            creditType
+                        );
+                    }
+
+
                     // ========== Link driver a la venta ==========
                     try
                     {
@@ -3537,6 +3569,7 @@ namespace TruckScale.Pos
                         tcmd.Parameters.AddWithValue("@tnum", ticketNumber);
                         await tcmd.ExecuteNonQueryAsync();
                     }
+
 
                     await tx.CommitAsync();
 
@@ -4441,6 +4474,7 @@ ORDER BY c.account_name;";
                 sdi.vehicle_plates,
                 sdi.tractor_number,
                 sdi.trailer_number,
+                sdi.license_state,
 
                 ax.eje1,
                 ax.eje2,
@@ -4518,6 +4552,7 @@ ORDER BY c.account_name;";
 
                 data.DriverLicense = SafeGetString(rd, "license_number");
                 data.Plates = SafeGetString(rd, "vehicle_plates");
+                data.LicState = SafeGetString(rd, "license_state");
                 data.TractorNumber = SafeGetString(rd, "tractor_number");
                 data.TrailerNumber = SafeGetString(rd, "trailer_number");
 
@@ -5390,8 +5425,9 @@ ORDER BY c.account_name;";
         }
        
         private const string BUSINESS_CODE = "business";
+        private const string CARD_CODE = "card";
 
-       
+
         private string GetFallbackPaymentCode()
         {
             // Preferimos cash, luego card, luego el primero disponible
@@ -5444,6 +5480,59 @@ ORDER BY c.account_name;";
             else if (string.IsNullOrWhiteSpace(_selectedPaymentId))
             {
                 SelectPaymentByCode("cash");
+            }
+        }
+        private async Task UpdateCustomerCreditAsync(MySqlConnection conn,MySqlTransaction tx, int customerId,decimal amount,string creditType)
+        {
+            if (customerId <= 0)
+                throw new ArgumentException("Invalid customerId.", nameof(customerId));
+
+            if (amount <= 0)
+            {
+                AppendLog("[CustomerCredit] Amount <= 0, skipping update.");
+                return;
+            }
+
+            var ct = (creditType ?? "POSTPAID").Trim().ToUpperInvariant();
+
+            AppendLog($"[CustomerCredit] Updating credit. customer_id={customerId}, amount={amount:0.00}, type={ct}");
+
+            if (ct == "POSTPAID")
+            {
+                const string SQL = @"UPDATE customer_credit
+                    SET
+                      current_balance   = current_balance + @amt,
+                      available_credit  = credit_limit - (current_balance + @amt),
+                      updated_at        = CURRENT_TIMESTAMP
+                    WHERE customer_id = @cid;";
+
+                await using var cmd = new MySqlCommand(SQL, conn, tx);
+                cmd.Parameters.AddWithValue("@amt", amount);
+                cmd.Parameters.AddWithValue("@cid", customerId);
+
+                var rows = await cmd.ExecuteNonQueryAsync();
+                if (rows == 0)
+                    throw new InvalidOperationException($"customer_credit row not found for customer_id={customerId}.");
+            }
+            else if (ct == "PREPAID")
+            {
+                const string SQL = @"UPDATE customer_credit
+                    SET
+                      available_credit = available_credit - @amt,
+                      updated_at       = CURRENT_TIMESTAMP
+                    WHERE customer_id = @cid;";
+
+                await using var cmd = new MySqlCommand(SQL, conn, tx);
+                cmd.Parameters.AddWithValue("@amt", amount);
+                cmd.Parameters.AddWithValue("@cid", customerId);
+
+                var rows = await cmd.ExecuteNonQueryAsync();
+                if (rows == 0)
+                    throw new InvalidOperationException($"customer_credit row not found for customer_id={customerId}.");
+            }
+            else
+            {
+                throw new InvalidOperationException($"Unknown creditType '{creditType}'. Expected POSTPAID or PREPAID.");
             }
         }
 

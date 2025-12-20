@@ -93,7 +93,7 @@
                     <TextBlock Text="Lic. Plates:" FontWeight="Bold" FontSize="11"/>
                     <TextBlock Text="{Binding Plates}" FontSize="11"/>
                     <TextBlock Text="Lic. States:" FontWeight="Bold" FontSize="11"/>
-                    <TextBlock Text="{Binding Plates}" FontSize="11"/>
+                    <TextBlock Text="{Binding LicState}" FontSize="11"/>
                 </StackPanel>
 
                 <Grid Grid.Column="1">

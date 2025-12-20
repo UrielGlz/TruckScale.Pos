@@ -31,6 +31,8 @@ namespace TruckScale.Pos.Tickets
         public string DriverName { get; set; } = "";
         public string DriverLicense { get; set; } = "";
         public string Plates { get; set; } = "";
+        public string LicState { get; set; } = "";
+
         public string TractorNumber { get; set; } = "";
         public string TrailerNumber { get; set; } = "";
 
