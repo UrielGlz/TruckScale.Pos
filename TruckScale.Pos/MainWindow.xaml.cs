@@ -66,6 +66,23 @@ namespace TruckScale.Pos
         public event PropertyChangedEventHandler? PropertyChanged;
         private void OnPropertyChanged([CallerMemberName] string? p = null)
             => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(p));
+
+        private bool _isEnabled = true;
+        public bool IsEnabled
+        {
+            get => _isEnabled;
+            set
+            {
+                if (_isEnabled == value) return;
+                _isEnabled = value;
+                OnPropertyChanged();
+
+                // si se deshabilita y estaba seleccionado, lo deseleccionamos
+                if (!_isEnabled && IsSelected)
+                    IsSelected = false;
+            }
+        }
+
     }
 
     public class PaymentEntry
@@ -98,6 +115,9 @@ namespace TruckScale.Pos
 
     public partial class MainWindow : Window
     {
+        // Cache maestro: siempre contiene TODOS los métodos cargados (cash/card/business)
+        private readonly List<PaymentMethod> _allPaymentMethods = new();
+
         private string _ticketPrinterName = "";
 
         // ===== Tema =====
@@ -3103,6 +3123,7 @@ namespace TruckScale.Pos
         {
             // Siempre arrancamos limpio
             PaymentMethods.Clear();
+            _allPaymentMethods.Clear();
 
             // Helper: intenta cargar métodos desde UNA sola conexión
             async Task<bool> TryOneAsync(string connStr)
@@ -3124,12 +3145,13 @@ namespace TruckScale.Pos
                     using var cmd = new MySqlCommand(SQL, conn);
                     using var rd = await cmd.ExecuteReaderAsync();
 
-                    PaymentMethods.Clear();
+                    var loaded = new List<PaymentMethod>();
+
                     while (await rd.ReadAsync())
                     {
                         var code = rd.GetString("code");
 
-                        PaymentMethods.Add(new PaymentMethod
+                        loaded.Add(new PaymentMethod
                         {
                             Id = rd.GetInt32("method_id"),
                             Code = code,
@@ -3138,46 +3160,60 @@ namespace TruckScale.Pos
                             AllowReference = rd.GetBoolean("allow_reference"),
                             IsActive = rd.GetBoolean("is_active"),
                             IconKind = _methodIconMap.TryGetValue(code, out var kind)
-                                                ? kind
-                                                : PackIconKind.CashRegister
+                                        ? kind
+                                        : PackIconKind.CashRegister
                         });
                     }
 
+                    if (loaded.Count == 0)
+                    {
+                        AppendLog($"[Payments] 0 methods returned from {conn.DataSource}.");
+                        return false;
+                    }
+
+                    // Cache maestro + UI collection
+                    _allPaymentMethods.Clear();
+                    _allPaymentMethods.AddRange(loaded);
+
+                    PaymentMethods.Clear();
+                    foreach (var m in loaded) PaymentMethods.Add(m);
+
                     AppendLog($"[Payments] Loaded {PaymentMethods.Count} method(s) from {conn.DataSource}.");
-                    return PaymentMethods.Count > 0;
+                    return true;
                 }
                 catch (Exception ex)
                 {
-                    AppendLog($"[Payments] {ex.GetType().Name}: {ex.Message}");
+                    AppendLog($"[Payments] Load failed on {connStr}: {ex.Message}");
                     return false;
                 }
             }
 
-            // Leemos las cadenas desde config.json (ya desencriptadas)
-            ConfigManager.Load();
-            var primaryConn = ConfigManager.Current.MainDbStrCon;
-            var localConn = ConfigManager.Current.LocalDbStrCon;
+            var primaryConn = GetPrimaryConn();
+            var localConn = GetLocalConn();
 
-            bool loaded = false;
+            bool loadedOk = false;
 
-            // 1) Intentar BD ONLINE
+            // 1) PRIMARY
             if (!string.IsNullOrWhiteSpace(primaryConn))
             {
                 AppendLog("[Payments] Trying PRIMARY DB for payment_methods...");
-                loaded = await TryOneAsync(primaryConn);
+                loadedOk = await TryOneAsync(primaryConn);
             }
 
-            // 2) Si no cargó nada o falló, ir a BD LOCAL
-            if (!loaded && !string.IsNullOrWhiteSpace(localConn))
+            // 2) LOCAL
+            if (!loadedOk && !string.IsNullOrWhiteSpace(localConn))
             {
                 AppendLog("[Payments] PRIMARY DB failed or returned 0, trying LOCAL...");
-                loaded = await TryOneAsync(localConn);
+                loadedOk = await TryOneAsync(localConn);
             }
 
-            // Si ambas fallan, PaymentMethods se queda vacío, pero la app no truena.
-            // Dejamos todo sin seleccionar.
+            // Si ambas fallan, no tronamos:
             SelectPaymentByCode(null);
+
+            // Por default: sin cliente válido, ocultar business
+            UpdatePaymentMethodsVisibility(canUseBusinessAccount: false);
         }
+
 
 
         private void SelectPaymentByCode(string? code)
@@ -3819,7 +3855,29 @@ namespace TruckScale.Pos
         {
             _accounts.Clear();
 
-            const string SQL = @"SELECT id_customer,account_number, account_name, account_address, account_country, account_state FROM customers ORDER BY account_name;";
+            const string SQL = @"
+SELECT
+    c.id_customer,
+    c.account_number,
+    c.account_name,
+    c.account_address,
+    c.account_country,
+    c.account_state,
+    c.has_credit,
+    -- credit (puede ser NULL si no hay registro)
+    cc.credit_type,
+    cc.credit_limit,
+    cc.current_balance,
+    cc.available_credit,
+    cc.expiry_date,
+    cc.is_suspended,
+    cc.suspension_reason,
+    cc.last_payment_date,
+    cc.payment_terms_days
+FROM customers c
+LEFT JOIN customer_credit cc ON cc.customer_id = c.id_customer
+WHERE c.is_active = 1
+ORDER BY c.account_name;";
 
             async Task<int> LoadFromAsync(string connStr, string sourceLabel)
             {
@@ -3836,11 +3894,22 @@ namespace TruckScale.Pos
                     var acc = new TransportAccount
                     {
                         IdCustomer = rd.GetInt32(rd.GetOrdinal("id_customer")),
-                        AccountNumber = rd.IsDBNull(rd.GetOrdinal("account_number")) ? "" : rd.GetString(rd.GetOrdinal("account_number")),
-                        AccountName = rd.IsDBNull(rd.GetOrdinal("account_name")) ? "" : rd.GetString(rd.GetOrdinal("account_name")),
-                        AccountAddress = rd.IsDBNull(rd.GetOrdinal("account_address")) ? "" : rd.GetString(rd.GetOrdinal("account_address")),
-                        AccountCountry = rd.IsDBNull(rd.GetOrdinal("account_country")) ? "" : rd.GetString(rd.GetOrdinal("account_country")),
-                        AccountState = rd.IsDBNull(rd.GetOrdinal("account_state")) ? "" : rd.GetString(rd.GetOrdinal("account_state")),
+                        AccountNumber = rd["account_number"] as string,
+                        AccountName = rd["account_name"] as string,
+                        AccountAddress = rd["account_address"] as string,
+                        AccountCountry = rd["account_country"] as string,
+                        AccountState = rd["account_state"] as string,
+                        HasCredit = Convert.ToInt32(rd["has_credit"]) == 1,
+
+                        CreditType = rd["credit_type"] == DBNull.Value ? null : Convert.ToString(rd["credit_type"]),
+                        CreditLimit = rd["credit_limit"] == DBNull.Value ? 0m : Convert.ToDecimal(rd["credit_limit"]),
+                        CurrentBalance = rd["current_balance"] == DBNull.Value ? 0m : Convert.ToDecimal(rd["current_balance"]),
+                        AvailableCredit = rd["available_credit"] == DBNull.Value ? 0m : Convert.ToDecimal(rd["available_credit"]),
+                        ExpiryDate = rd["expiry_date"] == DBNull.Value ? (DateTime?)null : Convert.ToDateTime(rd["expiry_date"]).Date,
+                        IsSuspended = rd["is_suspended"] != DBNull.Value && Convert.ToInt32(rd["is_suspended"]) == 1,
+                        SuspensionReason = rd["suspension_reason"] == DBNull.Value ? null : Convert.ToString(rd["suspension_reason"]),
+                        LastPaymentDate = rd["last_payment_date"] == DBNull.Value ? (DateTime?)null : Convert.ToDateTime(rd["last_payment_date"]),
+                        PaymentTermsDays = rd["payment_terms_days"] == DBNull.Value ? 0 : Convert.ToInt32(rd["payment_terms_days"])
                     };
 
                     _accounts.Add(acc);
@@ -3851,54 +3920,38 @@ namespace TruckScale.Pos
                 return count;
             }
 
-            ConfigManager.Load();
-            var primary = ConfigManager.Current.MainDbStrCon;
-            var local = ConfigManager.Current.LocalDbStrCon;
-
             var totalLoaded = 0;
+            var primary = GetPrimaryConn();
+            var local = GetLocalConn();
 
-            try
+            // 1) PRIMARY
+            if (!string.IsNullOrWhiteSpace(primary))
             {
-                // 1) Intentar PRIMARY
-                if (!string.IsNullOrWhiteSpace(primary))
+                try
                 {
-                    try
-                    {
-                        totalLoaded = await LoadFromAsync(primary, "PRIMARY");
-                    }
-                    catch (Exception ex)
-                    {
-                        AppendLog($"[Accounts] PRIMARY failed, trying LOCAL… {ex.Message}");
-                        _accounts.Clear();
-                    }
+                    totalLoaded = await LoadFromAsync(primary, "PRIMARY");
                 }
-
-                // 2) Si no cargó nada o no había PRIMARY, intentar LOCAL
-                if (totalLoaded == 0 && !string.IsNullOrWhiteSpace(local))
+                catch (Exception ex)
                 {
-                    try
-                    {
-                        totalLoaded = await LoadFromAsync(local, "LOCAL");
-                    }
-                    catch (Exception ex)
-                    {
-                        AppendLog($"[Accounts] LOCAL failed: {ex.GetType().Name}: {ex.Message}");
-                        _accounts.Clear();
-                    }
-                }
-
-                if (string.IsNullOrWhiteSpace(primary) && string.IsNullOrWhiteSpace(local))
-                {
-                    AppendLog("[Accounts] No PRIMARY/LOCAL connection string configured.");
+                    AppendLog($"[Accounts] PRIMARY failed, trying LOCAL… {ex.Message}");
+                    _accounts.Clear();
                 }
             }
-            catch (Exception ex)
+
+            // 2) LOCAL
+            if (totalLoaded == 0 && !string.IsNullOrWhiteSpace(local))
             {
-                AppendLog($"[Accounts] {ex.GetType().Name}: {ex.Message}");
-                _accounts.Clear();
+                try
+                {
+                    totalLoaded = await LoadFromAsync(local, "LOCAL");
+                }
+                catch (Exception ex)
+                {
+                    AppendLog($"[Accounts] LOCAL failed… {ex.Message}");
+                }
             }
 
-            // Siempre agregamos opción CASH / sin cuenta al inicio
+            // Cash sale (siempre)
             _accounts.Insert(0, new TransportAccount
             {
                 IdCustomer = 0,
@@ -3906,7 +3959,17 @@ namespace TruckScale.Pos
                 AccountName = "(Cash sale – no account)",
                 AccountAddress = "",
                 AccountCountry = "",
-                AccountState = ""
+                AccountState = "",
+                HasCredit = false,
+                CreditType = null,
+                CreditLimit = 0m,
+                CurrentBalance = 0m,
+                AvailableCredit = 0m,
+                ExpiryDate = null,
+                IsSuspended = false,
+                SuspensionReason = null,
+                LastPaymentDate = null,
+                PaymentTermsDays = 0
             });
 
             // Refrescar combo
@@ -3916,12 +3979,15 @@ namespace TruckScale.Pos
             ClienteRegCombo.SelectedIndex = 0;
         }
 
-        private void ClienteRegCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+
+        private async void ClienteRegCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (ClienteRegCombo.SelectedItem is not TransportAccount acc)
             {
                 SetAccountFieldsEditable(true);
                 ClearAccountFields();
+
+                UpdatePaymentMethodsVisibility(canUseBusinessAccount: false);
                 return;
             }
 
@@ -3931,17 +3997,36 @@ namespace TruckScale.Pos
             {
                 SetAccountFieldsEditable(true);
                 ClearAccountFields();
+
+                UpdatePaymentMethodsVisibility(canUseBusinessAccount: false);
+                return;
+            }
+
+            // UI account fields
+            AccountNameText.Text = acc.AccountName ?? string.Empty;
+            AccountAddressText.Text = acc.AccountAddress ?? string.Empty;
+            AccountCountryText.Text = acc.AccountCountry ?? string.Empty;
+            AccountStateText.Text = acc.AccountState ?? string.Empty;
+            SetAccountFieldsEditable(false);
+
+            // Nota: si aún no tienes el monto aquí, pásalo como 0 y re-evalúa cuando ya exista.
+            decimal transactionAmount = 0m;
+
+            var allowed = CanUseBusinessAccount(acc, transactionAmount, out var reason, out var isSuspended);
+
+            UpdatePaymentMethodsVisibility(allowed);
+
+            if (isSuspended)
+            {
+                AppendLog($"[BusinessCredit] Customer {acc.IdCustomer} suspended. Reason: {reason}");
+                await ShowAlertAsync("Business Account", reason, PackIconKind.AlertCircleOutline);
             }
             else
             {
-                AccountNameText.Text = acc.AccountName ?? string.Empty;
-                AccountAddressText.Text = acc.AccountAddress ?? string.Empty;
-                AccountCountryText.Text = acc.AccountCountry ?? string.Empty;
-                AccountStateText.Text = acc.AccountState ?? string.Empty;
-
-                SetAccountFieldsEditable(false);
+                AppendLog($"[BusinessCredit] Customer {acc.IdCustomer} allowed={allowed}. Reason={(string.IsNullOrWhiteSpace(reason) ? "OK" : reason)}");
             }
         }
+
 
 
         private void SetAccountFieldsEditable(bool editable)
@@ -5245,7 +5330,122 @@ namespace TruckScale.Pos
                 UpdateSyncStatusUI("⚠️ Sync error");
             }
         }
+        private bool CanUseBusinessAccount(TransportAccount acc, decimal transactionAmount, out string reason, out bool isSuspended)
+        {
+            isSuspended = false;
+            reason = "";
 
+            // Cash sale
+            if (acc.IdCustomer <= 0)
+            {
+                reason = "Select a customer to use Business Account.";
+                return false;
+            }
+
+            if (!acc.HasCredit)
+            {
+                reason = "This customer does not have credit enabled.";
+                return false;
+            }
+
+            // Si no hay registro de crédito (LEFT JOIN -> nulls típicos)
+            // (ej: CreditType null y ExpiryDate null y limits 0)
+            var hasCreditRow = acc.CreditType != null || acc.ExpiryDate != null || acc.CreditLimit != 0m || acc.AvailableCredit != 0m;
+            if (!hasCreditRow)
+            {
+                reason = "Credit profile not found for this customer.";
+                return false;
+            }
+
+            if (acc.IsSuspended)
+            {
+                isSuspended = true;
+                var msg = string.IsNullOrWhiteSpace(acc.SuspensionReason)
+                    ? "Business Account is suspended."
+                    : $"Business Account is suspended: {acc.SuspensionReason}";
+                reason = msg;
+                return false;
+            }
+
+            if (acc.ExpiryDate.HasValue && acc.ExpiryDate.Value.Date < DateTime.Today)
+            {
+                reason = $"Credit has expired ({acc.ExpiryDate:yyyy-MM-dd}).";
+                return false;
+            }
+
+            // “sin crédito” aunque el monto sea 0: en práctica NO sirve
+            if (acc.AvailableCredit <= 0m)
+            {
+                reason = "No available credit.";
+                return false;
+            }
+
+            if (transactionAmount > 0m && acc.AvailableCredit < transactionAmount)
+            {
+                reason = "Insufficient available credit for this transaction.";
+                return false;
+            }
+
+            return true;
+        }
+       
+        private const string BUSINESS_CODE = "business";
+
+       
+        private string GetFallbackPaymentCode()
+        {
+            // Preferimos cash, luego card, luego el primero disponible
+            if (PaymentMethods.Any(m => m.Code.Equals("cash", StringComparison.OrdinalIgnoreCase)))
+                return "cash";
+
+            if (PaymentMethods.Any(m => m.Code.Equals("card", StringComparison.OrdinalIgnoreCase)))
+                return "card";
+
+            return PaymentMethods.FirstOrDefault()?.Code ?? "cash";
+        }
+
+        private void UpdatePaymentMethodsVisibility(bool canUseBusinessAccount)
+        {
+            // Si por algún motivo aún no hay cache, no tronamos:
+            if (_allPaymentMethods.Count == 0)
+            {
+                // fallback: solo habilita/deshabilita si existe
+                var business = PaymentMethods.FirstOrDefault(p => string.Equals(p.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase));
+                if (business != null) business.IsEnabled = canUseBusinessAccount;
+
+                if (!canUseBusinessAccount && string.Equals(_selectedPaymentId, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
+                    SelectPaymentByCode(GetFallbackPaymentCode());
+
+                return;
+            }
+
+            var allowedCodes = canUseBusinessAccount
+                ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cash", "card", BUSINESS_CODE }
+                : new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cash", "card" };
+
+            PaymentMethods.Clear();
+
+            foreach (var m in _allPaymentMethods)
+            {
+                // re-activar estado por si quedó disabled
+                if (string.Equals(m.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
+                    m.IsEnabled = canUseBusinessAccount;
+
+                if (allowedCodes.Contains(m.Code))
+                    PaymentMethods.Add(m);
+            }
+
+            // Si el seleccionado ya no existe (o era business), hacer fallback
+            if (!string.IsNullOrWhiteSpace(_selectedPaymentId) &&
+                !allowedCodes.Contains(_selectedPaymentId))
+            {
+                SelectPaymentByCode(GetFallbackPaymentCode());
+            }
+            else if (string.IsNullOrWhiteSpace(_selectedPaymentId))
+            {
+                SelectPaymentByCode("cash");
+            }
+        }
 
     }
 }
