@@ -930,6 +930,9 @@ namespace TruckScale.Pos
             _driverPhoneDigits = "";
 
             try { RootDialog.IsOpen = false; } catch { }
+            // Restaurar texto del botón a "Register driver" para la siguiente transacción
+            try { RegisterDriverButton.Content = "Register driver"; } catch { }
+
             //try { ProductoRegCombo.SelectedIndex = -1; } catch { }
             try { ProductoRegText.SelectedIndex = -1; } catch { }
 
@@ -1254,11 +1257,36 @@ namespace TruckScale.Pos
             _ => id
         };
 
-        // === Handlers de UI faltantes ===
-        private void RegisterDriver_Click(object sender, RoutedEventArgs e)
+        /// <summary>
+        /// Abre el modal de registro/edición de chofer.
+        /// Si ya existe un chofer vinculado al peso actual (_driverLinked = true),
+        /// carga sus datos en el formulario para permitir edición.
+        /// </summary>
+        private async void RegisterDriver_Click(object sender, RoutedEventArgs e)
         {
-            try { RootDialog.IsOpen = true; } catch { }
+            try
+            {
+                // Si ya hay chofer registrado para este peso, cargar sus datos para edición
+                if (_driverLinked && !string.IsNullOrWhiteSpace(_currentWeightUuid))
+                {
+                    var existingDriver = await GetDriverByWeightUuidAsync(_currentWeightUuid);
+                    if (existingDriver != null)
+                    {
+                        FillDriverFormFromInfo(existingDriver);
+                        AppendLog($"[Driver] Loaded existing driver for editing: {existingDriver.First} {existingDriver.Last}");
+                    }
+                }
+
+                RootDialog.IsOpen = true;
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[Driver] Error in RegisterDriver_Click: {ex.Message}");
+                // Abrimos el modal de todos modos para que el operador pueda capturar
+                RootDialog.IsOpen = true;
+            }
         }
+
 
         async private void Button_Click(object sender, RoutedEventArgs e) // NO SE USA, solo pruebas
         {
@@ -1425,8 +1453,12 @@ namespace TruckScale.Pos
 
             return true;
         }
-
-        // UG save driver *sale_driver_info*
+        /// <summary>
+        /// Guarda la información del chofer en la base de datos.
+        /// Si _driverLinked = false → INSERT (nuevo chofer)
+        /// Si _driverLinked = true  → UPDATE (editar chofer existente)
+        /// Usa fallback PRIMARY → LOCAL para alta disponibilidad.
+        /// </summary>
         private async void RegisterSave_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -1445,16 +1477,15 @@ namespace TruckScale.Pos
                 if (!await ValidateDriverFormAsync())
                     return;
 
+                // Recopilar datos del formulario
                 string first = ChoferNombreText?.Text?.Trim() ?? "";
                 string last = ChoferApellidosText?.Text?.Trim() ?? "";
                 string licNo = LicenciaNumeroText?.Text?.Trim() ?? "";
                 string plates = PlacasRegText?.Text?.Trim() ?? "";
 
-                // NUEVO: tráiler y tractor del formulario
                 string trailerNumber = TrailerNumberText?.Text?.Trim() ?? "";
                 string tractorNumber = TractorNumberText?.Text?.Trim() ?? "";
 
-                // Estado de la licencia (código, ej. "TX")
                 var licenseState = (LicenseStateCombo.SelectedItem as LicenseState)?.Code ?? "";
 
                 var selectedProduct = ProductoRegText.SelectedItem as DriverProduct;
@@ -1499,28 +1530,53 @@ namespace TruckScale.Pos
                     return;
                 }
 
-                // INSERT con fallback (PRIMARY -> LOCAL)
-                long driverId = await InsertDriverInfoWithFallbackAsync(
-                    saleUid: null,
-                    accountNumber: accountNumber,
-                    accountName: accountName,
-                    accountAddress: accountAddress,
-                    accountCountry: accountCountry,
-                    accountState: accountState,
-                    firstName: first,
-                    lastName: last,
-                    driverPhone: phoneDigits,
-                    licenseNo: licNo,
-                    licenseState: licenseState,
-                    plates: plates,
-                    trailerNumber: trailerNumber,
-                    tractorNumber: tractorNumber,
-                    driverProductId: driverProductId,
-                    identifyBy: "weight_uuid",
-                    matchKey: uuid
-                );
-
-                AppendLog($"[Driver] Saved id={driverId} linked to weight_uuid={uuid}");
+                // ===== INSERT o UPDATE según si ya existe el chofer =====
+                if (_driverLinked)
+                {
+                    // UPDATE: el chofer ya existe, actualizar sus datos
+                    int rowsUpdated = await UpdateDriverInfoWithFallbackAsync(
+                        accountNumber: accountNumber,
+                        accountName: accountName,
+                        accountAddress: accountAddress,
+                        accountCountry: accountCountry,
+                        accountState: accountState,
+                        firstName: first,
+                        lastName: last,
+                        driverPhone: phoneDigits,
+                        licenseNo: licNo,
+                        licenseState: licenseState,
+                        plates: plates,
+                        trailerNumber: trailerNumber,
+                        tractorNumber: tractorNumber,
+                        driverProductId: driverProductId,
+                        matchKey: uuid
+                    );
+                    AppendLog($"[Driver] Updated rows={rowsUpdated} for weight_uuid={uuid}");
+                }
+                else
+                {
+                    // INSERT: nuevo chofer
+                    long driverId = await InsertDriverInfoWithFallbackAsync(
+                        saleUid: null,
+                        accountNumber: accountNumber,
+                        accountName: accountName,
+                        accountAddress: accountAddress,
+                        accountCountry: accountCountry,
+                        accountState: accountState,
+                        firstName: first,
+                        lastName: last,
+                        driverPhone: phoneDigits,
+                        licenseNo: licNo,
+                        licenseState: licenseState,
+                        plates: plates,
+                        trailerNumber: trailerNumber,
+                        tractorNumber: tractorNumber,
+                        driverProductId: driverProductId,
+                        identifyBy: "weight_uuid",
+                        matchKey: uuid
+                    );
+                    AppendLog($"[Driver] Inserted id={driverId} linked to weight_uuid={uuid}");
+                }
 
                 // Refrescamos la tarjeta del chofer con lo recién guardado
                 var info = await GetDriverByWeightUuidAsync(uuid);
@@ -1530,12 +1586,15 @@ namespace TruckScale.Pos
                     lblEstado.Content = "Driver linked to current weight.";
                     _driverLinked = true;
                     UpdateProductButtonsEnabled();
+
+                    // Cambiar texto del botón a "Update driver" para indicar que ahora es edición
+                    try { RegisterDriverButton.Content = "Update driver"; } catch { }
                 }
                 else
                 {
                     _driverLinked = false;
                     UpdateProductButtonsEnabled();
-                    AppendLog("[Driver] Warning: driver not found right after insert.");
+                    AppendLog("[Driver] Warning: driver not found right after insert/update.");
                 }
 
                 // Cerramos modal y mostramos popup de confirmación
@@ -1549,13 +1608,14 @@ namespace TruckScale.Pos
             }
             catch (Exception ex)
             {
-                // Aquí solo llegan errores “reales”: ambas BD fallaron, SQL roto, etc.
+                // Aquí solo llegan errores "reales": ambas BD fallaron, SQL roto, etc.
                 await ShowAlertAsync(
                     "Driver error",
                     "Error saving driver: " + ex.Message,
                     PackIconKind.AlertCircle);
             }
         }
+
 
         /// <summary>
         /// Inserta en sale_driver_info usando fallback:
@@ -1669,6 +1729,199 @@ namespace TruckScale.Pos
                 throw lastEx;
 
             throw new InvalidOperationException("No database connection string configured for driver info.");
+        }
+
+        /// <summary>
+        /// Actualiza sale_driver_info usando fallback:
+        /// 1) Intenta PRIMARY (MainDbStrCon).
+        /// 2) Si falla, intenta LOCAL (LocalDbStrCon).
+        /// 3) Si ambas fallan, relanza la última excepción.
+        /// El UPDATE se hace por match_key (weight_uuid), que no cambia durante la transacción.
+        /// </summary>
+        private async Task<int> UpdateDriverInfoWithFallbackAsync(
+            string? accountNumber,
+            string accountName,
+            string accountAddress,
+            string accountCountry,
+            string accountState,
+            string firstName,
+            string lastName,
+            string driverPhone,
+            string licenseNo,
+            string licenseState,
+            string plates,
+            string trailerNumber,
+            string tractorNumber,
+            int? driverProductId,
+            string matchKey)
+        {
+            Exception? lastEx = null;
+
+            // 1) PRIMARY (online)
+            var primaryConn = GetPrimaryConn();
+            if (!string.IsNullOrWhiteSpace(primaryConn))
+            {
+                try
+                {
+                    AppendLog("[Driver] Trying PRIMARY DB for UPDATE sale_driver_info...");
+                    var rows = await UpdateDriverInfoOnConnectionAsync(
+                        primaryConn,
+                        accountNumber,
+                        accountName,
+                        accountAddress,
+                        accountCountry,
+                        accountState,
+                        firstName,
+                        lastName,
+                        driverPhone,
+                        licenseNo,
+                        licenseState,
+                        plates,
+                        trailerNumber,
+                        tractorNumber,
+                        driverProductId,
+                        matchKey);
+
+                    AppendLog($"[Driver] Updated in PRIMARY DB rows={rows}.");
+                    return rows;
+                }
+                catch (MySqlException ex)
+                {
+                    lastEx = ex;
+                    AppendLog("[Driver] PRIMARY DB UPDATE failed, trying LOCAL… " + ex.Message);
+                }
+                catch (Exception ex)
+                {
+                    lastEx = ex;
+                    AppendLog("[Driver] PRIMARY DB UPDATE failed (non-MySQL), trying LOCAL… " + ex.Message);
+                }
+            }
+
+            // 2) LOCAL (offline)
+            var localConn = ConfigManager.Current.LocalDbStrCon;
+            if (!string.IsNullOrWhiteSpace(localConn))
+            {
+                try
+                {
+                    AppendLog("[Driver] Trying LOCAL DB for UPDATE sale_driver_info...");
+                    var rows = await UpdateDriverInfoOnConnectionAsync(
+                        localConn,
+                        accountNumber,
+                        accountName,
+                        accountAddress,
+                        accountCountry,
+                        accountState,
+                        firstName,
+                        lastName,
+                        driverPhone,
+                        licenseNo,
+                        licenseState,
+                        plates,
+                        trailerNumber,
+                        tractorNumber,
+                        driverProductId,
+                        matchKey);
+
+                    AppendLog($"[Driver] Updated in LOCAL DB rows={rows}.");
+                    return rows;
+                }
+                catch (Exception ex)
+                {
+                    lastEx = ex;
+                    AppendLog("[Driver] LOCAL DB UPDATE failed: " + ex.Message);
+                }
+            }
+
+            // Si ninguna BD respondió bien, relanzamos el último error
+            if (lastEx != null)
+                throw lastEx;
+
+            throw new InvalidOperationException("No database connection string configured for driver update.");
+        }
+
+        /// <summary>
+        /// Ejecuta el UPDATE real en sale_driver_info usando la cadena de conexión indicada.
+        /// Actualiza todos los campos editables del chofer identificado por match_key (weight_uuid).
+        /// No modifica: sale_uid, identify_by, match_key, created_at
+        /// </summary>
+        private static async Task<int> UpdateDriverInfoOnConnectionAsync(
+            string connStr,
+            string? accountNumber,
+            string accountName,
+            string accountAddress,
+            string accountCountry,
+            string accountState,
+            string firstName,
+            string lastName,
+            string driverPhone,
+            string licenseNo,
+            string licenseState,
+            string plates,
+            string trailerNumber,
+            string tractorNumber,
+            int? driverProductId,
+            string matchKey)
+        {
+            const string SQL = @"UPDATE sale_driver_info SET
+                    account_number    = @account_number,
+                    account_name      = @account_name,
+                    account_address   = @account_address,
+                    account_country   = @account_country,
+                    account_state     = @account_state,
+                    driver_first_name = @first_name,
+                    driver_last_name  = @last_name,
+                    driver_phone      = @driver_phone,
+                    license_number    = @license_no,
+                    license_state     = @license_state,
+                    vehicle_plates    = @plates,
+                    trailer_number    = @trailer_number,
+                    tractor_number    = @tractor_number,
+                    driver_product_id = @driver_product_id,
+                    updated_at        = CURRENT_TIMESTAMP
+                WHERE identify_by = 'weight_uuid'
+                  AND match_key   = @match_key;";
+
+            await using var conn = new MySqlConnection(connStr);
+            await conn.OpenAsync();
+
+            await using var cmd = new MySqlCommand(SQL, conn);
+
+            // Campos que pueden ser NULL si vienen vacíos
+            cmd.Parameters.AddWithValue("@account_number",
+                string.IsNullOrWhiteSpace(accountNumber) ? (object)DBNull.Value : accountNumber);
+
+            cmd.Parameters.AddWithValue("@account_name", accountName);
+            cmd.Parameters.AddWithValue("@account_address", accountAddress);
+            cmd.Parameters.AddWithValue("@account_country", accountCountry);
+            cmd.Parameters.AddWithValue("@account_state", accountState);
+
+            cmd.Parameters.AddWithValue("@first_name", firstName);
+            cmd.Parameters.AddWithValue("@last_name", lastName);
+
+            cmd.Parameters.AddWithValue("@driver_phone",
+                string.IsNullOrWhiteSpace(driverPhone) ? (object)DBNull.Value : driverPhone);
+
+            cmd.Parameters.AddWithValue("@license_no",
+                string.IsNullOrWhiteSpace(licenseNo) ? (object)DBNull.Value : licenseNo);
+
+            cmd.Parameters.AddWithValue("@license_state",
+                string.IsNullOrWhiteSpace(licenseState) ? (object)DBNull.Value : licenseState);
+
+            cmd.Parameters.AddWithValue("@plates",
+                string.IsNullOrWhiteSpace(plates) ? (object)DBNull.Value : plates);
+
+            cmd.Parameters.AddWithValue("@trailer_number",
+                string.IsNullOrWhiteSpace(trailerNumber) ? (object)DBNull.Value : trailerNumber);
+
+            cmd.Parameters.AddWithValue("@tractor_number",
+                string.IsNullOrWhiteSpace(tractorNumber) ? (object)DBNull.Value : tractorNumber);
+
+            cmd.Parameters.AddWithValue("@driver_product_id",
+                driverProductId.HasValue ? (object)driverProductId.Value : DBNull.Value);
+
+            cmd.Parameters.AddWithValue("@match_key", matchKey);
+
+            return await cmd.ExecuteNonQueryAsync();
         }
 
         /// <summary>
@@ -2785,38 +3038,38 @@ namespace TruckScale.Pos
             }
         }
 
-        /*
-
-                COALESCE(
-                    sdi.product_description,
-                    CONCAT(dp.NAME, ' (', dp.code, ')'),
-                    ''
-                ) AS product_description,
-         */
+        /// <summary>
+        /// Obtiene la información del chofer vinculado a un weight_uuid.
+        /// Busca primero en LOCAL, luego en PRIMARY (fallback).
+        /// Ahora incluye driver_phone y account_number para soportar edición.
+        /// </summary>
         private async Task<DriverInfo?> GetDriverByWeightUuidAsync(string uuid)
         {
+            // SQL actualizado: agregamos driver_phone y account_number
             const string SQL = @"SELECT
-                    sdi.id_driver_info,
-                    sdi.driver_first_name,
-                    sdi.driver_last_name,
-                    sdi.account_name,
-                    sdi.account_address,
-                    sdi.account_country,
-                    sdi.account_state,
-                    sdi.driver_product_id,
-                    dp.name AS product_description,
-                    sdi.license_number,
-                    sdi.license_state,
-                    sdi.vehicle_plates,
-                    sdi.trailer_number,
-                    sdi.tractor_number
-                FROM sale_driver_info sdi
-                LEFT JOIN driver_products dp
-                    ON dp.product_id = sdi.driver_product_id
-                WHERE sdi.identify_by = 'weight_uuid'
-                  AND sdi.match_key   = @uuid
-                ORDER BY sdi.id_driver_info DESC
-                LIMIT 1;";
+            sdi.id_driver_info,
+            sdi.driver_first_name,
+            sdi.driver_last_name,
+            sdi.driver_phone,
+            sdi.account_number,
+            sdi.account_name,
+            sdi.account_address,
+            sdi.account_country,
+            sdi.account_state,
+            sdi.driver_product_id,
+            dp.name AS product_description,
+            sdi.license_number,
+            sdi.license_state,
+            sdi.vehicle_plates,
+            sdi.trailer_number,
+            sdi.tractor_number
+        FROM sale_driver_info sdi
+        LEFT JOIN driver_products dp
+            ON dp.product_id = sdi.driver_product_id
+        WHERE sdi.identify_by = 'weight_uuid'
+          AND sdi.match_key   = @uuid
+        ORDER BY sdi.id_driver_info DESC
+        LIMIT 1;";
 
             // Helper: ejecuta el SELECT en la conexión indicada
             async Task<DriverInfo?> TryOneAsync(string connStr)
@@ -2834,12 +3087,15 @@ namespace TruckScale.Pos
                 if (!await rd.ReadAsync())
                     return null; // conexión OK pero no se encontró registro
 
+                // Mapeo actualizado: incluye PhoneDigits y AccountNumber
                 return new DriverInfo
                 {
                     Id = rd.GetInt64("id_driver_info"),
                     First = rd.GetString("driver_first_name"),
                     Last = rd.GetString("driver_last_name"),
+                    PhoneDigits = rd.IsDBNull("driver_phone") ? "" : rd.GetString("driver_phone"),
 
+                    AccountNumber = rd.IsDBNull("account_number") ? "" : rd.GetString("account_number"),
                     AccountName = rd.IsDBNull("account_name") ? "" : rd.GetString("account_name"),
                     AccountAddress = rd.IsDBNull("account_address") ? "" : rd.GetString("account_address"),
                     AccountCountry = rd.IsDBNull("account_country") ? "" : rd.GetString("account_country"),
@@ -2909,10 +3165,6 @@ namespace TruckScale.Pos
             // Conexiones OK pero no hubo registro en ninguna
             return null;
         }
-
-
-
-
 
 
         private void ShowDriverCard(DriverInfo d)
@@ -4283,8 +4535,22 @@ ORDER BY c.account_name;";
             return null;
         }
 
+        /// <summary>
+        /// Llena el formulario del modal con los datos de un DriverInfo existente.
+        /// Se usa tanto para cargar chofer por teléfono como para edición.
+        /// Actualizado: ahora también carga el teléfono del chofer.
+        /// </summary>
         private void FillDriverFormFromInfo(DriverInfo d)
         {
+            // Driver phone - nuevo: cargar teléfono para edición
+            if (!string.IsNullOrWhiteSpace(d.PhoneDigits))
+            {
+                _driverPhoneDigits = d.PhoneDigits;
+                DriverPhoneText.Text = FormatPhone10(d.PhoneDigits);
+                DriverPhoneStatusText.Visibility = Visibility.Collapsed;
+            }
+
+            // Datos básicos del chofer
             ChoferNombreText.Text = d.First;
             ChoferApellidosText.Text = d.Last;
             LicenciaNumeroText.Text = d.License;
@@ -4292,7 +4558,7 @@ ORDER BY c.account_name;";
             TrailerNumberText.Text = d.TrailerNumber;
             TractorNumberText.Text = d.TractorNumber;
 
-            // License state
+            // License state (estado de la placa)
             if (!string.IsNullOrWhiteSpace(d.LicenseStateCode))
             {
                 var st = _licenseStates
@@ -4301,7 +4567,7 @@ ORDER BY c.account_name;";
                     LicenseStateCombo.SelectedItem = st;
             }
 
-            // Company from catálogo
+            // Company from catálogo (buscar por account_number o account_name)
             TransportAccount? acc = null;
             if (!string.IsNullOrWhiteSpace(d.AccountNumber))
             {
@@ -4326,6 +4592,8 @@ ORDER BY c.account_name;";
                 AccountCountryText.Text = d.AccountCountry;
                 AccountStateText.Text = d.AccountState;
             }
+
+            // Driver product (tipo de producto/carga)
             if (d.DriverProductId.HasValue && d.DriverProductId.Value > 0)
             {
                 var dp = _driverProducts.FirstOrDefault(x => x.Id == d.DriverProductId.Value);
@@ -4333,6 +4601,7 @@ ORDER BY c.account_name;";
                     ProductoRegText.SelectedItem = dp;
             }
         }
+
         private async void DriverPhoneText_LostFocus(object sender, RoutedEventArgs e)
         {
             await ValidateAndLoadDriverByPhoneAsync();
