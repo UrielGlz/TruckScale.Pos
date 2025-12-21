@@ -119,6 +119,8 @@ namespace TruckScale.Pos
         private readonly List<PaymentMethod> _allPaymentMethods = new();
 
         private string _ticketPrinterName = "";
+        private bool _ticketLandscape = true;           // NUEVO
+        private double _ticketMarginInches = 0.25;      // NUEVO
 
         // ===== Tema =====
         private readonly PaletteHelper _palette = new();
@@ -2327,8 +2329,11 @@ namespace TruckScale.Pos
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
             // === Config general (incluye impresora) ===
+            // === Config general: conexiones de BD ===
             ConfigManager.Load();
-            _ticketPrinterName = ConfigManager.Current.TicketPrinterName; //Si nunca configuramos TicketPrinterName, se quedará vacío y usaremos la predeterminada.
+
+            // === Config de tickets: desde tabla settings en BD ===
+            await LoadTicketSettingsFromDbAsync();
 
             var dbCfg = new DatabaseConfig();
             var factory = new MySqlConnectionFactory(dbCfg);
@@ -3946,15 +3951,15 @@ namespace TruckScale.Pos
                 await Dispatcher.InvokeAsync(() =>
                 {
                     const double inch = 96.0;
-                    double marginInch = ConfigManager.Current.TicketMarginInches > 0
-                        ? ConfigManager.Current.TicketMarginInches
+                    double marginInch = _ticketMarginInches > 0
+                        ? _ticketMarginInches
                         : 0.25;
 
                     // Media carta horizontal
                     double pageWidth = 8.5 * inch;
                     double pageHeight = 5.5 * inch;
 
-                    if (!ConfigManager.Current.TicketLandscape)
+                    if (!_ticketLandscape)
                     {
                         // Si algún día lo quieres vertical
                         var tmp = pageWidth;
@@ -3979,7 +3984,8 @@ namespace TruckScale.Pos
                     PrintQueue? queue = null;
 
                     // 1) Intentamos usar la impresora configurada en config.json
-                    var configuredName = ConfigManager.Current.TicketPrinterName;
+                    var configuredName = _ticketPrinterName;
+
                     if (!string.IsNullOrWhiteSpace(configuredName))
                     {
                         try
@@ -5880,6 +5886,81 @@ ORDER BY c.account_name;";
 
             return true;
         }
+        /// <summary>
+        /// Carga la configuración de tickets desde la tabla settings en BD.
+        /// Fallback: intenta PRIMARY primero, si falla intenta LOCAL.
+        /// </summary>
+        private async Task LoadTicketSettingsFromDbAsync()
+        {
+            const string SQL = @"
+        SELECT `key`, `value` 
+        FROM settings 
+        WHERE site_id = 1 
+          AND is_active = 1 
+          AND `key` IN (
+              'tickets.printer_name',
+              'tickets.landscape',
+              'tickets.margin_inches'
+          );";
+
+            async Task<bool> TryLoadAsync(string connStr, string sourceLabel)
+            {
+                if (string.IsNullOrWhiteSpace(connStr))
+                    return false;
+
+                try
+                {
+                    await using var conn = new MySqlConnection(connStr);
+                    await conn.OpenAsync();
+
+                    await using var cmd = new MySqlCommand(SQL, conn);
+                    await using var reader = await cmd.ExecuteReaderAsync();
+
+                    while (await reader.ReadAsync())
+                    {
+                        var key = reader.GetString("key");
+                        var value = reader.IsDBNull(reader.GetOrdinal("value"))
+                            ? null
+                            : reader.GetString("value");
+
+                        switch (key)
+                        {
+                            case "tickets.printer_name":
+                                _ticketPrinterName = value ?? "";
+                                break;
+
+                            case "tickets.landscape":
+                                _ticketLandscape = value == "1" ||
+                                    string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+                                break;
+
+                            case "tickets.margin_inches":
+                                if (double.TryParse(value, System.Globalization.NumberStyles.Any,
+                                    System.Globalization.CultureInfo.InvariantCulture, out var margin))
+                                    _ticketMarginInches = margin;
+                                break;
+                        }
+                    }
+
+                    AppendLog($"[Config] Ticket settings loaded from {sourceLabel}. Printer: '{_ticketPrinterName}', Landscape: {_ticketLandscape}, Margin: {_ticketMarginInches}");
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    AppendLog($"[Config] Failed to load ticket settings from {sourceLabel}: {ex.Message}");
+                    return false;
+                }
+            }
+
+            // Intentar PRIMARY primero, luego LOCAL
+            var primaryConn = GetPrimaryConn();
+            if (await TryLoadAsync(primaryConn, "PRIMARY"))
+                return;
+
+            var localConn = ConfigManager.Current.LocalDbStrCon;
+            await TryLoadAsync(localConn, "LOCAL");
+        }
+
 
     }
 }
