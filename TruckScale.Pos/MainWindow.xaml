@@ -11,11 +11,9 @@
         Background="{DynamicResource MaterialDesignPaper}"
         Loaded="Window_Loaded"
         WindowState="Maximized"
-        PreviewKeyDown="Window_PreviewKeyDown"
-        ResizeMode="NoResize"
-        WindowStyle="None">
+        PreviewKeyDown="Window_PreviewKeyDown">
 
-    <!-- ====== RECURSOS DE ESTILO ====== -->
+    <!-- ====== ResizeMode="NoResize" WindowStyle="None" RECURSOS DE ESTILO ====== -->
     <Window.Resources>
         
         <!-- ===== COLORES PERSONALIZADOS ===== -->

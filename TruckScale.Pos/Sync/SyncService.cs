@@ -122,10 +122,13 @@ namespace TruckScale.Pos.Sync
                 stats.SalesSynced = await SyncTableAsync(localConn, mainConn, "sales", "sale_uid");
                 stats.LinesSynced = await SyncTableAsync(localConn, mainConn, "sale_lines", "line_id");
                 stats.DriversSynced = await SyncTableAsync(localConn, mainConn, "sale_driver_info", "id_driver_info");
-                stats.PaymentsSynced = await SyncTableAsync(localConn, mainConn, "payments", "payment_uid");
+               
                 stats.TicketsSynced = await SyncTableAsync(localConn, mainConn, "tickets", "ticket_uid");
                 stats.LogsSynced = await SyncTableAsync(localConn, mainConn, "sync_logs", "log_uid");
                 stats.WhateverSynced += await SyncTableAsync(localConn, mainConn, "customer_credit", "credit_id");
+                
+                stats.SecuencesSynced += await SyncTableAsync(localConn, mainConn, "number_sequences", "sequence_id");
+                stats.PaymentsSynced = await SyncTableAsync(localConn, mainConn, "payments", "payment_uid");
 
 
                 // 4. Actualizar queue_status a FREE
@@ -175,13 +178,17 @@ namespace TruckScale.Pos.Sync
 
                 info.PendingAxles = await CountPendingAsync(conn, "scale_session_axles");
                 info.PendingSales = await CountPendingAsync(conn, "sales");
-                info.PendingPayments = await CountPendingAsync(conn, "payments");
+               
                 info.PendingDrivers = await CountPendingAsync(conn, "sale_driver_info");
                 info.PendingTickets = await CountPendingAsync(conn, "tickets");
                 info.PendingLogs = await CountPendingAsync(conn, "sync_logs");
+                info.PendingSqcuences = await CountPendingAsync(conn, "number_sequences");
+                info.PendingPayments = await CountPendingAsync(conn, "payments");
+
 
                 info.LastPushAttempt = await GetTimestampAsync(conn, "sync.last_push_attempt");
                 info.LastPushSuccess = await GetTimestampAsync(conn, "sync.last_push_success");
+
             }
             catch
             {
@@ -380,6 +387,21 @@ namespace TruckScale.Pos.Sync
 
                 // Último pull exitoso
                 var lastTs = await GetTimestampAsync(localConn, "sync.last_pull_ts");
+                
+                // Protección: si sales local está vacía pero tenemos lastTs,
+                // forzamos un FULL PULL (sales completa antes de payments).
+                if (lastTs.HasValue)
+                {
+                    const string sqlCheckSales = "SELECT 1 FROM sales LIMIT 1;";
+                    await using var checkCmd = new MySqlCommand(sqlCheckSales, localConn);
+                    var anySales = await checkCmd.ExecuteScalarAsync();
+
+                    if (anySales is null)
+                    {
+                        //AppendLog("[Sync] Local.sales está vacía con last_pull_ts definido. Forzando FULL PULL (lastTs = null).");
+                        lastTs = null;
+                    }
+                }
 
                 int total = 0;
 
@@ -412,12 +434,16 @@ namespace TruckScale.Pos.Sync
                 total += await PullTableUpsertAsync(mainConn, localConn, "sale_driver_info", "id_driver_info", lastTs);
                 total += await PullTableUpsertAsync(mainConn, localConn, "sale_lines", "line_id", lastTs);
 
-                // IMPORTANTE: payments → full upsert (sin depender de updated_at / last_pull_ts)
-                total += await PullTableUpsertAsync(mainConn, localConn, "payments", "payment_uid", null);
+
 
                 total += await PullTableUpsertAsync(mainConn, localConn, "tickets", "ticket_uid", lastTs);
                 total += await PullTableUpsertAsync(mainConn, localConn, "scale_session_axles", "uuid_weight", lastTs);
                 total += await PullTableUpsertAsync(mainConn, localConn, "sync_logs", "log_uid", lastTs);
+                // IMPORTANTE: payments → full upsert (sin depender de updated_at / last_pull_ts)
+                total += await PullTableUpsertAsync(mainConn, localConn, "payments", "payment_uid", null);
+                total += await PullTableUpsertAsync(mainConn, localConn, "number_sequences", "sequence_id", lastTs);
+
+
 
                 // Nuevo timestamp de pull
                 await UpdateLastSyncTimestampAsync(localConn, "sync.last_pull_ts");

@@ -67,6 +67,9 @@ namespace TruckScale.Pos.Sync
         public int PendingDrivers { get; set; }
         public int PendingTickets { get; set; }
         public int PendingLogs { get; set; }
+        public int PendingSqcuences { get; set; }
+
+        
         public DateTime? LastPushAttempt { get; set; }
         public DateTime? LastPushSuccess { get; set; }
 
@@ -75,7 +78,7 @@ namespace TruckScale.Pos.Sync
         /// </summary>
         public int TotalPending =>
             PendingSales + PendingPayments + PendingAxles +
-            PendingDrivers + PendingTickets + PendingLogs;
+            PendingDrivers + PendingTickets + PendingLogs + PendingSqcuences;
     }
 
     /// <summary>
@@ -96,12 +99,14 @@ namespace TruckScale.Pos.Sync
         public int TicketsSynced { get; set; }
         public int LogsSynced { get; set; }
         public int WhateverSynced { get; set; }
+        public int SecuencesSynced { get; set; }
 
         
 
+
         public int TotalSynced =>
             AxlesSynced + SalesSynced + LinesSynced +
-            DriversSynced + PaymentsSynced + TicketsSynced + LogsSynced;
+            DriversSynced + PaymentsSynced + TicketsSynced + LogsSynced + WhateverSynced + SecuencesSynced;
 
         public List<string> Errors { get; } = new();
 

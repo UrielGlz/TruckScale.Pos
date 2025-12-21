@@ -3127,94 +3127,129 @@ namespace TruckScale.Pos
             PaymentMethods.Clear();
             _allPaymentMethods.Clear();
 
-            // Helper: intenta cargar métodos desde UNA sola conexión
-            async Task<bool> TryOneAsync(string connStr)
+            const string SQL = @"
+        SELECT method_id, code, name, is_cash, allow_reference, is_active 
+        FROM payment_methods 
+        WHERE is_active = 1 
+        ORDER BY method_id;";
+
+            // Helper: lee métodos de pago desde una conexión
+            async Task<List<PaymentMethod>> LoadFromAsync(string connStr)
             {
-                if (string.IsNullOrWhiteSpace(connStr))
-                    return false;
+                var list = new List<PaymentMethod>();
 
-                try
+                await using var conn = new MySqlConnection(connStr);
+                await conn.OpenAsync();
+
+                await using var cmd = new MySqlCommand(SQL, conn);
+                await using var rd = await cmd.ExecuteReaderAsync();
+
+                while (await rd.ReadAsync())
                 {
-                    using var conn = new MySqlConnection(connStr);
-                    await conn.OpenAsync();
+                    var code = rd.GetString("code");
 
-                    const string SQL = @"
-                SELECT method_id, code, name, is_cash, allow_reference, is_active 
-                FROM payment_methods 
-                WHERE is_active = 1 
-                ORDER BY method_id;";
-
-                    using var cmd = new MySqlCommand(SQL, conn);
-                    using var rd = await cmd.ExecuteReaderAsync();
-
-                    var loaded = new List<PaymentMethod>();
-
-                    while (await rd.ReadAsync())
+                    var pm = new PaymentMethod
                     {
-                        var code = rd.GetString("code");
+                        Id = rd.GetInt32("method_id"),
+                        Code = code,
+                        Name = rd.GetString("name"),
+                        IsCash = rd.GetBoolean("is_cash"),
+                        AllowReference = rd.GetBoolean("allow_reference"),
+                        IsActive = rd.GetBoolean("is_active"),
+                        IconKind = _methodIconMap.TryGetValue(code, out var kind)
+                                           ? kind
+                                           : PackIconKind.CashRegister
+                    };
 
-                        loaded.Add(new PaymentMethod
+                    list.Add(pm);
+                }
+
+                return list;
+            }
+
+            // Leemos conexiones desde config.json
+            ConfigManager.Load();
+            var primary = ConfigManager.Current.MainDbStrCon;
+            var local = ConfigManager.Current.LocalDbStrCon;
+
+            try
+            {
+                // 1) Intentar PRIMARY
+                if (!string.IsNullOrWhiteSpace(primary))
+                {
+                    try
+                    {
+                        var loaded = await LoadFromAsync(primary);
+
+                        if (loaded.Count > 0)
                         {
-                            Id = rd.GetInt32("method_id"),
-                            Code = code,
-                            Name = rd.GetString("name"),
-                            IsCash = rd.GetBoolean("is_cash"),
-                            AllowReference = rd.GetBoolean("allow_reference"),
-                            IsActive = rd.GetBoolean("is_active"),
-                            IconKind = _methodIconMap.TryGetValue(code, out var kind)
-                                        ? kind
-                                        : PackIconKind.CashRegister
-                        });
-                    }
+                            _allPaymentMethods.Clear();
+                            _allPaymentMethods.AddRange(loaded);
 
-                    if (loaded.Count == 0)
+                            PaymentMethods.Clear();
+                            foreach (var m in loaded) PaymentMethods.Add(m);
+
+                            AppendLog($"[Payments] Loaded {PaymentMethods.Count} method(s) from PRIMARY.");
+                        }
+                        else
+                        {
+                            AppendLog("[Payments] PRIMARY returned 0 methods, will try LOCAL.");
+                        }
+                    }
+                    catch (Exception ex)
                     {
-                        AppendLog($"[Payments] 0 methods returned from {conn.DataSource}.");
-                        return false;
+                        AppendLog($"[Payments] PRIMARY failed, trying LOCAL… {ex.Message}");
+                        PaymentMethods.Clear();
+                        _allPaymentMethods.Clear();
                     }
-
-                    // Cache maestro + UI collection
-                    _allPaymentMethods.Clear();
-                    _allPaymentMethods.AddRange(loaded);
-
-                    PaymentMethods.Clear();
-                    foreach (var m in loaded) PaymentMethods.Add(m);
-
-                    AppendLog($"[Payments] Loaded {PaymentMethods.Count} method(s) from {conn.DataSource}.");
-                    return true;
                 }
-                catch (Exception ex)
+
+                // 2) Si no cargó nada o no había PRIMARY, intentar LOCAL
+                if (PaymentMethods.Count == 0 && !string.IsNullOrWhiteSpace(local))
                 {
-                    AppendLog($"[Payments] Load failed on {connStr}: {ex.Message}");
-                    return false;
+                    try
+                    {
+                        var loaded = await LoadFromAsync(local);
+
+                        if (loaded.Count > 0)
+                        {
+                            _allPaymentMethods.Clear();
+                            _allPaymentMethods.AddRange(loaded);
+
+                            PaymentMethods.Clear();
+                            foreach (var m in loaded) PaymentMethods.Add(m);
+
+                            AppendLog($"[Payments] Loaded {PaymentMethods.Count} method(s) from LOCAL.");
+                        }
+                        else
+                        {
+                            AppendLog("[Payments] LOCAL returned 0 methods.");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendLog($"[Payments] LOCAL failed: {ex.GetType().Name}: {ex.Message}");
+                        PaymentMethods.Clear();
+                        _allPaymentMethods.Clear();
+                    }
                 }
             }
-
-            var primaryConn = GetPrimaryConn();
-            var localConn = GetLocalConn();
-
-            bool loadedOk = false;
-
-            // 1) PRIMARY
-            if (!string.IsNullOrWhiteSpace(primaryConn))
+            catch (Exception ex)
             {
-                AppendLog("[Payments] Trying PRIMARY DB for payment_methods...");
-                loadedOk = await TryOneAsync(primaryConn);
+                // catch de seguridad por si algo raro se escapa
+                AppendLog($"[Payments] {ex.GetType().Name}: {ex.Message}");
+                PaymentMethods.Clear();
+                _allPaymentMethods.Clear();
             }
 
-            // 2) LOCAL
-            if (!loadedOk && !string.IsNullOrWhiteSpace(localConn))
-            {
-                AppendLog("[Payments] PRIMARY DB failed or returned 0, trying LOCAL...");
-                loadedOk = await TryOneAsync(localConn);
-            }
-
-            // Si ambas fallan, no tronamos:
+            // Sin método seleccionado al inicio
             SelectPaymentByCode(null);
 
-            // Por default: sin cliente válido, ocultar business
+            // Por default: sin cliente válido, ocultar Business
             UpdatePaymentMethodsVisibility(canUseBusinessAccount: false);
         }
+
+
 
         private void SelectPaymentByCode(string? code)
         {
