@@ -4916,40 +4916,31 @@ ORDER BY c.account_name;";
         }
 
 
-
-        //private async Task<string> GenerateTicketNumberAsync(MySqlConnection conn, MySqlTransaction tx)
-        //{
-        //    // TODO: reemplazar por llamada a sp_next_sequence('TICKETS.NUMBER')
-        //    // cuando tengas listo el SP.
-        //    await Task.CompletedTask; // para que no se queje el compilador al ser async
-        //    return "TS-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss");
-        //}
+        /// <summary>
+        /// Genera el siguiente número de ticket para el sitio indicado.
+        /// Formato: solo el número consecutivo sin prefijo ni ceros a la izquierda.
+        /// </summary>
         private async Task<string> GenerateTicketNumberAsync(MySqlConnection conn, MySqlTransaction tx, int siteId = 1)
         {
             const string scope = "TICKETS.NUMBER";
 
             // Incremento atómico + obtención del nuevo valor
-            var sql = @"UPDATE number_sequences SET current_value = LAST_INSERT_ID(current_value + step) WHERE site_id = @siteId AND scope = @scope; SELECT LAST_INSERT_ID();";
+            var sql = @"UPDATE number_sequences SET current_value = LAST_INSERT_ID(current_value + step) 
+                WHERE site_id = @siteId AND scope = @scope; 
+                SELECT LAST_INSERT_ID();";
 
             long next;
             using (var cmd = new MySqlCommand(sql, conn, tx))
             {
                 cmd.Parameters.AddWithValue("@siteId", siteId);
                 cmd.Parameters.AddWithValue("@scope", scope);
-
                 var obj = await cmd.ExecuteScalarAsync();
                 next = Convert.ToInt64(obj);
             }
 
-            // Traer prefix/suffix (opcional; o hardcode TS- si siempre será así)
-            string prefix = "TS-";
-            string suffix = "";
-
-            // Formato: TS-0000001234 (ajusta el D10 a lo que quieras)
-            return $"{prefix}{next:D10}{suffix}";
+            // Retorna solo el número, sin prefijo ni padding
+            return next.ToString();
         }
-
-
 
         private static string BuildTicketQrPayload(
             string saleUid,
