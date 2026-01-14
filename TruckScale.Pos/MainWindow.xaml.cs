@@ -417,6 +417,9 @@ namespace TruckScale.Pos
         private long _lastUnstableMs = 0;
         private bool _autoStable = false;
         private double _lastPersistedTotal = double.NaN;
+        // Prefill de chofer cuando viene de ticket reweigh (venta original)
+        private DriverInfo? _reweighPrefillDriver;
+
 
         private static double Get(IDictionary<int, double> map, int key)
         {
@@ -872,17 +875,32 @@ namespace TruckScale.Pos
             if (WeightText != null) WeightText.Text = $"{value:0,0.0} {suffix}";
         }
 
-        private void Zero_Click(object sender, RoutedEventArgs e)
+        //private void Zero_Click(object sender, RoutedEventArgs e)
+        //{
+        //    _sessionActive = false;
+        //    _axleCount = 0;
+        //    _sessionTotalLb = 0;
+        //    _currentAxles.Clear();
+        //    UpdateWeightText(0);
+        //    lblTemp.Content = "Waiting";
+        //    lblEstado.Content = "Scale ready.";
+        //    ResetDriverContext();
+        //}
+
+        private void NewTransaction_Click(object sender, RoutedEventArgs e)
         {
-            _sessionActive = false;
-            _axleCount = 0;
-            _sessionTotalLb = 0;
-            _currentAxles.Clear();
-            UpdateWeightText(0);
-            lblTemp.Content = "Waiting";
-            lblEstado.Content = "Scale ready.";
-            ResetDriverContext();
+            try
+            {
+                try { RootDialog.IsOpen = false; } catch { }
+                try { SaleCompletedHost.IsOpen = false; } catch { }
+                try { ReweighHost.IsOpen = false; } catch { }
+
+                ResetDriverContext();
+            }
+            catch { ResetDriverContext(); }
         }
+
+
 
         private void ResetDriverContext()
         {
@@ -1011,6 +1029,12 @@ namespace TruckScale.Pos
             catch { }
 
             SetUiReady(_isConnected, null);
+
+            _reweighPrefillDriver = null;
+            try { ClienteRegCombo.IsEnabled = true; } catch { }
+            try { ProductoRegText.IsEnabled = true; } catch { }
+
+
         }
 
 
@@ -1264,30 +1288,82 @@ namespace TruckScale.Pos
         /// Si ya existe un chofer vinculado al peso actual (_driverLinked = true),
         /// carga sus datos en el formulario para permitir edición.
         /// </summary>
+        //private async void RegisterDriver_Click(object sender, RoutedEventArgs e)
+        //{
+        //    try
+        //    {
+        //        // Si ya hay chofer registrado para este peso, cargar sus datos para edición
+        //        if (_driverLinked && !string.IsNullOrWhiteSpace(_currentWeightUuid))
+        //        {
+        //            var existingDriver = await GetDriverByWeightUuidAsync(_currentWeightUuid);
+        //            if (existingDriver != null)
+        //            {
+        //                FillDriverFormFromInfo(existingDriver);
+        //                AppendLog($"[Driver] Loaded existing driver for editing: {existingDriver.First} {existingDriver.Last}");
+        //            }
+        //        }
+
+        //        RootDialog.IsOpen = true;
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        AppendLog($"[Driver] Error in RegisterDriver_Click: {ex.Message}");
+        //        // Abrimos el modal de todos modos para que el operador pueda capturar
+        //        RootDialog.IsOpen = true;
+        //    }
+        //}
         private async void RegisterDriver_Click(object sender, RoutedEventArgs e)
         {
+            // Abrir modal
+            RootDialog.IsOpen = true;
+
+            // Si no hay productos cargados en el modal, evitamos nulls
+            // (tu lista _driverProducts ya existe y se usa abajo)
+            var desiredProductCode = _selectedProductCode ?? "";
+            var desiredDp = _driverProducts.FirstOrDefault(x =>
+                string.Equals(x.Code, desiredProductCode, StringComparison.OrdinalIgnoreCase));
+
+            // Contexto Reweigh con ticket (prefill)
+            bool isReweighPrefill =
+                string.Equals(_selectedProductCode, "REWEIGH", StringComparison.OrdinalIgnoreCase) &&
+                _reweighPrefillDriver != null;
+
+            // 1) Si ya hay driver ligado, intenta cargar por WEIGHT_UUID (edición normal)
+            // 2) Si NO existe en BD (reweigh típico), usa el PREFILL del ticket original
+            if (_driverLinked && !string.IsNullOrWhiteSpace(_currentWeightUuid))
+            {
+                var existing = await GetDriverByWeightUuidAsync(_currentWeightUuid);
+
+                if (existing != null)
+                {
+                    FillDriverFormFromInfo(existing);
+                }
+                else if (isReweighPrefill)
+                {
+                    FillDriverFormFromInfo(_reweighPrefillDriver!);
+                }
+            }
+            else
+            {
+                // Si no está ligado, y es reweigh con prefill, también precarga
+                if (isReweighPrefill)
+                    FillDriverFormFromInfo(_reweighPrefillDriver!);
+            }
+
+            // Asegurar que el producto del modal sea el del servicio ACTUAL (WEIGH/REWEIGH)
+            if (desiredDp != null)
+                ProductoRegText.SelectedItem = desiredDp;
+
+            // Bloqueos en reweigh: NO cambiar producto / “caja” (Company/Account)
+            // (tu lista de campos permitidos: nombre, teléfono, licencia, trailer)
             try
             {
-                // Si ya hay chofer registrado para este peso, cargar sus datos para edición
-                if (_driverLinked && !string.IsNullOrWhiteSpace(_currentWeightUuid))
-                {
-                    var existingDriver = await GetDriverByWeightUuidAsync(_currentWeightUuid);
-                    if (existingDriver != null)
-                    {
-                        FillDriverFormFromInfo(existingDriver);
-                        AppendLog($"[Driver] Loaded existing driver for editing: {existingDriver.First} {existingDriver.Last}");
-                    }
-                }
-
-                RootDialog.IsOpen = true;
+                ProductoRegText.IsEnabled = !isReweighPrefill;
+                ClienteRegCombo.IsEnabled = !isReweighPrefill;
             }
-            catch (Exception ex)
-            {
-                AppendLog($"[Driver] Error in RegisterDriver_Click: {ex.Message}");
-                // Abrimos el modal de todos modos para que el operador pueda capturar
-                RootDialog.IsOpen = true;
-            }
+            catch { }
         }
+
 
 
         async private void Button_Click(object sender, RoutedEventArgs e) // NO SE USA, solo pruebas
@@ -1308,13 +1384,9 @@ namespace TruckScale.Pos
 
         private void RegisterCancel_Click(object sender, RoutedEventArgs e)
         {
-            try
-            {
-                RootDialog.IsOpen = false;
-                ResetDriverContext();
-            }
-            catch { }
+            try { RootDialog.IsOpen = false; ClearDriverForm(); } catch { }
         }
+
 
         // === Handler del botón WAIT/OK (antes Start) ===
         private async void Start_Click(object sender, RoutedEventArgs e)
@@ -1532,10 +1604,59 @@ namespace TruckScale.Pos
                     return;
                 }
 
-                // ===== INSERT o UPDATE según si ya existe el chofer =====
-                if (_driverLinked)
+                //// ===== INSERT o UPDATE según si ya existe el chofer =====
+                //if (_driverLinked)
+                //{
+                //    // UPDATE: el chofer ya existe, actualizar sus datos
+                //    int rowsUpdated = await UpdateDriverInfoWithFallbackAsync(
+                //        accountNumber: accountNumber,
+                //        accountName: accountName,
+                //        accountAddress: accountAddress,
+                //        accountCountry: accountCountry,
+                //        accountState: accountState,
+                //        firstName: first,
+                //        lastName: last,
+                //        driverPhone: phoneDigits,
+                //        licenseNo: licNo,
+                //        licenseState: licenseState,
+                //        plates: plates,
+                //        trailerNumber: trailerNumber,
+                //        tractorNumber: tractorNumber,
+                //        driverProductId: driverProductId,
+                //        matchKey: uuid
+                //    );
+                //    AppendLog($"[Driver] Updated rows={rowsUpdated} for weight_uuid={uuid}");
+                //}
+                //else
+                //{
+                //    // INSERT: nuevo chofer
+                //    long driverId = await InsertDriverInfoWithFallbackAsync(
+                //        saleUid: null,
+                //        accountNumber: accountNumber,
+                //        accountName: accountName,
+                //        accountAddress: accountAddress,
+                //        accountCountry: accountCountry,
+                //        accountState: accountState,
+                //        firstName: first,
+                //        lastName: last,
+                //        driverPhone: phoneDigits,
+                //        licenseNo: licNo,
+                //        licenseState: licenseState,
+                //        plates: plates,
+                //        trailerNumber: trailerNumber,
+                //        tractorNumber: tractorNumber,
+                //        driverProductId: driverProductId,
+                //        identifyBy: "weight_uuid",
+                //        matchKey: uuid
+                //    );
+                //    AppendLog($"[Driver] Inserted id={driverId} linked to weight_uuid={uuid}");
+                //}
+                // ===== INSERT o UPDATE según si existe row REAL para este weight_uuid =====
+                var existing = await GetDriverByWeightUuidAsync(uuid);
+                bool hasRowForThisWeight = (existing != null);
+
+                if (hasRowForThisWeight)
                 {
-                    // UPDATE: el chofer ya existe, actualizar sus datos
                     int rowsUpdated = await UpdateDriverInfoWithFallbackAsync(
                         accountNumber: accountNumber,
                         accountName: accountName,
@@ -1553,11 +1674,11 @@ namespace TruckScale.Pos
                         driverProductId: driverProductId,
                         matchKey: uuid
                     );
+
                     AppendLog($"[Driver] Updated rows={rowsUpdated} for weight_uuid={uuid}");
                 }
                 else
                 {
-                    // INSERT: nuevo chofer
                     long driverId = await InsertDriverInfoWithFallbackAsync(
                         saleUid: null,
                         accountNumber: accountNumber,
@@ -1577,8 +1698,11 @@ namespace TruckScale.Pos
                         identifyBy: "weight_uuid",
                         matchKey: uuid
                     );
+
                     AppendLog($"[Driver] Inserted id={driverId} linked to weight_uuid={uuid}");
                 }
+
+
 
                 // Refrescamos la tarjeta del chofer con lo recién guardado
                 var info = await GetDriverByWeightUuidAsync(uuid);
@@ -3524,9 +3648,32 @@ namespace TruckScale.Pos
             // RefPanel SIEMPRE oculto
             RefPanel.Visibility = Visibility.Collapsed;
 
+            //if (sel != null)
+            //{
+            //    _selectedPaymentId = sel.Code;
+
+            //    // ===== Auto pago total: Business + Card =====
+            //    if (string.Equals(sel.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase) ||
+            //        string.Equals(sel.Code, CARD_CODE, StringComparison.OrdinalIgnoreCase))
+            //    {
+            //        _pagos.Clear();
+
+            //        var (_, _, total) = ComputeTotals();
+            //        AppendLog($"[AutoPay] Selected={sel.Code}. Total={total:0.00}");
+
+            //        AddPayment(sel.Code, total);
+            //    }
+            //}
+            //else
+            //{
+            //    _selectedPaymentId = "";
+            //}
             if (sel != null)
             {
                 _selectedPaymentId = sel.Code;
+
+                //Denominations SOLO para CASH
+                SetDenominationsEnabled(string.Equals(sel.Code, "cash", StringComparison.OrdinalIgnoreCase));
 
                 // ===== Auto pago total: Business + Card =====
                 if (string.Equals(sel.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase) ||
@@ -3543,7 +3690,10 @@ namespace TruckScale.Pos
             else
             {
                 _selectedPaymentId = "";
+                SetDenominationsEnabled(false);
             }
+
+
         }
 
 
@@ -4546,9 +4696,70 @@ ORDER BY c.account_name;";
         /// Se usa tanto para cargar chofer por teléfono como para edición.
         /// Actualizado: ahora también carga el teléfono del chofer.
         /// </summary>
+        //private void FillDriverFormFromInfo(DriverInfo d)
+        //{
+        //    // Driver phone - nuevo: cargar teléfono para edición
+        //    if (!string.IsNullOrWhiteSpace(d.PhoneDigits))
+        //    {
+        //        _driverPhoneDigits = d.PhoneDigits;
+        //        DriverPhoneText.Text = FormatPhone10(d.PhoneDigits);
+        //        DriverPhoneStatusText.Visibility = Visibility.Collapsed;
+        //    }
+
+        //    // Datos básicos del chofer
+        //    ChoferNombreText.Text = d.First;
+        //    ChoferApellidosText.Text = d.Last;
+        //    LicenciaNumeroText.Text = d.License;
+        //    PlacasRegText.Text = d.Plates;
+        //    TrailerNumberText.Text = d.TrailerNumber;
+        //    TractorNumberText.Text = d.TractorNumber;
+
+        //    // License state (estado de la placa)
+        //    if (!string.IsNullOrWhiteSpace(d.LicenseStateCode))
+        //    {
+        //        var st = _licenseStates
+        //            .FirstOrDefault(x => string.Equals(x.Code, d.LicenseStateCode, StringComparison.OrdinalIgnoreCase));
+        //        if (st != null)
+        //            LicenseStateCombo.SelectedItem = st;
+        //    }
+
+        //    // Company from catálogo (buscar por account_number o account_name)
+        //    TransportAccount? acc = null;
+        //    if (!string.IsNullOrWhiteSpace(d.AccountNumber))
+        //    {
+        //        acc = _accounts.FirstOrDefault(a =>
+        //            string.Equals(a.AccountNumber, d.AccountNumber, StringComparison.OrdinalIgnoreCase));
+        //    }
+        //    if (acc == null && !string.IsNullOrWhiteSpace(d.AccountName))
+        //    {
+        //        acc = _accounts.FirstOrDefault(a =>
+        //            string.Equals(a.AccountName, d.AccountName, StringComparison.OrdinalIgnoreCase));
+        //    }
+
+        //    if (acc != null)
+        //    {
+        //        ClienteRegCombo.SelectedItem = acc;
+        //    }
+        //    else
+        //    {
+        //        ClienteRegCombo.SelectedIndex = 0; // Cash sale – no account
+        //        AccountNameText.Text = d.AccountName;
+        //        AccountAddressText.Text = d.AccountAddress;
+        //        AccountCountryText.Text = d.AccountCountry;
+        //        AccountStateText.Text = d.AccountState;
+        //    }
+
+        //    // Driver product (tipo de producto/carga)
+        //    if (d.DriverProductId.HasValue && d.DriverProductId.Value > 0)
+        //    {
+        //        var dp = _driverProducts.FirstOrDefault(x => x.Id == d.DriverProductId.Value);
+        //        if (dp != null)
+        //            ProductoRegText.SelectedItem = dp;
+        //    }
+        //}
         private void FillDriverFormFromInfo(DriverInfo d)
         {
-            // Driver phone - nuevo: cargar teléfono para edición
+            // Driver phone - cargar teléfono para edición
             if (!string.IsNullOrWhiteSpace(d.PhoneDigits))
             {
                 _driverPhoneDigits = d.PhoneDigits;
@@ -4564,7 +4775,7 @@ ORDER BY c.account_name;";
             TrailerNumberText.Text = d.TrailerNumber;
             TractorNumberText.Text = d.TractorNumber;
 
-            // License state (estado de la placa)
+            // License state
             if (!string.IsNullOrWhiteSpace(d.LicenseStateCode))
             {
                 var st = _licenseStates
@@ -4573,40 +4784,54 @@ ORDER BY c.account_name;";
                     LicenseStateCombo.SelectedItem = st;
             }
 
-            // Company from catálogo (buscar por account_number o account_name)
-            TransportAccount? acc = null;
-            if (!string.IsNullOrWhiteSpace(d.AccountNumber))
+            // =========================
+            // Company (NO pisar si está bloqueado)
+            // =========================
+            if (ClienteRegCombo.IsEnabled)
             {
-                acc = _accounts.FirstOrDefault(a =>
-                    string.Equals(a.AccountNumber, d.AccountNumber, StringComparison.OrdinalIgnoreCase));
-            }
-            if (acc == null && !string.IsNullOrWhiteSpace(d.AccountName))
-            {
-                acc = _accounts.FirstOrDefault(a =>
-                    string.Equals(a.AccountName, d.AccountName, StringComparison.OrdinalIgnoreCase));
+                TransportAccount? acc = null;
+
+                if (!string.IsNullOrWhiteSpace(d.AccountNumber))
+                {
+                    acc = _accounts.FirstOrDefault(a =>
+                        string.Equals(a.AccountNumber, d.AccountNumber, StringComparison.OrdinalIgnoreCase));
+                }
+
+                if (acc == null && !string.IsNullOrWhiteSpace(d.AccountName))
+                {
+                    acc = _accounts.FirstOrDefault(a =>
+                        string.Equals(a.AccountName, d.AccountName, StringComparison.OrdinalIgnoreCase));
+                }
+
+                if (acc != null)
+                {
+                    ClienteRegCombo.SelectedItem = acc;
+                }
+                else
+                {
+                    ClienteRegCombo.SelectedIndex = 0; // Cash sale – no account
+                    AccountNameText.Text = d.AccountName;
+                    AccountAddressText.Text = d.AccountAddress;
+                    AccountCountryText.Text = d.AccountCountry;
+                    AccountStateText.Text = d.AccountState;
+                }
             }
 
-            if (acc != null)
+            // =========================
+            // Driver product (NO pisar si está bloqueado)
+            // =========================
+            if (ProductoRegText.IsEnabled)
             {
-                ClienteRegCombo.SelectedItem = acc;
-            }
-            else
-            {
-                ClienteRegCombo.SelectedIndex = 0; // Cash sale – no account
-                AccountNameText.Text = d.AccountName;
-                AccountAddressText.Text = d.AccountAddress;
-                AccountCountryText.Text = d.AccountCountry;
-                AccountStateText.Text = d.AccountState;
-            }
-
-            // Driver product (tipo de producto/carga)
-            if (d.DriverProductId.HasValue && d.DriverProductId.Value > 0)
-            {
-                var dp = _driverProducts.FirstOrDefault(x => x.Id == d.DriverProductId.Value);
-                if (dp != null)
-                    ProductoRegText.SelectedItem = dp;
+                if (d.DriverProductId.HasValue && d.DriverProductId.Value > 0)
+                {
+                    var dp = _driverProducts.FirstOrDefault(x => x.Id == d.DriverProductId.Value);
+                    if (dp != null)
+                        ProductoRegText.SelectedItem = dp;
+                }
             }
         }
+
+
 
         private async void DriverPhoneText_LostFocus(object sender, RoutedEventArgs e)
         {
@@ -5070,12 +5295,7 @@ ORDER BY c.account_name;";
             if (Guid.TryParse(s, out _))
                 guidLike = s;
 
-            // Normalizar ticket number para que:
-            //  - "2" -> "TS-0000000002"
-            //  - "0000000002" -> "TS-0000000002"
-            //  - "TS0000000002" -> "TS-0000000002"
-            //  - "TS-0000000002" -> "TS-0000000002"
-            //  - Si no matchea, se queda tal cual (por compatibilidad con formatos viejos TS-YYYYMMDDHHMMSS, etc.)
+           
             var tNum = NormalizeTicketNumber(s);
 
             return (guidLike, guidLike, tNum);
@@ -5086,20 +5306,19 @@ ORDER BY c.account_name;";
             if (string.IsNullOrWhiteSpace(input))
                 return null;
 
-            var s = input.Trim();
-            s = System.Text.RegularExpressions.Regex.Replace(s, @"\s+", "");
-            s = s.ToUpperInvariant();
+            var s = input.Trim().ToUpperInvariant();
 
-            // Match: (opcional TS o TS-) + 1 a 10 dígitos
-            var m = System.Text.RegularExpressions.Regex.Match(s, @"^(TS-?)?(?<n>\d{1,10})$");
-            if (m.Success)
-            {
-                var digits = m.Groups["n"].Value.PadLeft(10, '0');
-                return $"TS-{digits}";
-            }
+            // Quitar prefijo TS- si viene
+            if (s.StartsWith("TS-")) s = s.Substring(3);
+            else if (s.StartsWith("TS")) s = s.Substring(2);
+
+            // Si es numérico, quitar ceros a la izquierda
+            if (long.TryParse(s, out var n))
+                return n.ToString(); // <-- "35"
 
             return s;
         }
+
 
 
         /// <summary>
@@ -5350,13 +5569,24 @@ ORDER BY c.account_name;";
 
             if (drv != null)
             {
-                ShowDriverCard(drv);      // ya la tienes en RegisterSave_Click
+                _reweighPrefillDriver = drv;
+
+
+       
                 _driverLinked = true;
+                _formUnlocked = true;
+                ShowDriverCard(drv);      // ya la tienes en RegisterSave_Click
+
                 UpdateProductButtonsEnabled();
                 lblEstado.Content = "Driver linked from original ticket.";
+
+                try { RegisterDriverButton.Content = "Update driver"; } catch { }
+
+
             }
             else
             {
+                _reweighPrefillDriver = null;
                 _driverLinked = false;
                 UpdateProductButtonsEnabled();
                 lblEstado.Content = "No driver info for original ticket.";
@@ -5367,10 +5597,23 @@ ORDER BY c.account_name;";
         }
         private void ReweighCancelButton_Click(object sender, RoutedEventArgs e)
         {
+            // 1) Close modal
             try { ReweighHost.IsOpen = false; } catch { }
+
+            // 2) Exit reweigh mode and return to normal flow (do NOT reset transaction)
             try { ReweighToggle.IsChecked = false; } catch { }
-            ResetDriverContext();
+
+            // 3) Optional: clear the textbox so next time is clean
+            try { ReweighTicketInputTextBox.Text = ""; } catch { }
+
+            try
+            {
+                // pick ONE that makes sense in your UI
+                OkButton?.Focus();             
+            }
+            catch { }
         }
+
 
         private async void ReweighAcceptButton_Click(object sender, RoutedEventArgs e)
         {
@@ -5408,14 +5651,17 @@ ORDER BY c.account_name;";
             if (string.IsNullOrWhiteSpace(saleUid))
                 return null;
 
-            const string SQL = @"SELECT
+            const string SQL = @"
+                    SELECT
                     sdi.id_driver_info,
                     sdi.driver_first_name,
                     sdi.driver_last_name,
+                    sdi.account_number,
                     sdi.account_name,
                     sdi.account_address,
                     sdi.account_country,
                     sdi.account_state,
+                    sdi.driver_phone,
                     sdi.driver_product_id,
                     dp.name AS product_description,
                     sdi.license_number,
@@ -5426,7 +5672,9 @@ ORDER BY c.account_name;";
                 FROM sale_driver_info sdi
                 LEFT JOIN driver_products dp
                        ON dp.product_id = sdi.driver_product_id
-                WHERE sdi.sale_uid = @sale_uid ORDER BY sdi.id_driver_info DESC LIMIT 1";
+                WHERE sdi.sale_uid = @sale_uid
+                ORDER BY sdi.id_driver_info DESC
+                LIMIT 1";
 
             async Task<DriverInfo?> TryOneAsync(string connStr, string label)
             {
@@ -5450,6 +5698,7 @@ ORDER BY c.account_name;";
                         AppendLog($"[Driver] No driver found in {label} for sale_uid={saleUid}.");
                         return null;
                     }
+                    var phoneRaw = rd.IsDBNull("driver_phone") ? "" : rd.GetString("driver_phone");
 
                     var info = new DriverInfo
                     {
@@ -5457,18 +5706,16 @@ ORDER BY c.account_name;";
                         First = rd.GetString("driver_first_name"),
                         Last = rd.GetString("driver_last_name"),
 
+                        AccountNumber = rd.IsDBNull("account_number") ? "" : rd.GetString("account_number"),
                         AccountName = rd.IsDBNull("account_name") ? "" : rd.GetString("account_name"),
                         AccountAddress = rd.IsDBNull("account_address") ? "" : rd.GetString("account_address"),
                         AccountCountry = rd.IsDBNull("account_country") ? "" : rd.GetString("account_country"),
                         AccountState = rd.IsDBNull("account_state") ? "" : rd.GetString("account_state"),
 
-                        DriverProductId = rd.IsDBNull("driver_product_id")
-                            ? (int?)null
-                            : rd.GetInt32("driver_product_id"),
+                        PhoneDigits = OnlyDigits(phoneRaw),
 
-                        ProductDescription = rd.IsDBNull("product_description")
-                            ? ""
-                            : rd.GetString("product_description"),
+                        DriverProductId = rd.IsDBNull("driver_product_id") ? (int?)null : rd.GetInt32("driver_product_id"),
+                        ProductDescription = rd.IsDBNull("product_description") ? "" : rd.GetString("product_description"),
 
                         License = rd.IsDBNull("license_number") ? "" : rd.GetString("license_number"),
                         LicenseStateCode = rd.IsDBNull("license_state") ? "" : rd.GetString("license_state"),
@@ -5959,6 +6206,31 @@ ORDER BY c.account_name;";
 
             var localConn = ConfigManager.Current.LocalDbStrCon;
             await TryLoadAsync(localConn, "LOCAL");
+        }
+
+        private void SetDenominationsEnabled(bool enabled)
+        {
+            try
+            {
+                DenomsHost.IsEnabled = enabled;
+                DenomsHost.Opacity = enabled ? 1.0 : 0.45; // opcional, pero ayuda visual
+            }
+            catch { }
+        }
+        private void ClearDriverForm()
+        {
+            try { ChoferNombreText.Text = ""; } catch { }
+            try { ChoferApellidosText.Text = ""; } catch { }
+            try { LicenciaNumeroText.Text = ""; } catch { }
+            try { PlacasRegText.Text = ""; } catch { }
+
+            try { TrailerNumberText.Text = ""; } catch { }
+            try { TractorNumberText.Text = ""; } catch { }
+            try { LicenseStateCombo.SelectedIndex = -1; } catch { }
+
+            try { DriverPhoneText.Text = ""; } catch { }
+            _driverPhoneDigits = "";
+            try { DriverPhoneStatusText.Visibility = Visibility.Collapsed; } catch { }
         }
 
 

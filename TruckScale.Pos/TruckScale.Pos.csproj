@@ -11,6 +11,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
     <PackageReference Include="MaterialDesignColors" Version="5.*" />
     <PackageReference Include="MaterialDesignThemes" Version="5.*" />
     <!-- Opcional: si quieres MVVM, este SÍ es compatible con WPF -->

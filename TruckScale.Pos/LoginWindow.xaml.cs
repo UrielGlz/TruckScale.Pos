@@ -291,19 +291,25 @@ namespace TruckScale.Pos
             string storedHash = rd.GetString("password_hash");
             string algo = rd.GetString("password_algo");
 
-            string inputHash;
+            bool ok;
+
             if (string.Equals(algo, "SHA256", StringComparison.OrdinalIgnoreCase))
             {
-                inputHash = ComputeSha256(password);
+                var inputHash = ComputeSha256(password);
+                ok = string.Equals(storedHash, inputHash, StringComparison.OrdinalIgnoreCase);
+            }
+            else if (string.Equals(algo, "bcrypt", StringComparison.OrdinalIgnoreCase))
+            {
+                // Requiere paquete NuGet: BCrypt.Net-Next
+                ok = BCrypt.Net.BCrypt.Verify(password, storedHash);
             }
             else
             {
-                // por ahora solo soportamos SHA256
+                // algoritmo no soportado
                 return null;
             }
 
-            if (!string.Equals(storedHash, inputHash, StringComparison.OrdinalIgnoreCase))
-                return null;
+            if (!ok) return null;
 
             return new DbUser
             {
@@ -316,6 +322,7 @@ namespace TruckScale.Pos
                 IsActive = isActive
             };
         }
+
 
 
         private static string ComputeSha256(string raw)

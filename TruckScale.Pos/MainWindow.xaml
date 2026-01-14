@@ -401,10 +401,13 @@
                                     </Button>
 
                                     <Button Grid.Column="1"
-                                            Style="{StaticResource PrimaryOutlined}"
-                                            Content="{DynamicResource Zero}"
-                                            Margin="8,0,0,0"
-                                            Click="Zero_Click"/>
+                                        Style="{StaticResource PrimaryOutlined}"
+                                        Content="New"
+                                        Margin="8,0,0,0"
+                                        Click="NewTransaction_Click"
+                                        BorderBrush="{DynamicResource MaterialDesignValidationErrorBrush}"
+                                        Foreground="{DynamicResource MaterialDesignValidationErrorBrush}"/>
+
                                 </Grid>
 
                                 <!-- Ejes por sesión -->
@@ -987,11 +990,15 @@
                ToolTip="Ctrl+Alt+F9 for sync debug"/>
                 </DockPanel>
 
-                <!-- === SALE COMPLETED DIALOG === -->
-                <md:DialogHost x:Name="SaleCompletedHost" Grid.RowSpan="99" Grid.ColumnSpan="99"  Panel.ZIndex="100">
+                <!-- === SALE COMPLETED DIALOG (improved) === -->
+                <md:DialogHost x:Name="SaleCompletedHost" Grid.RowSpan="99" Grid.ColumnSpan="99" Panel.ZIndex="100">
                     <md:DialogHost.DialogContent>
-                        <Grid Width="520" HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <md:Card Padding="18" md:ElevationAssist.Elevation="Dp3" UniformCornerRadius="16">
+                        <Grid Width="660"
+              HorizontalAlignment="Center"
+              VerticalAlignment="Center">
+                            <md:Card Padding="24"
+                     md:ElevationAssist.Elevation="Dp4"
+                     UniformCornerRadius="18">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
@@ -1001,52 +1008,128 @@
                                     </Grid.RowDefinitions>
 
                                     <!-- Header -->
-                                    <StackPanel Orientation="Horizontal">
-                                        <md:PackIcon Kind="CheckCircle" Width="28" Height="28"
-                         Foreground="{DynamicResource PrimaryHueMidBrush}"
-                         Margin="0,0,8,0"/>
-                                        <TextBlock Text="Sale completed" FontSize="20" FontWeight="SemiBold"/>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <md:PackIcon Kind="CheckCircle"
+                                     Width="34" Height="34"
+                                     Foreground="{DynamicResource PrimaryHueMidBrush}"
+                                     Margin="0,0,10,0"/>
+                                        <StackPanel>
+                                            <TextBlock Text="Sale completed"
+                                       FontSize="22"
+                                       FontWeight="SemiBold"/>
+                                            <TextBlock Text="Transaction finished successfully"
+                                       Opacity=".65"
+                                       FontSize="13"
+                                       Margin="0,2,0,0"/>
+                                        </StackPanel>
                                     </StackPanel>
 
                                     <!-- KPI row -->
-                                    <Grid Grid.Row="1" Margin="0,14,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
+                                    <Border Grid.Row="1" Margin="0,18,0,0" Padding="14" CornerRadius="12"
+                            Background="{DynamicResource MaterialDesignPaper}">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
 
-                                        <StackPanel Grid.Column="0" HorizontalAlignment="Center">
-                                            <TextBlock Text="Total" Opacity=".7"/>
-                                            <TextBlock x:Name="DlgSaleTotal" FontSize="20" FontWeight="Bold"/>
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1" HorizontalAlignment="Center">
-                                            <TextBlock Text="Received" Opacity=".7"/>
-                                            <TextBlock x:Name="DlgSaleReceived" FontSize="20" FontWeight="Bold"/>
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="2" HorizontalAlignment="Center">
-                                            <TextBlock Text="Change" Opacity=".7"/>
-                                            <TextBlock x:Name="DlgSaleChange" FontSize="20" FontWeight="Bold"
-                         Foreground="{DynamicResource PrimaryHueMidBrush}"/>
-                                        </StackPanel>
-                                    </Grid>
+                                            <StackPanel Grid.Column="0" HorizontalAlignment="Center">
+                                                <TextBlock Text="Total" Opacity=".7" FontSize="13"/>
+                                                <TextBlock x:Name="DlgSaleTotal" FontSize="24" FontWeight="Bold" Margin="0,2,0,0"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1" HorizontalAlignment="Center">
+                                                <TextBlock Text="Received" Opacity=".7" FontSize="13"/>
+                                                <TextBlock x:Name="DlgSaleReceived" FontSize="24" FontWeight="Bold" Margin="0,2,0,0"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="2" HorizontalAlignment="Center">
+                                                <TextBlock Text="Change" Opacity=".7" FontSize="13"/>
+                                                <TextBlock x:Name="DlgSaleChange"
+                                           FontSize="24"
+                                           FontWeight="Bold"
+                                           Margin="0,2,0,0"
+                                           Foreground="{DynamicResource PrimaryHueMidBrush}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
 
                                     <!-- Ticket + spinner -->
-                                    <StackPanel Grid.Row="2" Margin="0,16,0,0" Orientation="Horizontal" VerticalAlignment="Center">
-                                        <md:PackIcon Kind="ReceiptText" Width="22" Height="22" Margin="0,0,8,0"/>
-                                        <TextBlock Text="Printing ticket…" VerticalAlignment="Center"/>
-                                        <ProgressBar x:Name="DlgTicketProgress" IsIndeterminate="True" Width="140" Height="4" Margin="10,0,0,0"/>
-                                    </StackPanel>
+                                    <Grid Grid.Row="2" Margin="0,18,0,0" VerticalAlignment="Center">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <md:PackIcon Grid.Column="0" Kind="ReceiptText" Width="22" Height="22" Margin="0,0,10,0"/>
+                                        <TextBlock Grid.Column="1" Text="Printing ticket…" VerticalAlignment="Center" Opacity=".85"/>
+
+                                        <ProgressBar Grid.Column="2"
+                                     x:Name="DlgTicketProgress"
+                                     IsIndeterminate="True"
+                                     Width="180"
+                                     Height="6"
+                                     VerticalAlignment="Center"
+                                     Margin="14,0,0,0"/>
+                                    </Grid>
 
                                     <!-- Footer -->
-                                    <DockPanel Grid.Row="3" Margin="0,18,0,0">
-                                        <TextBlock x:Name="DlgSaleUid" DockPanel.Dock="Left" Opacity=".7" TextWrapping="Wrap"/>
-                                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                                            <Button x:Name="DlgReprintBtn" Content="Reprint"
-                      Style="{StaticResource MaterialDesignOutlinedButton}" Margin="0,0,8,0"/>
-                                            <Button x:Name="DlgCloseBtn" Content="Close" IsDefault="True"/>
+                                    <Grid Grid.Row="3" Margin="0,22,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <TextBlock x:Name="DlgSaleUid"
+                                   Grid.Column="0"
+                                   Opacity=".7"
+                                   TextWrapping="Wrap"
+                                   FontSize="12"
+                                   FontFamily="Consolas"
+                                   VerticalAlignment="Center"/>
+
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                                            <Button x:Name="DlgReprintBtn"
+                                    Content="Reprint"
+                                    Style="{StaticResource MaterialDesignOutlinedButton}"
+                                    Height="44"
+                                    MinWidth="130"
+                                    FontSize="15"
+                                    Padding="18,8"
+                                    md:ButtonAssist.CornerRadius="10"
+                                    Margin="0,0,10,0"/>
+
+                                            <!--<Button x:Name="DlgCloseBtn"
+                                    Content="Close"
+                                    Style="{StaticResource MaterialDesignRaisedButton}"
+                                    Height="44"
+                                    MinWidth="130"
+                                    FontSize="15"
+                                    Padding="18,8"
+                                    md:ButtonAssist.CornerRadius="10"
+                                    IsDefault="True"
+                                    Background="{DynamicResource PrimaryHueMidBrush}"
+                                    Foreground="White"/>-->
+                                            <Button x:Name="DlgCloseBtn"
+                                                        Content="Close"
+                                                        Height="44"
+                                                        MinWidth="130"
+                                                        FontSize="15"
+                                                        Padding="18,8"
+                                                        md:ButtonAssist.CornerRadius="10"
+                                                        IsDefault="True">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource MaterialDesignRaisedButton}">
+                                                        <Setter Property="Background" Value="{DynamicResource PrimaryHueMidBrush}"/>
+                                                        <Setter Property="Foreground" Value="White"/>
+                                                        <Setter Property="BorderBrush" Value="{x:Null}"/>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+
+
                                         </StackPanel>
-                                    </DockPanel>
+                                    </Grid>
                                 </Grid>
                             </md:Card>
                         </Grid>
@@ -1142,19 +1225,11 @@
                 </md:DialogHost>
 
                 <!-- ================== REWEIGH TICKET DIALOG ================== -->
-                <md:DialogHost x:Name="ReweighHost"
-                    Identifier="ReweighHost"
-                    Grid.RowSpan="99"
-                    Grid.ColumnSpan="99"
-                    Panel.ZIndex="100">
+                <md:DialogHost x:Name="ReweighHost" Identifier="ReweighHost" Grid.RowSpan="99" Grid.ColumnSpan="99" Panel.ZIndex="100">
                     <md:DialogHost.DialogContent>
-                        <!-- Contenedor centrado -->
-                            <Grid Width="620"
-                                HorizontalAlignment="Center"
-                                VerticalAlignment="Center">
-                            <md:Card Padding="24"
-                             md:ElevationAssist.Elevation="Dp2"
-                             UniformCornerRadius="16">
+                        <!-- Centered container -->
+                        <Grid Width="620" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <md:Card Padding="24" md:ElevationAssist.Elevation="Dp2" UniformCornerRadius="16">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
@@ -1163,7 +1238,7 @@
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
 
-                                    <!-- Título -->
+                                    <!-- Title -->
                                     <StackPanel Grid.Row="0"
                                 Orientation="Horizontal"
                                 Margin="0,0,0,16">
@@ -1178,17 +1253,17 @@
                                    VerticalAlignment="Center"/>
                                     </StackPanel>
 
-                                    <!-- Descripción -->
+                                    <!-- Description (operator-friendly) -->
                                     <TextBlock Grid.Row="1"
-                               Text="Escanea el código QR del ticket original o pega el JSON completo."
+                               Text="Scan the original ticket QR code or type the ticket number."
                                TextWrapping="Wrap"
                                Margin="0,0,0,18"
                                Opacity="0.8"/>
 
-                                    <!-- Input grande para ticket / JSON -->
+                                    <!-- Big input -->
                                     <TextBox Grid.Row="2"
                              x:Name="ReweighTicketInputTextBox"
-                             md:HintAssist.Hint="Ticket / QR / JSON"
+                             md:HintAssist.Hint="Ticket number or QR code"
                              Style="{StaticResource MaterialDesignFloatingHintTextBox}"
                              md:TextFieldAssist.DecorationVisibility="Hidden"
                              Margin="0,0,0,18"
@@ -1198,20 +1273,19 @@
                              VerticalContentAlignment="Center"
                              TextWrapping="NoWrap"
                              KeyDown="ReweighTicketInputTextBox_KeyDown"/>
-                                    <!-- si quieres limitar: MaxLength="512" -->
 
-                                    <!-- Botones -->
+                                    <!-- Buttons -->
                                     <StackPanel Grid.Row="3"
                                 Orientation="Horizontal"
                                 HorizontalAlignment="Right">
-                                        <Button Content="Cancelar"
+                                        <Button Content="Cancel"
                                 Margin="0,0,8,0"
                                 Padding="18,6"
                                 Command="{x:Static md:DialogHost.CloseDialogCommand}"
                                 CommandParameter="{x:Null}"
                                 Click="ReweighCancelButton_Click"/>
 
-                                        <Button Content="Continuar"
+                                        <Button Content="Continue"
                                 Padding="18,6"
                                 Style="{StaticResource MaterialDesignRaisedButton}"
                                 Click="ReweighAcceptButton_Click"/>
@@ -1221,9 +1295,6 @@
                         </Grid>
                     </md:DialogHost.DialogContent>
                 </md:DialogHost>
-
-
-
 
             </Grid>
 
