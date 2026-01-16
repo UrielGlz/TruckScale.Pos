@@ -908,6 +908,10 @@ namespace TruckScale.Pos
             _driverLinked = false;
             _hasAcceptedWeight = false;
 
+            _hasAcceptedWeight = false;
+            UpdateOkNewButtonsEnabled();
+
+
             // Bloquea el formulario para el siguiente camión
             _formUnlocked = false;
 
@@ -2455,6 +2459,7 @@ namespace TruckScale.Pos
             // === Config general (incluye impresora) ===
             // === Config general: conexiones de BD ===
             ConfigManager.Load();
+            UpdateOkNewButtonsEnabled(); // _hasAcceptedWeight inicia false => OK enabled, New disabled
 
             // === Config de tickets: desde tabla settings en BD ===
             await LoadTicketSettingsFromDbAsync();
@@ -4256,7 +4261,8 @@ namespace TruckScale.Pos
                 AppendLog("[OK] Click ignored (no stable weight to accept).");
                 return;
             }
-
+            _hasAcceptedWeight = true;
+            UpdateOkNewButtonsEnabled();
             // Tomamos el snapshot estable preparado por EvaluateStabilityAndUpdateUi o TryAcceptStableSet
             var uuid = GenerateUid10();
             _currentWeightUuid = uuid;
@@ -5335,9 +5341,11 @@ ORDER BY c.account_name;";
                     s.sale_id,
                     s.sale_uid,
                     s.sale_status_id,
-                    s.reweigh_of_sale_id,
-                    -- Versión actual: usamos la fecha/hora de la venta como base de T_AGIN
-                    COALESCE(s.occurred_at, s.created_at) AS occurred_at,
+                    s.reweigh_of_sale_id,                    
+                    COALESCE(
+                      NULLIF(s.occurred_at, '0000-00-00 00:00:00'),
+                      NULLIF(s.created_at,  '0000-00-00 00:00:00')
+                    ) AS occurred_at,
                     t.ticket_id,
                     t.ticket_uid,
                     t.ticket_number,
@@ -6231,6 +6239,14 @@ ORDER BY c.account_name;";
             try { DriverPhoneText.Text = ""; } catch { }
             _driverPhoneDigits = "";
             try { DriverPhoneStatusText.Visibility = Visibility.Collapsed; } catch { }
+        }
+        private void UpdateOkNewButtonsEnabled()
+        {
+            // Regla: si OK esta habilitado => New deshabilitado, y viceversa
+            bool okEnabled = !_hasAcceptedWeight;
+
+            OkButton.IsEnabled = okEnabled;
+            NewTransactionButton.IsEnabled = !okEnabled;
         }
 
 

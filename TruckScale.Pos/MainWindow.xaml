@@ -401,6 +401,7 @@
                                     </Button>
 
                                     <Button Grid.Column="1"
+                                        x:Name="NewTransactionButton"
                                         Style="{StaticResource PrimaryOutlined}"
                                         Content="New"
                                         Margin="8,0,0,0"
