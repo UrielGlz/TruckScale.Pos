@@ -4839,10 +4839,25 @@ ORDER BY c.account_name;";
 
 
 
+        private bool _skipPhoneLostFocus;
+
+        private async void DriverPhoneText_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Enter) return;
+
+            e.Handled = true;
+            _skipPhoneLostFocus = true;
+            await ValidateAndLoadDriverByPhoneAsync();
+            _skipPhoneLostFocus = false;
+        }
+
         private async void DriverPhoneText_LostFocus(object sender, RoutedEventArgs e)
         {
+            if (_skipPhoneLostFocus) return;
             await ValidateAndLoadDriverByPhoneAsync();
         }
+
+
         private async void DialogBody_MouseDown(object sender, MouseButtonEventArgs e)
         {
             // Solo nos interesa si el textbox tenía el foco

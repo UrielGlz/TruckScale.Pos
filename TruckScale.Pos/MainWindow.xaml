@@ -411,14 +411,14 @@
 
                                 </Grid>
 
-                                <!-- Ejes por sesión -->
+                                <!-- Ejes por sesión --><!--
                                 <StackPanel Margin="0,12,0,0">
                                     <TextBlock Text="Ejes por sesión" Style="{StaticResource TitleLarge}" />
                                 </StackPanel>
                                 <Label x:Name="lblEje1" Style="{StaticResource AxleLabel}" Content="Axle 1: 0 lb"/>
                                 <Label x:Name="lblEje2" Style="{StaticResource AxleLabel}" Content="Axle 2: 0 lb"/>
                                 <Label x:Name="lblEje3" Style="{StaticResource AxleLabel}" Content="Axle 3: 0 lb"/>
-                                <Label x:Name="lblUUID" Style="{StaticResource AxleTotalLabel}" Content="Total: 0 lb"/>
+                                <Label x:Name="lblUUID" Style="{StaticResource AxleTotalLabel}" Content="Total: 0 lb"/>-->
                             </StackPanel>
                         </md:Card>
 
@@ -798,135 +798,104 @@
                                 </StackPanel>
                             </md:Card>
 
-                            <!-- Driver summary en la otra mitad -->
+                          
 
                             <!-- Driver summary en la otra mitad -->
-                            <md:Card x:Name="DriverCard"
-                             Grid.Column="1"
-                             Margin="8,0,0,0"
-                             Padding="22"
-                             UniformCornerRadius="12"
-                             Visibility="Collapsed">
-                                <StackPanel>
+                            <!-- Right column container -->
+                            <StackPanel Grid.Column="1" Margin="8,0,0,0">
 
-                                    <!-- Header -->
-                                    <StackPanel Orientation="Horizontal"
-                                    VerticalAlignment="Center"
-                                    Margin="0,0,0,6">
-                                        <md:PackIcon Kind="AccountTie"
-                                         Width="24"
-                                         Height="24"
-                                         Opacity="0.9"
-                                         Margin="0,0,8,0"/>
-                                        <TextBlock Text="Driver summary"
-                                           FontWeight="SemiBold"
-                                           FontSize="16"
-                                           VerticalAlignment="Center"/>
+                                <!-- Session Axles (moved here) -->
+                                <md:Card x:Name="AxlesCard"
+             Padding="22"
+             UniformCornerRadius="12"
+             Margin="0,0,0,12">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,6">
+                                            <md:PackIcon Kind="TruckOutline"
+                             Width="24"
+                             Height="24"
+                             Opacity="0.9"
+                             Margin="0,0,8,0"/>
+                                            <TextBlock Text="Session axles"
+                           FontWeight="SemiBold"
+                           FontSize="16"
+                           VerticalAlignment="Center"/>
+                                        </StackPanel>
+
+                                        <Separator Margin="0,4,0,10"/>
+
+                                        <!-- KEEP SAME LABEL NAMES -->
+                                        <Label x:Name="lblEje1" Style="{StaticResource AxleLabel}" Content="Axle 1: 0 lb"/>
+                                        <Label x:Name="lblEje2" Style="{StaticResource AxleLabel}" Content="Axle 2: 0 lb"/>
+                                        <Label x:Name="lblEje3" Style="{StaticResource AxleLabel}" Content="Axle 3: 0 lb"/>
+                                        <Label x:Name="lblUUID" Style="{StaticResource AxleTotalLabel}" Content="Total: 0 lb"/>
                                     </StackPanel>
+                                </md:Card>
 
-                                    <Separator Margin="0,4,0,10"/>
-
-                                    <!-- Nombre del chofer destacado -->
-                                    <TextBlock x:Name="DriverNameText"
-                                       Text="—"
-                                       FontSize="22"
-                                       FontWeight="Bold"
-                                       Margin="0,0,0,8"/>
-
-                                    <!-- “Subtítulo” cuenta -->
-                                    <TextBlock Text="Account and service"  FontSize="12"
-                                       Opacity="0.7"
-                                       Margin="0,0,0,4"/>
-
-                                    <!-- Detalles en dos columnas -->
-                                    <Grid Margin="0,2,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-
-                                        <!-- Columna izquierda -->
-                                        <StackPanel Grid.Column="0" Margin="0,0,10,0">
-                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
-                                                <md:PackIcon Kind="AccountMultipleOutline"
-                                 Width="16"
-                                 Height="16"
-                                 Opacity="0.75"
-                                 Margin="0,0,6,0"/>
-                                                <TextBlock x:Name="DriverAccountText"
-                               Text="Account: —"
-                               FontSize="14"
-                               Opacity="0.95"/>
-                                            </StackPanel>
-
-                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
-                                                <md:PackIcon Kind="PackageVariantClosed"
-                                 Width="16"
-                                 Height="16"
-                                 Opacity="0.75"
-                                 Margin="0,0,6,0"/>
-                                                <TextBlock x:Name="DriverProductText"
-                               Text="Product: —"
-                               FontSize="14"
-                               Opacity="0.95"/>
-                                            </StackPanel>
-
-                                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
-                                                <md:PackIcon Kind="License"
-                                 Width="16"
-                                 Height="16"
-                                 Opacity="0.75"
-                                 Margin="0,0,6,0"/>
-                                                <TextBlock x:Name="DriverLicenseText"
-                               Text="License: —"
-                               FontSize="14"
-                               Opacity="0.95"/>
-                                            </StackPanel>
+                                <!-- Driver summary (YOUR ORIGINAL CARD, unchanged) -->
+                                <md:Card x:Name="DriverCard"
+             Margin="0,0,0,0"
+             Padding="22"
+             UniformCornerRadius="12"
+             Visibility="Collapsed">
+                                    <!-- pega aqui EXACTO tu contenido original -->
+                                    <StackPanel>
+                                        <!-- Header -->
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,6">
+                                            <md:PackIcon Kind="AccountTie" Width="24" Height="24" Opacity="0.9" Margin="0,0,8,0"/>
+                                            <TextBlock Text="Driver summary" FontWeight="SemiBold" FontSize="16" VerticalAlignment="Center"/>
                                         </StackPanel>
 
-                                        <!-- Columna derecha -->
-                                        <StackPanel Grid.Column="1">
-                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
-                                                <md:PackIcon Kind="Car"
-                                 Width="16"
-                                 Height="16"
-                                 Opacity="0.75"
-                                 Margin="0,0,6,0"/>
-                                                <TextBlock x:Name="DriverPlatesText"
-                               Text="Plates: —"
-                               FontSize="14"
-                               Opacity="0.95"/>
+                                        <Separator Margin="0,4,0,10"/>
+
+                                        <TextBlock x:Name="DriverNameText" Text="—" FontSize="22" FontWeight="Bold" Margin="0,0,0,8"/>
+                                        <TextBlock Text="Account and service" FontSize="12" Opacity="0.7" Margin="0,0,0,4"/>
+
+                                        <Grid Margin="0,2,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                                                    <md:PackIcon Kind="AccountMultipleOutline" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
+                                                    <TextBlock x:Name="DriverAccountText" Text="Account: —" FontSize="14" Opacity="0.95"/>
+                                                </StackPanel>
+
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                                                    <md:PackIcon Kind="PackageVariantClosed" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
+                                                    <TextBlock x:Name="DriverProductText" Text="Product: —" FontSize="14" Opacity="0.95"/>
+                                                </StackPanel>
+
+                                                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                                    <md:PackIcon Kind="License" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
+                                                    <TextBlock x:Name="DriverLicenseText" Text="License: —" FontSize="14" Opacity="0.95"/>
+                                                </StackPanel>
                                             </StackPanel>
 
-                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
-                                                <md:PackIcon Kind="Truck"
-                                 Width="16"
-                                 Height="16"
-                                 Opacity="0.75"
-                                 Margin="0,0,6,0"/>
-                                                <TextBlock x:Name="DriverUnitText"
-                               Text="Unit: —"
-                               FontSize="14"
-                               Opacity="0.95"/>
-                                            </StackPanel>
+                                            <StackPanel Grid.Column="1">
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                                                    <md:PackIcon Kind="Car" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
+                                                    <TextBlock x:Name="DriverPlatesText" Text="Plates: —" FontSize="14" Opacity="0.95"/>
+                                                </StackPanel>
 
-                                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                                <md:PackIcon Kind="MapMarker"
-                                 Width="16"
-                                 Height="16"
-                                 Opacity="0.75"
-                                 Margin="0,0,6,0"/>
-                                                <TextBlock x:Name="DriverAccountAddressText"
-                               Text="Address: —"
-                               FontSize="14"
-                               TextWrapping="Wrap"
-                               Opacity="0.9"
-                               MaxWidth="260"/>
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                                                    <md:PackIcon Kind="Truck" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
+                                                    <TextBlock x:Name="DriverUnitText" Text="Unit: —" FontSize="14" Opacity="0.95"/>
+                                                </StackPanel>
+
+                                                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                    <md:PackIcon Kind="MapMarker" Width="16" Height="16" Opacity="0.75" Margin="0,0,6,0"/>
+                                                    <TextBlock x:Name="DriverAccountAddressText" Text="Address: —" FontSize="14" TextWrapping="Wrap" Opacity="0.9" MaxWidth="260"/>
+                                                </StackPanel>
                                             </StackPanel>
-                                        </StackPanel>
-                                    </Grid>
-                                </StackPanel>
-                            </md:Card>
+                                        </Grid>
+                                    </StackPanel>
+                                </md:Card>
+
+                            </StackPanel>
+
 
 
                         </Grid>
@@ -1393,7 +1362,8 @@
                              MaxLength="14"
                              PreviewTextInput="DigitsOnly_PreviewTextInput"
                              DataObject.Pasting="DigitsOnly_Pasting"
-                             LostFocus="DriverPhoneText_LostFocus"/>
+                             LostFocus="DriverPhoneText_LostFocus"
+                             PreviewKeyDown="DriverPhoneText_PreviewKeyDown"/>
 
                             <!-- ===== Driver ===== -->
                             <Border Grid.Row="2" Grid.ColumnSpan="2"
