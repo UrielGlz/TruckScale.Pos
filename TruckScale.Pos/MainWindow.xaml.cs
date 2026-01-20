@@ -150,6 +150,8 @@ namespace TruckScale.Pos
 
         // === Serial al estilo "ScaleTesting" ===
         private SerialPort? _port;
+        private string _scaleComPort = "COM2"; // se esta usando este
+
 
         // Últimos valores por canal (0,1,2 = ejes; 3 = total)
         readonly Dictionary<int, double> _last = new() { { 0, 0 }, { 1, 0 }, { 2, 0 }, { 3, 0 } };
@@ -237,10 +239,15 @@ namespace TruckScale.Pos
         /* Todo el código de báscula lo puse entre estos comentarios */
         /* ANDRES *****************************************/
 
-        private void StartReader(string portName)
+        private void StartReader()
         {
+            var portName = _scaleComPort; // viene de BD
+
             try
             {
+                if (string.IsNullOrWhiteSpace(portName))
+                    throw new InvalidOperationException("Scale COM port is empty (settings key: scale.com).");
+
                 if (_port != null)
                 {
                     _port.DataReceived -= OnDataReceived;
@@ -252,7 +259,7 @@ namespace TruckScale.Pos
                 _port = new SerialPort(portName, 9600, Parity.None, 8, StopBits.One)
                 {
                     Handshake = Handshake.None,
-                    NewLine = "\r",      // CR (igual que en el stream real)
+                    NewLine = "\r",
                     Encoding = Encoding.ASCII,
                     ReadTimeout = 1000,
                     WriteTimeout = 1000,
@@ -289,6 +296,7 @@ namespace TruckScale.Pos
             }
         }
 
+
         /// <summary>
         /// Conexión automática al arrancar (real → si falla, simulado).
         /// </summary>
@@ -296,8 +304,8 @@ namespace TruckScale.Pos
         {
             try
             {
-                AppendLog("[Boot] Trying to open scale on COM2…");
-                StartReader("COM2"); // si falla, lanza excepción y caemos al catch
+                AppendLog($"[Boot] Trying to open scale on {_scaleComPort}…");
+                StartReader(); // ya no recibe parámetro
             }
             catch (Exception ex)
             {
@@ -305,6 +313,7 @@ namespace TruckScale.Pos
                 StartSimulatedReader();
             }
         }
+
 
         // ===== Captura de crudo a TXT (no usar en producción) =====
         private StreamWriter _rxCapture;
@@ -6163,15 +6172,17 @@ ORDER BY c.account_name;";
         private async Task LoadTicketSettingsFromDbAsync()
         {
             const string SQL = @"
-        SELECT `key`, `value` 
-        FROM settings 
-        WHERE site_id = 1 
-          AND is_active = 1 
-          AND `key` IN (
-              'tickets.printer_name',
-              'tickets.landscape',
-              'tickets.margin_inches'
-          );";
+                SELECT `key`, `value`
+                FROM settings
+                WHERE site_id = 1
+                  AND is_active = 1
+                  AND `key` IN (
+                      'tickets.printer_name',
+                      'tickets.landscape',
+                      'tickets.margin_inches',
+                      'scale.com'
+                  );";
+
 
             async Task<bool> TryLoadAsync(string connStr, string sourceLabel)
             {
@@ -6209,7 +6220,12 @@ ORDER BY c.account_name;";
                                     System.Globalization.CultureInfo.InvariantCulture, out var margin))
                                     _ticketMarginInches = margin;
                                 break;
+
+                            case "scale.com":
+                                _scaleComPort = string.IsNullOrWhiteSpace(value) ? "COM2" : value.Trim();
+                                break;
                         }
+
                     }
 
                     AppendLog($"[Config] Ticket settings loaded from {sourceLabel}. Printer: '{_ticketPrinterName}', Landscape: {_ticketLandscape}, Margin: {_ticketMarginInches}");
