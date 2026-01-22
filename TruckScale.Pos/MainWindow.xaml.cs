@@ -3934,13 +3934,20 @@ namespace TruckScale.Pos
                         await cmd.ExecuteNonQueryAsync();
                     }
 
-                    // ========== INSERT EN payments ==========
+                    //const string SQL_PAY = @"INSERT INTO payments
+                    //    (payment_uid, sale_uid, method_id, payment_status_id, amount, currency,
+                    //     exchange_rate, reference_number, received_by, received_at)
+                    //VALUES
+                    //    (@puid, @uid, @mid, @st, @amt, @ccy,
+                    //     @rate, @ref, @rcvby, NOW());";
+
+                    // ========== INSERT EN payments ========== //UG QUITAMOS EL received_at este se tiene que llenar cuando el departamento de cobranza reciba el pago
                     const string SQL_PAY = @"INSERT INTO payments
                         (payment_uid, sale_uid, method_id, payment_status_id, amount, currency,
-                         exchange_rate, reference_number, received_by, received_at)
+                         exchange_rate, reference_number, received_by)
                     VALUES
                         (@puid, @uid, @mid, @st, @amt, @ccy,
-                         @rate, @ref, @rcvby, NOW());";
+                         @rate, @ref, @rcvby);";
 
                     foreach (var p in _pagos)
                     {
