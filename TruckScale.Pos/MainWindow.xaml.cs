@@ -306,6 +306,8 @@ namespace TruckScale.Pos
             {
                 AppendLog($"[Boot] Trying to open scale on {_scaleComPort}…");
                 StartReader(); // ya no recibe parámetro
+                //StartSimulatedReader(); //TODO | IMPORTANTE QUITAR ESTO
+
             }
             catch (Exception ex)
             {
@@ -3772,6 +3774,8 @@ namespace TruckScale.Pos
         const int STATUS_SALE_COMPLETED = 2; // SALES.COMPLETED
         const int STATUS_SALE_CANCELLED = 3;
         const int STATUS_PAY_RECEIVED = 6;   // PAYMENTS.RECEIVED
+        const int STATUS_PAY_PENDING = 5;   // PAYMENTS.PENDING
+
         const int STATUS_SALE_REFUNDED = 4;
 
         private async Task<string> SaveSaleAsync()
@@ -3944,11 +3948,25 @@ namespace TruckScale.Pos
                         if (methodId == null)
                             throw new InvalidOperationException($"Payment method '{p.Code}' not found/mapped.");
 
+                       
+
                         await using var cmd = new MySqlCommand(SQL_PAY, conn, (MySqlTransaction)tx);
+                        
                         cmd.Parameters.AddWithValue("@puid", Guid.NewGuid().ToString());
                         cmd.Parameters.AddWithValue("@uid", saleUid);
                         cmd.Parameters.AddWithValue("@mid", methodId.Value);
-                        cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
+
+                        //cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
+                        if (methodId == 3) // Business Account *el pago se tiene que poner como pendiente, se pasara a pagado por el area de cuentas por pagar
+                        {
+                            cmd.Parameters.AddWithValue("@st", STATUS_PAY_PENDING);
+                        }
+                        else
+                        {
+                            cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
+
+                        }
+
                         cmd.Parameters.AddWithValue("@amt", p.Monto);
                         cmd.Parameters.AddWithValue("@ccy", _selectedCurrency ?? "USD");
                         cmd.Parameters.AddWithValue("@rate", 1m);
