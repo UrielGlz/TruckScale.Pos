@@ -305,8 +305,8 @@ namespace TruckScale.Pos
             try
             {
                 AppendLog($"[Boot] Trying to open scale on {_scaleComPort}…");
-                StartReader(); // ya no recibe parámetro
-                //StartSimulatedReader(); //TODO | IMPORTANTE QUITAR ESTO
+                //StartReader(); // ya no recibe parámetro
+                StartSimulatedReader(); //TODO | IMPORTANTE QUITAR ESTO
 
             }
             catch (Exception ex)
@@ -2457,6 +2457,7 @@ namespace TruckScale.Pos
                 //  - al menos un pago
                 //  - total del servicio cubierto
                 DoneButton.IsEnabled = _driverLinked && hasProduct && hasPayments && isFullyPaid;
+
             }
             catch
             {
@@ -3648,7 +3649,7 @@ namespace TruckScale.Pos
 
 
 
-        private void SelectPaymentByCode(string? code)
+        private async void SelectPaymentByCode(string? code)
         {
             PaymentMethod? sel = null;
 
@@ -3695,6 +3696,8 @@ namespace TruckScale.Pos
                 if (string.Equals(sel.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(sel.Code, CARD_CODE, StringComparison.OrdinalIgnoreCase))
                 {
+                    await ReevaluateBusinessAccountAsync(silent: false);
+
                     _pagos.Clear();
 
                     var (_, _, total) = ComputeTotals();
@@ -3713,10 +3716,13 @@ namespace TruckScale.Pos
         }
 
 
-        private void PaymentMethod_Click(object sender, RoutedEventArgs e)
+        private async  void PaymentMethod_Click(object sender, RoutedEventArgs e)
         {
             if ((sender as FrameworkElement)?.DataContext is PaymentMethod pm)
                 SelectPaymentByCode(pm.Code);
+
+            await ReevaluateBusinessAccountAsync(silent: true);
+
         }
 
         /// <Servicios>
@@ -3934,28 +3940,24 @@ namespace TruckScale.Pos
                         await cmd.ExecuteNonQueryAsync();
                     }
 
-                    //const string SQL_PAY = @"INSERT INTO payments
-                    //    (payment_uid, sale_uid, method_id, payment_status_id, amount, currency,
-                    //     exchange_rate, reference_number, received_by, received_at)
-                    //VALUES
-                    //    (@puid, @uid, @mid, @st, @amt, @ccy,
-                    //     @rate, @ref, @rcvby, NOW());";
-
-                    // ========== INSERT EN payments ========== //UG QUITAMOS EL received_at este se tiene que llenar cuando el departamento de cobranza reciba el pago
+                    // ========== INSERT EN payments ========== 
                     const string SQL_PAY = @"INSERT INTO payments
-                        (payment_uid, sale_uid, method_id, payment_status_id, amount, currency,
-                         exchange_rate, reference_number, received_by)
-                    VALUES
-                        (@puid, @uid, @mid, @st, @amt, @ccy,
-                         @rate, @ref, @rcvby);";
+                            (payment_uid, sale_uid, method_id, payment_status_id, amount, currency,
+                             exchange_rate, reference_number, received_by, received_at)
+                        VALUES
+                            (@puid, @uid, @mid, @st, @amt, @ccy,
+                             @rate, @ref, @rcvby, @rcvat);";
+
+
 
                     foreach (var p in _pagos)
                     {
                         int? methodId = FindPaymentMethodIdByCode(p.Code);
                         if (methodId == null)
                             throw new InvalidOperationException($"Payment method '{p.Code}' not found/mapped.");
+                        
+                        bool isBusiness = string.Equals(p.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase) || methodId.Value == 3; // si quieres mantenerlo
 
-                       
 
                         await using var cmd = new MySqlCommand(SQL_PAY, conn, (MySqlTransaction)tx);
                         
@@ -3967,10 +3969,18 @@ namespace TruckScale.Pos
                         if (methodId == 3) // Business Account *el pago se tiene que poner como pendiente, se pasara a pagado por el area de cuentas por pagar
                         {
                             cmd.Parameters.AddWithValue("@st", STATUS_PAY_PENDING);
+
+                            // AÚN NO SE RECIBE (cobranza lo llenará después)
+                            cmd.Parameters.AddWithValue("@rcvby", DBNull.Value);
+                            cmd.Parameters.AddWithValue("@rcvat", DBNull.Value);
                         }
                         else
                         {
                             cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
+
+                            // SÍ SE RECIBE EN CAJA
+                            cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
+                            cmd.Parameters.AddWithValue("@rcvat", DateTime.Now); // o DateTime.UtcNow si manejas UTC
 
                         }
 
@@ -3978,7 +3988,7 @@ namespace TruckScale.Pos
                         cmd.Parameters.AddWithValue("@ccy", _selectedCurrency ?? "USD");
                         cmd.Parameters.AddWithValue("@rate", 1m);
                         cmd.Parameters.AddWithValue("@ref", (object?)p.Ref ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
+                        //cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
 
                         await cmd.ExecuteNonQueryAsync();
                     }
@@ -4374,28 +4384,27 @@ namespace TruckScale.Pos
             _accounts.Clear();
 
             const string SQL = @"
-SELECT
-    c.id_customer,
-    c.account_number,
-    c.account_name,
-    c.account_address,
-    c.account_country,
-    c.account_state,
-    c.has_credit,
-    -- credit (puede ser NULL si no hay registro)
-    cc.credit_type,
-    cc.credit_limit,
-    cc.current_balance,
-    cc.available_credit,
-    cc.expiry_date,
-    cc.is_suspended,
-    cc.suspension_reason,
-    cc.last_payment_date,
-    cc.payment_terms_days
-FROM customers c
-LEFT JOIN customer_credit cc ON cc.customer_id = c.id_customer
-WHERE c.is_active = 1
-ORDER BY c.account_name;";
+                SELECT
+                    c.id_customer,
+                    c.account_number,
+                    c.account_name,
+                    c.account_address,
+                    c.account_country,
+                    c.account_state,
+                    c.has_credit,
+                    cc.credit_type,
+                    cc.credit_limit,
+                    cc.current_balance,
+                    cc.available_credit,
+                    cc.expiry_date,
+                    cc.is_suspended,
+                    cc.suspension_reason,
+                    cc.last_payment_date,
+                    cc.payment_terms_days
+                FROM customers c
+                LEFT JOIN customer_credit cc ON cc.customer_id = c.id_customer
+                WHERE c.is_active = 1
+                ORDER BY c.account_name;";
 
             async Task<int> LoadFromAsync(string connStr, string sourceLabel)
             {
@@ -4519,6 +4528,8 @@ ORDER BY c.account_name;";
                 UpdatePaymentMethodsVisibility(canUseBusinessAccount: false);
                 return;
             }
+
+            await ReevaluateBusinessAccountAsync(silent: false);
 
             // UI account fields
             AccountNameText.Text = acc.AccountName ?? string.Empty;
@@ -5972,6 +5983,7 @@ ORDER BY c.account_name;";
                 UpdateSyncStatusUI("⚠️ Sync error");
             }
         }
+        //TODO UG aqui validamos si el cliente puede tener credito disponible, usamos el campo de available_credir de la tabla de customer_credit
         private bool CanUseBusinessAccount(TransportAccount acc, decimal transactionAmount, out string reason, out bool isSuspended)
         {
             isSuspended = false;
@@ -6107,11 +6119,12 @@ ORDER BY c.account_name;";
             if (ct == "POSTPAID")
             {
                 const string SQL = @"UPDATE customer_credit
-                    SET
-                      current_balance   = current_balance + @amt,
-                      available_credit  = credit_limit - (current_balance + @amt),
-                      updated_at        = CURRENT_TIMESTAMP
-                    WHERE customer_id = @cid;";
+                SET
+                  current_balance   = current_balance + @amt,
+                  available_credit  = credit_limit - current_balance,
+                  updated_at        = CURRENT_TIMESTAMP
+                WHERE customer_id = @cid;";
+
 
                 await using var cmd = new MySqlCommand(SQL, conn, tx);
                 cmd.Parameters.AddWithValue("@amt", amount);
@@ -6121,22 +6134,22 @@ ORDER BY c.account_name;";
                 if (rows == 0)
                     throw new InvalidOperationException($"customer_credit row not found for customer_id={customerId}.");
             }
-            else if (ct == "PREPAID")
-            {
-                const string SQL = @"UPDATE customer_credit
-                    SET
-                      available_credit = available_credit - @amt,
-                      updated_at       = CURRENT_TIMESTAMP
-                    WHERE customer_id = @cid;";
+            //else if (ct == "PREPAID")
+            //{
+            //    const string SQL = @"UPDATE customer_credit
+            //        SET
+            //          available_credit = available_credit - @amt,
+            //          updated_at       = CURRENT_TIMESTAMP
+            //        WHERE customer_id = @cid;";
 
-                await using var cmd = new MySqlCommand(SQL, conn, tx);
-                cmd.Parameters.AddWithValue("@amt", amount);
-                cmd.Parameters.AddWithValue("@cid", customerId);
+            //    await using var cmd = new MySqlCommand(SQL, conn, tx);
+            //    cmd.Parameters.AddWithValue("@amt", amount);
+            //    cmd.Parameters.AddWithValue("@cid", customerId);
 
-                var rows = await cmd.ExecuteNonQueryAsync();
-                if (rows == 0)
-                    throw new InvalidOperationException($"customer_credit row not found for customer_id={customerId}.");
-            }
+            //    var rows = await cmd.ExecuteNonQueryAsync();
+            //    if (rows == 0)
+            //        throw new InvalidOperationException($"customer_credit row not found for customer_id={customerId}.");
+            //}
             else
             {
                 throw new InvalidOperationException($"Unknown creditType '{creditType}'. Expected POSTPAID or PREPAID.");
@@ -6303,6 +6316,37 @@ ORDER BY c.account_name;";
 
             OkButton.IsEnabled = okEnabled;
             NewTransactionButton.IsEnabled = !okEnabled;
+        }
+
+        private async Task ReevaluateBusinessAccountAsync(bool silent = false)
+        {
+            if (ClienteRegCombo.SelectedItem is not TransportAccount acc || acc.IdCustomer <= 0)
+            {
+                UpdatePaymentMethodsVisibility(canUseBusinessAccount: false);
+                return;
+            }
+
+            // Si aún no hay servicio seleccionado, no permitas Business 
+            if (_selectedProductId <= 0)
+            {
+                UpdatePaymentMethodsVisibility(canUseBusinessAccount: false);
+                return;
+            }
+
+            // Usa el total real (incluye impuestos/desc si aplica)
+            var (_, _, total) = ComputeTotals();
+            decimal transactionAmount = total; // en tu caso 12 o 2 normalmente
+
+            var allowed = CanUseBusinessAccount(acc, transactionAmount, out var reason, out var isSuspended);
+
+            UpdatePaymentMethodsVisibility(allowed);
+
+            // Si estaba seleccionado Business y ya no alcanza, haz fallback
+            if (!allowed && string.Equals(_selectedPaymentId, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
+                SelectPaymentByCode(GetFallbackPaymentCode());
+
+            if (!silent && !allowed)
+                await ShowAlertAsync("Business Account", reason, PackIconKind.AlertCircleOutline);
         }
 
 
