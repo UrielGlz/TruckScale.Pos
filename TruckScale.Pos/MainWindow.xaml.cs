@@ -305,8 +305,8 @@ namespace TruckScale.Pos
             try
             {
                 AppendLog($"[Boot] Trying to open scale on {_scaleComPort}…");
-                //StartReader(); // ya no recibe parámetro
-                StartSimulatedReader(); //TODO | IMPORTANTE QUITAR ESTO
+                StartReader(); // ya no recibe parámetro
+                //StartSimulatedReader(); //TODO UG | IMPORTANTE QUITAR ESTO
 
             }
             catch (Exception ex)
@@ -6134,22 +6134,22 @@ namespace TruckScale.Pos
                 if (rows == 0)
                     throw new InvalidOperationException($"customer_credit row not found for customer_id={customerId}.");
             }
-            //else if (ct == "PREPAID")
-            //{
-            //    const string SQL = @"UPDATE customer_credit
-            //        SET
-            //          available_credit = available_credit - @amt,
-            //          updated_at       = CURRENT_TIMESTAMP
-            //        WHERE customer_id = @cid;";
+            else if (ct == "PREPAID")
+            {
+                const string SQL = @"UPDATE customer_credit
+                    SET
+                      available_credit = available_credit - @amt,
+                      updated_at       = CURRENT_TIMESTAMP
+                    WHERE customer_id = @cid;";
 
-            //    await using var cmd = new MySqlCommand(SQL, conn, tx);
-            //    cmd.Parameters.AddWithValue("@amt", amount);
-            //    cmd.Parameters.AddWithValue("@cid", customerId);
+                await using var cmd = new MySqlCommand(SQL, conn, tx);
+                cmd.Parameters.AddWithValue("@amt", amount);
+                cmd.Parameters.AddWithValue("@cid", customerId);
 
-            //    var rows = await cmd.ExecuteNonQueryAsync();
-            //    if (rows == 0)
-            //        throw new InvalidOperationException($"customer_credit row not found for customer_id={customerId}.");
-            //}
+                var rows = await cmd.ExecuteNonQueryAsync();
+                if (rows == 0)
+                    throw new InvalidOperationException($"customer_credit row not found for customer_id={customerId}.");
+            }
             else
             {
                 throw new InvalidOperationException($"Unknown creditType '{creditType}'. Expected POSTPAID or PREPAID.");
