@@ -3526,10 +3526,11 @@ namespace TruckScale.Pos
             _allPaymentMethods.Clear();
 
             const string SQL = @"
-        SELECT method_id, code, name, is_cash, allow_reference, is_active 
-        FROM payment_methods 
-        WHERE is_active = 1 
-        ORDER BY method_id;";
+                SELECT method_id, code, name, is_cash, allow_reference, is_active
+                FROM payment_methods
+                WHERE is_active = 1
+                  AND is_pos_enabled = 1
+                ORDER BY method_id";
 
             // Helper: lee métodos de pago desde una conexión
             async Task<List<PaymentMethod>> LoadFromAsync(string connStr)
@@ -6155,6 +6156,7 @@ namespace TruckScale.Pos
                 throw new InvalidOperationException($"Unknown creditType '{creditType}'. Expected POSTPAID or PREPAID.");
             }
         }
+        
         private void DisableAllPaymentMethods()
         {
             foreach (var m in PaymentMethods)
