@@ -112,6 +112,39 @@ namespace TruckScale.Pos
             : $"{Name} ({Code})";
     }
 
+    public sealed class TodayTxRow : INotifyPropertyChanged
+    {
+        public string SaleUid { get; set; } = "";
+        public string TicketUid { get; set; } = "";
+        public string TicketNumber { get; set; } = "";
+        public DateTime PrintedAt { get; set; }
+
+        public string ServiceDesc { get; set; } = "";
+        public decimal Total { get; set; }
+        public string Currency { get; set; } = "USD";
+
+        public string PaymentUid { get; set; } = "";
+        public string MethodCode { get; set; } = ""; // "cash" / "card" / "business"
+        public int MethodId { get; set; }
+
+        public int SaleStatusId { get; set; }
+        public int PaymentStatusId { get; set; }
+        public int TicketStatusId { get; set; }
+
+        // reglas
+        public bool CanEditPayment { get; set; }
+        public bool CanVoid { get; set; }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+        public void Notify(string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    }
+
+    public sealed class VoidReasonItem
+    {
+        public int VoidReasonId { get; set; }
+        public string Label { get; set; } = "";
+    }
+
 
     public partial class MainWindow : Window
     {
@@ -210,6 +243,24 @@ namespace TruckScale.Pos
         private bool _uiHasCredit = false;
         private bool _uiIsSuspended = false;
         private string _uiSuspendReason = "";
+
+        private readonly ObservableCollection<TodayTxRow> _todayTx = new();
+        private readonly ObservableCollection<VoidReasonItem> _voidReasons = new();
+
+        private TodayTxRow? _voidTargetRow;
+
+        // status ids (según lo que me pasaste)
+        private const int SALE_CANCELLED = 3;
+        private const int PAY_VOIDED = 7;
+        private const int TICKET_VOIDED = 11;
+
+        private const int PAY_RECEIVED = 6;
+        private const int SALE_COMPLETED = 2;
+
+        // OJO: en tu catálogo real, cash/card son por CODE en payment_methods
+        private int _cashMethodId = 0;
+        private int _cardMethodId = 0;
+
 
 
 
@@ -1447,6 +1498,8 @@ namespace TruckScale.Pos
 
                 Dispatcher.Invoke(() =>
                 {
+                  
+
                     lblUUID.Content = uuid;
                     lblTemp.Content = "Waiting for next truck…";
                     SetWaitOkVisual(false);
@@ -2330,15 +2383,15 @@ namespace TruckScale.Pos
             {
                 case 0:
                     _ax1 = w; _tAx1 = DateTime.UtcNow;
-                    lblEje1.Content = $"Axle 1: {w:0} lb";
+                    //lblEje1.Content = $"Axle 1: {w:0} lb";
                     break;
                 case 1:
                     _ax2 = w; _tAx2 = DateTime.UtcNow;
-                    lblEje2.Content = $"Axle 2: {w:0} lb";
+                    //lblEje2.Content = $"Axle 2: {w:0} lb";
                     break;
                 case 2:
                     _ax3 = w; _tAx3 = DateTime.UtcNow;
-                    lblEje3.Content = $"Axle 3: {w:0} lb";
+                    //lblEje3.Content = $"Axle 3: {w:0} lb";
                     break;
                 case 3:
                     _total = w; _tTotal = DateTime.UtcNow;
@@ -2475,6 +2528,8 @@ namespace TruckScale.Pos
         // ===== DB init en Window_Loaded =====
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
+            TodayTxGrid.ItemsSource = _todayTx;
+
             // === Config general (incluye impresora) ===
             // === Config general: conexiones de BD ===
             ConfigManager.Load();
@@ -4395,6 +4450,10 @@ namespace TruckScale.Pos
                 Dispatcher.Invoke(() =>
                 {
                     // Mostrar el peso que REALMENTE se guardó (redondeado igual que en DB)
+                    lblEje1.Content = ax1;
+                    lblEje2.Content = ax2;
+                    lblEje3.Content = ax3;
+
                     int pesoEntero = (int)Math.Round(total);
                     lblUUID.Content = $"{pesoEntero} lb";
 
@@ -6211,11 +6270,10 @@ namespace TruckScale.Pos
             if (ct == "POSTPAID")
             {
                 const string SQL = @"UPDATE customer_credit
-                SET
-                  current_balance   = current_balance + @amt,
-                  available_credit  = credit_limit - current_balance,
-                  updated_at        = CURRENT_TIMESTAMP
-                WHERE customer_id = @cid;";
+                                    SET current_balance  = current_balance + @amt,
+                                        available_credit = credit_limit - (current_balance + @amt),
+                                        updated_at       = CURRENT_TIMESTAMP
+                                    WHERE customer_id = @cid;";
 
 
                 await using var cmd = new MySqlCommand(SQL, conn, tx);
@@ -6628,6 +6686,380 @@ namespace TruckScale.Pos
                     _uiIsSuspended = r["is_suspended"] != DBNull.Value && Convert.ToInt32(r["is_suspended"]) == 1;
                     _uiSuspendReason = r["suspension_reason"]?.ToString() ?? "";
                 }
+            }
+        }
+
+        private async void OpenTodayTransactions_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                await LoadVoidReasonsAsync();     // llena dropdown
+                await LoadTodayTransactionsAsync(); // llena grid
+
+                TodayTxSubtitle.Text = $"Operator: {OperatorNameRun.Text}   |   {DateTime.Now:yyyy-MM-dd}";
+                TodayTxHost.IsOpen = true;
+                RootDrawerHost.IsLeftDrawerOpen = false;
+            }
+            catch (Exception ex)
+            {
+                await ShowAlertAsync("Transactions", ex.Message, PackIconKind.AlertCircleOutline);
+            }
+        }
+
+        private void CloseTodayTransactions_Click(object sender, RoutedEventArgs e)
+        {
+            TodayTxHost.IsOpen = false;
+        }
+        private async Task LoadTodayTransactionsAsync()
+        {
+            _todayTx.Clear();
+
+            var mainConn = GetPrimaryConn();
+            if (string.IsNullOrWhiteSpace(mainConn))
+                throw new InvalidOperationException("MAIN_DB is not configured.");
+
+            await using var conn = new MySqlConnection(mainConn);
+            await conn.OpenAsync();
+
+            // cache de method ids (cash/card) una vez
+            if (_cashMethodId <= 0 || _cardMethodId <= 0)
+                await LoadCashCardMethodIdsAsync(conn);
+
+            int operatorId = GetCurrentOperatorId();
+
+            const string SQL = @"
+                SELECT
+                  t.ticket_uid,
+                  t.ticket_number,
+                  t.printed_at,
+                  t.ticket_status_id,
+                  s.sale_uid,
+                  s.total,
+                  s.currency,
+                  s.sale_status_id,
+                  p.payment_uid,
+                  p.method_id,
+                  pm.code AS method_code,
+                  p.payment_status_id,
+                  COALESCE(sl.description, IF(s.is_reweigh=1,'Reweigh','Weigh')) AS service_desc
+                FROM tickets t
+                JOIN sales s ON s.sale_uid = t.sale_uid
+                LEFT JOIN sale_lines sl ON sl.sale_uid = s.sale_uid AND sl.seq = 1
+                JOIN (
+                  SELECT sale_uid, MIN(payment_id) AS payment_id
+                  FROM payments
+                  GROUP BY sale_uid
+                ) px ON px.sale_uid = s.sale_uid
+                JOIN payments p ON p.payment_id = px.payment_id
+                JOIN payment_methods pm ON pm.method_id = p.method_id
+                WHERE DATE(s.created_at) = CURDATE()
+                  AND s.operator_id = @op
+               
+                ORDER BY t.printed_at DESC;";
+            // -- FUTURO: si hay caja abierta, filtrar por s.occurred_at >= caja.opened_at AND caja.status='OPEN'
+            await using var cmd = new MySqlCommand(SQL, conn);
+            cmd.Parameters.AddWithValue("@op", operatorId);
+
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+            {
+                var row = new TodayTxRow
+                {
+                    TicketUid = ReadUid(rd, "ticket_uid"),
+
+                    TicketNumber = rd.GetString("ticket_number"),
+                    PrintedAt = rd.GetDateTime("printed_at"),
+                    TicketStatusId = rd.GetInt32("ticket_status_id"),
+
+                    SaleUid = ReadUid(rd, "sale_uid"),
+
+                    Total = rd.GetDecimal("total"),
+                    Currency = rd.GetString("currency"),
+                    SaleStatusId = rd.GetInt32("sale_status_id"),
+
+                    PaymentUid = ReadUid(rd, "payment_uid"),
+                    MethodId = rd.GetInt32("method_id"),
+                    MethodCode = rd.GetString("method_code"),
+                    PaymentStatusId = rd.GetInt32("payment_status_id"),
+
+                    ServiceDesc = rd.GetString("service_desc"),
+                };
+
+                // Reglas: solo cash/card, y solo si RECEIVED y sale COMPLETED y no void/refund
+                var isCashOrCard = row.MethodId == _cashMethodId || row.MethodId == _cardMethodId;
+                var isReceived = row.PaymentStatusId == PAY_RECEIVED;
+                var isCompleted = row.SaleStatusId == SALE_COMPLETED;
+
+                row.CanEditPayment = isCashOrCard && isReceived && isCompleted;
+
+                // VOID: solo cash/card + received + completed (no business)
+                row.CanVoid = isCashOrCard && isReceived && isCompleted;
+
+                _todayTx.Add(row);
+            }
+        }
+        private static string ReadUid(MySqlDataReader rd, string col)
+        {
+            var i = rd.GetOrdinal(col);
+            if (rd.IsDBNull(i)) return "";
+
+            var v = rd.GetValue(i);
+
+            if (v is Guid g) return g.ToString();
+            return v.ToString() ?? "";
+        }
+
+        private async Task LoadCashCardMethodIdsAsync(MySqlConnection conn)
+        {
+            const string SQL = @"SELECT method_id, code FROM payment_methods WHERE code IN ('cash','card') LIMIT 10;";
+
+            await using var cmd = new MySqlCommand(SQL, conn);
+            await using var rd = await cmd.ExecuteReaderAsync();
+
+            while (await rd.ReadAsync())
+            {
+                var id = rd.GetInt32("method_id");
+                var code = rd.GetString("code");
+
+                if (code.Equals("cash", StringComparison.OrdinalIgnoreCase)) _cashMethodId = id;
+                if (code.Equals("card", StringComparison.OrdinalIgnoreCase)) _cardMethodId = id;
+            }
+
+            if (_cashMethodId <= 0 || _cardMethodId <= 0)
+                throw new InvalidOperationException("payment_methods must contain codes 'cash' and 'card'.");
+        }
+        private async void ChangePaymentMethod_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if ((sender as FrameworkElement)?.DataContext is not TodayTxRow row)
+                    return;
+
+                var targetCode = (sender as Button)?.Tag as string ?? "";
+                if (string.IsNullOrWhiteSpace(targetCode))
+                    return;
+
+                // click al mismo método => NO hacer nada
+                if (row.MethodCode.Equals(targetCode, StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                if (!row.CanEditPayment)
+                {
+                    await ShowAlertAsync("Payment change", "This payment cannot be edited.", PackIconKind.AlertCircleOutline);
+                    return;
+                }
+
+                int newMethodId = targetCode.Equals("cash", StringComparison.OrdinalIgnoreCase) ? _cashMethodId : _cardMethodId;
+
+                var mainConn = GetPrimaryConn();
+                if (string.IsNullOrWhiteSpace(mainConn))
+                    throw new InvalidOperationException("MAIN_DB is not configured.");
+
+                await using var conn = new MySqlConnection(mainConn);
+                await conn.OpenAsync();
+
+                const string SQL = @"UPDATE payments
+                    SET method_id = @mid
+                    WHERE payment_uid = @puid
+                      AND payment_status_id = @received
+                      AND method_id <> @mid;";
+
+                await using var cmd = new MySqlCommand(SQL, conn);
+                cmd.Parameters.AddWithValue("@mid", newMethodId);
+                cmd.Parameters.AddWithValue("@puid", row.PaymentUid);
+                cmd.Parameters.AddWithValue("@received", PAY_RECEIVED);
+
+                var rows = await cmd.ExecuteNonQueryAsync();
+                if (rows == 0)
+                {
+                    await ShowAlertAsync("Payment change", "No changes were applied (maybe already changed).", PackIconKind.InformationOutline);
+                    return;
+                }
+
+                // actualizar UI
+                row.MethodId = newMethodId;
+                row.MethodCode = targetCode;
+                row.Notify(nameof(row.MethodCode));
+            }
+            catch (Exception ex)
+            {
+                await ShowAlertAsync("Payment change", ex.Message, PackIconKind.AlertCircleOutline);
+            }
+        }
+        private async void VoidSale_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if ((sender as FrameworkElement)?.DataContext is not TodayTxRow row)
+                    return;
+
+                if (!row.CanVoid)
+                {
+                    await ShowAlertAsync("VOID", "This transaction cannot be voided.", PackIconKind.AlertCircleOutline);
+                    return;
+                }
+
+                _voidTargetRow = row;
+
+                // asegurar razones cargadas
+                if (_voidReasons.Count == 0)
+                    await LoadVoidReasonsAsync();
+
+                VoidReasonCombo.ItemsSource = _voidReasons;
+                VoidReasonCombo.SelectedIndex = -1;
+
+                VoidReasonHost.IsOpen = true;
+            }
+            catch (Exception ex)
+            {
+                await ShowAlertAsync("VOID", ex.Message, PackIconKind.AlertCircleOutline);
+            }
+        }
+
+        private void VoidReasonCancel_Click(object sender, RoutedEventArgs e)
+        {
+            VoidReasonHost.IsOpen = false;
+            _voidTargetRow = null;
+        }
+        private async void VoidReasonConfirm_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_voidTargetRow == null)
+                    return;
+
+                if (VoidReasonCombo.SelectedItem is not VoidReasonItem vr || vr.VoidReasonId <= 0)
+                {
+                    await ShowAlertAsync("VOID", "Please select a void reason.", PackIconKind.AlertCircleOutline);
+                    return;
+                }
+
+                var mainConn = GetPrimaryConn();
+                if (string.IsNullOrWhiteSpace(mainConn))
+                    throw new InvalidOperationException("MAIN_DB is not configured.");
+
+                await using var conn = new MySqlConnection(mainConn);
+                await conn.OpenAsync();
+
+                await using var tx = await conn.BeginTransactionAsync();
+
+                int userId = GetCurrentOperatorId();
+
+                // 1) sales -> CANCELLED + reason + voided_at/by
+                const string SQL_SALE = @"UPDATE sales
+                    SET sale_status_id = @st,
+                        void_reason_id = @rid,
+                        voided_at = NOW(),
+                        voided_by_user = @uid
+                    WHERE sale_uid = @suid
+                      AND sale_status_id = @mustCompleted;";
+
+                await using (var cmd = new MySqlCommand(SQL_SALE, conn, (MySqlTransaction)tx))
+                {
+                    cmd.Parameters.AddWithValue("@st", SALE_CANCELLED);
+                    cmd.Parameters.AddWithValue("@rid", vr.VoidReasonId);
+                    cmd.Parameters.AddWithValue("@uid", userId);
+                    cmd.Parameters.AddWithValue("@suid", _voidTargetRow.SaleUid);
+                    cmd.Parameters.AddWithValue("@mustCompleted", SALE_COMPLETED);
+
+                    var rows = await cmd.ExecuteNonQueryAsync();
+                    if (rows == 0)
+                        throw new InvalidOperationException("Sale could not be voided (status changed or not found).");
+                }
+
+                // 2) payments -> VOIDED (solo si RECEIVED)
+                const string SQL_PAY = @"UPDATE payments
+                    SET payment_status_id = @voided
+                    WHERE sale_uid = @suid
+                      AND payment_status_id = @received;";
+
+                await using (var cmd = new MySqlCommand(SQL_PAY, conn, (MySqlTransaction)tx))
+                {
+                    cmd.Parameters.AddWithValue("@voided", PAY_VOIDED);
+                    cmd.Parameters.AddWithValue("@received", PAY_RECEIVED);
+                    cmd.Parameters.AddWithValue("@suid", _voidTargetRow.SaleUid);
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                // 3) tickets -> VOIDED (si está PRINTED/REPRINTED)
+                const string SQL_TKT = @"UPDATE tickets
+                    SET ticket_status_id = @voided
+                    WHERE sale_uid = @suid
+                      AND ticket_status_id IN (9,10);"; // PRINTED/REPRINTED
+
+                await using (var cmd = new MySqlCommand(SQL_TKT, conn, (MySqlTransaction)tx))
+                {
+                    cmd.Parameters.AddWithValue("@voided", TICKET_VOIDED);
+                    cmd.Parameters.AddWithValue("@suid", _voidTargetRow.SaleUid);
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                await tx.CommitAsync();
+
+                // UI: deshabilitar botones
+                _voidTargetRow.SaleStatusId = SALE_CANCELLED;
+                _voidTargetRow.PaymentStatusId = PAY_VOIDED;
+                _voidTargetRow.TicketStatusId = TICKET_VOIDED;
+                _voidTargetRow.CanEditPayment = false;
+                _voidTargetRow.CanVoid = false;
+                _voidTargetRow.Notify(nameof(_voidTargetRow.CanEditPayment));
+                _voidTargetRow.Notify(nameof(_voidTargetRow.CanVoid));
+
+                VoidReasonHost.IsOpen = false;
+                _voidTargetRow = null;
+            }
+            catch (Exception ex)
+            {
+                await ShowAlertAsync("VOID", ex.Message, PackIconKind.AlertCircleOutline);
+            }
+        }
+
+        private async Task LoadVoidReasonsAsync()
+        {
+            _voidReasons.Clear();
+
+            var mainConn = GetPrimaryConn();
+            if (string.IsNullOrWhiteSpace(mainConn))
+                throw new InvalidOperationException("MAIN_DB is not configured.");
+
+            await using var conn = new MySqlConnection(mainConn);
+            await conn.OpenAsync();
+
+            // AJUSTA columnas si tu tabla usa otros nombres:
+            const string SQL = @"SELECT void_reason_id, label
+                FROM void_reasons
+                WHERE is_active = 1
+                ORDER BY sort_order ASC, void_reason_id ASC;";
+
+            await using var cmd = new MySqlCommand(SQL, conn);
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+            {
+                _voidReasons.Add(new VoidReasonItem
+                {
+                    VoidReasonId = rd.GetInt32("void_reason_id"),
+                    Label = rd.GetString("label")
+                });
+            }
+        }
+        private async void ReprintTicket_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (sender is not FrameworkElement fe) return;
+                if (fe.DataContext is not TodayTxRow row) return; // <- tu clase/VM del grid
+
+                if (string.IsNullOrWhiteSpace(row.SaleUid))
+                {
+                    await ShowAlertAsync("Reprint", "Missing sale uid.", PackIconKind.AlertCircleOutline);
+                    return;
+                }
+
+                await ReprintTicketAsync(row.SaleUid);
+            }
+            catch (Exception ex)
+            {
+                await ShowAlertAsync("Reprint", ex.Message, PackIconKind.AlertCircleOutline);
             }
         }
 

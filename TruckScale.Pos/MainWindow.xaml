@@ -15,7 +15,7 @@
 
     <!-- ====== ResizeMode="NoResize" WindowStyle="None" RECURSOS DE ESTILO ====== -->
     <Window.Resources>
-        
+
         <!-- ===== COLORES PERSONALIZADOS ===== -->
 
         <!-- Métodos de pago -->
@@ -32,7 +32,7 @@
 
         <!-- ====== RECURSOS DE ESTILO ====== -->
 
-        
+
         <!-- Título grande -->
         <Style x:Key="TitleLarge" TargetType="TextBlock">
             <Setter Property="FontSize" Value="20"/>
@@ -312,7 +312,32 @@
             Value="{DynamicResource PrimaryHueMidBrush}"/>
             <Setter Property="Margin" Value="0,6,0,0"/>
         </Style>
-       
+        <!-- Dentro de <Window.Resources> o <md:DialogHost.Resources> -->
+        <SolidColorBrush x:Key="TxPayActiveBg" Color="#2E7D32"/>
+        <SolidColorBrush x:Key="TxPayActiveFg" Color="White"/>
+
+        <Style x:Key="TxPayBtnBase" TargetType="Button" BasedOn="{StaticResource MaterialDesignOutlinedButton}">
+            <Setter Property="Height" Value="34"/>
+            <Setter Property="MinWidth" Value="84"/>
+            <Setter Property="Padding" Value="14,6"/>
+            <Setter Property="Margin" Value="6,0,0,0"/>
+            <Setter Property="md:ButtonAssist.CornerRadius" Value="8"/>
+        </Style>
+
+        <Style x:Key="TxPayBtnActive" TargetType="Button" BasedOn="{StaticResource MaterialDesignRaisedButton}">
+            <Setter Property="Height" Value="34"/>
+            <Setter Property="MinWidth" Value="84"/>
+            <Setter Property="Padding" Value="14,6"/>
+            <Setter Property="Margin" Value="6,0,0,0"/>
+            <Setter Property="md:ButtonAssist.CornerRadius" Value="8"/>
+            <Setter Property="Background" Value="{StaticResource TxPayActiveBg}"/>
+            <Setter Property="Foreground" Value="{StaticResource TxPayActiveFg}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="md:ElevationAssist.Elevation" Value="Dp2"/>
+            <Setter Property="IsEnabled" Value="False"/>
+            <!-- IMPORTANT: no hace nada si le dan click -->
+        </Style>
+
 
 
     </Window.Resources>
@@ -324,9 +349,10 @@
             <md:DrawerHost.LeftDrawerContent>
                 <StackPanel Margin="12" Width="240">
                     <TextBlock Text="{DynamicResource Menu.Title}" FontWeight="Bold" Margin="0,0,0,12"/>
-                    <Button Style="{StaticResource MaterialDesignOutlinedButton}" Content="{DynamicResource Menu.NewTicket}" Margin="0,0,0,8"/>
-                    <Button Style="{StaticResource MaterialDesignOutlinedButton}" Content="{DynamicResource Menu.ScaleMonitor}" Margin="0,0,0,8"/>
-                    <Button Style="{StaticResource MaterialDesignOutlinedButton}" Content="{DynamicResource Menu.Tickets}"/>
+                    <!--<Button Style="{StaticResource MaterialDesignOutlinedButton}" Content="{DynamicResource Menu.NewTicket}" Margin="0,0,0,8"/>-->
+                    <Button Style="{StaticResource MaterialDesignOutlinedButton}" Content="Today's transactions" Margin="0,0,0,8" Click="OpenTodayTransactions_Click"/>
+                    <!--<Button Style="{StaticResource MaterialDesignOutlinedButton}" Content="{DynamicResource Menu.ScaleMonitor}" Margin="0,0,0,8"/>
+                    <Button Style="{StaticResource MaterialDesignOutlinedButton}" Content="{DynamicResource Menu.Tickets}"/>-->
                 </StackPanel>
             </md:DrawerHost.LeftDrawerContent>
 
@@ -411,7 +437,8 @@
 
                                 </Grid>
 
-                                <!-- Ejes por sesión --><!--
+                                <!-- Ejes por sesión -->
+                                <!--
                                 <StackPanel Margin="0,12,0,0">
                                     <TextBlock Text="Ejes por sesión" Style="{StaticResource TitleLarge}" />
                                 </StackPanel>
@@ -798,7 +825,7 @@
                                 </StackPanel>
                             </md:Card>
 
-                          
+
 
                             <!-- Driver summary en la otra mitad -->
                             <!-- Right column container -->
@@ -1266,12 +1293,266 @@
                     </md:DialogHost.DialogContent>
                 </md:DialogHost>
 
+                <md:DialogHost x:Name="TodayTxHost" Grid.RowSpan="99" Grid.ColumnSpan="99" Panel.ZIndex="120">
+                     
+                    <md:DialogHost.DialogContent>
+                        <Grid Width="980" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <md:Card Padding="18" md:ElevationAssist.Elevation="Dp3" UniformCornerRadius="16">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Header -->
+                                    <!-- Header -->
+                                    <DockPanel Grid.Row="0" LastChildFill="True" Margin="0,0,0,10">
+
+                                        <!-- Close compacto (NO debe ser el último hijo) -->
+                                        <Button DockPanel.Dock="Right"
+                                                Click="CloseTodayTransactions_Click"
+                                                Style="{StaticResource MaterialDesignOutlinedButton}"
+                                                Height="34"
+                                                MinWidth="88"
+                                                Padding="14,0"
+                                                Margin="12,0,0,0"
+                                                VerticalAlignment="Center"
+                                                Content="Close"/>
+
+                                        <!-- Título + subtítulo (este queda como el último y rellena) -->
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <md:PackIcon Kind="ReceiptText" Width="22" Height="22" Margin="0,0,10,0"/>
+                                            <StackPanel>
+                                                <TextBlock Text="Today's transactions" FontSize="18" FontWeight="SemiBold"/>
+                                                <TextBlock x:Name="TodayTxSubtitle" Opacity=".65" FontSize="12" Margin="0,2,0,0"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </DockPanel>
+
+                                    <!-- separador sutil -->
+                                    <Border Grid.Row="0" BorderBrush="{DynamicResource MaterialDesignDivider}" BorderThickness="0,0,0,1" Margin="0,0,0,10"/>
+
+
+                                    <!-- Table -->
+                                    <DataGrid x:Name="TodayTxGrid"
+                                              Grid.Row="1"
+                                              AutoGenerateColumns="False"
+                                              CanUserAddRows="False"
+                                              IsReadOnly="True"
+                                              HeadersVisibility="Column"
+                                              RowHeaderWidth="0"
+                                              GridLinesVisibility="None"
+                                              Margin="0,0,0,10"
+                                              SelectionMode="Single"
+                                              SelectionUnit="FullRow">
+                                        <DataGrid.Columns>
+
+                                            <DataGridTextColumn Header="Time"
+                                                Binding="{Binding PrintedAt, StringFormat={}{0:HH:mm}}"
+                                                Width="90"/>
+
+                                            <DataGridTextColumn Header="Ticket"
+                                                Binding="{Binding TicketNumber}"
+                                                Width="140"/>
+
+                                            <DataGridTextColumn Header="Service"
+                                                Binding="{Binding ServiceDesc}"
+                                                Width="*"/>
+
+                                            <DataGridTextColumn Header="Total"
+                                                Binding="{Binding Total, StringFormat={}{0:C}}"
+                                                Width="120"/>
+
+                                            <!-- Payment method buttons -->
+                                            <DataGridTemplateColumn Header="Payment" Width="260">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+
+                                                            <!-- CASH -->
+                                                            <Button Tag="cash" Click="ChangePaymentMethod_Click">
+                                                                <Button.Style>
+                                                                    <Style TargetType="Button" BasedOn="{StaticResource TxPayBtnBase}">
+                                                                        <Setter Property="IsEnabled" Value="{Binding CanEditPayment}"/>
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding MethodCode}" Value="cash">
+                                                                                <Setter Property="Background" Value="{StaticResource TxPayActiveBg}"/>
+                                                                                <Setter Property="Foreground" Value="{StaticResource TxPayActiveFg}"/>
+                                                                                <Setter Property="BorderBrush" Value="{x:Null}"/>
+                                                                                <Setter Property="IsEnabled" Value="True"/>
+                                                                                <!-- evita look disabled -->
+                                                                                <Setter Property="IsHitTestVisible" Value="False"/>
+                                                                                <!-- no hace nada al click -->
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Button.Style>
+
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <!-- Check solo cuando es el actual -->
+                                                                    <md:PackIcon Kind="Check" Width="16" Height="16" Margin="0,0,6,0">
+                                                                        <md:PackIcon.Style>
+                                                                            <Style TargetType="md:PackIcon">
+                                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding MethodCode}" Value="cash">
+                                                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </md:PackIcon.Style>
+                                                                    </md:PackIcon>
+
+                                                                    <md:PackIcon Kind="Cash" Width="16" Height="16" Margin="0,0,6,0"/>
+                                                                    <TextBlock Text="Cash"/>
+                                                                </StackPanel>
+                                                            </Button>
+
+                                                            <!-- CARD -->
+                                                            <Button Tag="card" Click="ChangePaymentMethod_Click">
+                                                                <Button.Style>
+                                                                    <Style TargetType="Button" BasedOn="{StaticResource TxPayBtnBase}">
+                                                                        <Setter Property="IsEnabled" Value="{Binding CanEditPayment}"/>
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding MethodCode}" Value="card">
+                                                                                <Setter Property="Background" Value="{StaticResource TxPayActiveBg}"/>
+                                                                                <Setter Property="Foreground" Value="{StaticResource TxPayActiveFg}"/>
+                                                                                <Setter Property="BorderBrush" Value="{x:Null}"/>
+                                                                                <Setter Property="IsEnabled" Value="True"/>
+                                                                                <Setter Property="IsHitTestVisible" Value="False"/>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Button.Style>
+
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <md:PackIcon Kind="Check" Width="16" Height="16" Margin="0,0,6,0">
+                                                                        <md:PackIcon.Style>
+                                                                            <Style TargetType="md:PackIcon">
+                                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding MethodCode}" Value="card">
+                                                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </md:PackIcon.Style>
+                                                                    </md:PackIcon>
+
+                                                                    <md:PackIcon Kind="CreditCardOutline" Width="16" Height="16" Margin="0,0,6,0"/>
+                                                                    <TextBlock Text="Card"/>
+                                                                </StackPanel>
+                                                            </Button>
+
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+
+                                            <!-- VOID -->
+                                            <!-- Actions -->
+                                            <DataGridTemplateColumn Header="Actions" Width="240">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+
+                                                            <!-- REPRINT (icon-only) -->
+                                                            <Button Click="ReprintTicket_Click"
+                                                                ToolTip="Reprint"
+                                                                Padding="0"
+                                                                Width="44"
+                                                                Height="36"
+                                                                Margin="0,0,10,0"
+                                                                Style="{StaticResource MaterialDesignOutlinedButton}">
+                                                                <md:PackIcon Kind="Printer" Width="18" Height="18"/>
+                                                            </Button>
+
+
+                                                            <!-- VOID -->
+                                                            <Button Content="VOID"  Padding="14,4" Click="VoidSale_Click">
+                                                                <Button.Style>
+                                                                    <Style TargetType="Button" BasedOn="{StaticResource MaterialDesignRaisedButton}">
+                                                                        <Setter Property="IsEnabled" Value="{Binding CanVoid}"/>
+                                                                        <Setter Property="MinWidth" Value="110"/>
+                                                                        <Setter Property="Background" Value="{DynamicResource MaterialDesignValidationErrorBrush}"/>
+                                                                        <Setter Property="Foreground" Value="White"/>
+                                                                        <Setter Property="BorderBrush" Value="{x:Null}"/>
+                                                                    </Style>
+                                                                </Button.Style>
+                                                            </Button>
+
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+
+                                    <!-- Footer hint -->
+                                    <TextBlock Grid.Row="2" Opacity=".65" FontSize="12"
+                               Text="Only Cash/Card changes are allowed. Business Account is excluded.">
+                                    </TextBlock>
+
+                                </Grid>
+                            </md:Card>
+                        </Grid>
+                    </md:DialogHost.DialogContent>
+                </md:DialogHost>
+                <!--DialogHost para pedir Void Reason (dropdown)-->
+                <md:DialogHost x:Name="VoidReasonHost" Grid.RowSpan="99" Grid.ColumnSpan="99" Panel.ZIndex="130">
+                    <md:DialogHost.DialogContent>
+                        <Grid Width="460" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <md:Card Padding="18" md:ElevationAssist.Elevation="Dp3" UniformCornerRadius="16">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                        <md:PackIcon Kind="AlertCircleOutline" Width="24" Height="24"
+                                     Foreground="{DynamicResource MaterialDesignValidationErrorBrush}"
+                                     Margin="0,0,8,0"/>
+                                        <TextBlock Text="Void sale" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Row="1" Margin="0,0,0,14">
+                                        <TextBlock Text="Reason" Opacity=".7" Margin="0,0,0,6"/>
+                                        <ComboBox x:Name="VoidReasonCombo"
+                                  DisplayMemberPath="Label"
+                                  SelectedValuePath="VoidReasonId"
+                                  MinHeight="40"/>
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <Button Content="Cancel"
+                                Style="{StaticResource MaterialDesignOutlinedButton}"
+                                Padding="16,6"
+                                Margin="0,0,8,0"
+                                Click="VoidReasonCancel_Click"/>
+                                        <Button Content="Confirm VOID"
+                                Style="{StaticResource MaterialDesignRaisedButton}"
+                                Padding="16,6"
+                                Background="{DynamicResource MaterialDesignValidationErrorBrush}"
+                                Foreground="White"
+                                Click="VoidReasonConfirm_Click"/>
+                                    </StackPanel>
+
+                                </Grid>
+                            </md:Card>
+                        </Grid>
+                    </md:DialogHost.DialogContent>
+                </md:DialogHost>
+
             </Grid>
 
         </md:DrawerHost>
 
 
-     
+
         <!-- ===== MODAL: Registrar chofer ===== -->
         <md:DialogHost.DialogContent>
             <md:Card Padding="24" Width="980" MaxHeight="1100"  HorizontalAlignment="Center">
