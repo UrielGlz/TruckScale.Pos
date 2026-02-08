@@ -204,6 +204,13 @@ namespace TruckScale.Pos
         private const int STATUS_TICKET_PRINTED = 9;
         private TaskCompletionSource<string?>? _reweighTicketTcs;
 
+        //UG new 02.07.26
+        private decimal _uiAvailableCredit = 0m;
+        private string _uiCreditType = "POSTPAID";
+        private bool _uiHasCredit = false;
+        private bool _uiIsSuspended = false;
+        private string _uiSuspendReason = "";
+
 
 
         public MainWindow()
@@ -305,8 +312,8 @@ namespace TruckScale.Pos
             try
             {
                 AppendLog($"[Boot] Trying to open scale on {_scaleComPort}…");
-                StartReader(); // ya no recibe parámetro
-                //StartSimulatedReader(); //TODO UG | IMPORTANTE QUITAR ESTO
+                //StartReader(); // ya no recibe parámetro
+               StartSimulatedReader(); //TODO UG | IMPORTANTE QUITAR ESTO
 
             }
             catch (Exception ex)
@@ -3663,58 +3670,47 @@ namespace TruckScale.Pos
                 if (isSel) sel = m;
             }
 
-            // RefPanel SIEMPRE oculto
             RefPanel.Visibility = Visibility.Collapsed;
 
-            //if (sel != null)
-            //{
-            //    _selectedPaymentId = sel.Code;
-
-            //    // ===== Auto pago total: Business + Card =====
-            //    if (string.Equals(sel.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase) ||
-            //        string.Equals(sel.Code, CARD_CODE, StringComparison.OrdinalIgnoreCase))
-            //    {
-            //        _pagos.Clear();
-
-            //        var (_, _, total) = ComputeTotals();
-            //        AppendLog($"[AutoPay] Selected={sel.Code}. Total={total:0.00}");
-
-            //        AddPayment(sel.Code, total);
-            //    }
-            //}
-            //else
-            //{
-            //    _selectedPaymentId = "";
-            //}
-            if (sel != null)
-            {
-                _selectedPaymentId = sel.Code;
-
-                //Denominations SOLO para CASH
-                SetDenominationsEnabled(string.Equals(sel.Code, "cash", StringComparison.OrdinalIgnoreCase));
-
-                // ===== Auto pago total: Business + Card =====
-                if (string.Equals(sel.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(sel.Code, CARD_CODE, StringComparison.OrdinalIgnoreCase))
-                {
-                    await ReevaluateBusinessAccountAsync(silent: false);
-
-                    _pagos.Clear();
-
-                    var (_, _, total) = ComputeTotals();
-                    AppendLog($"[AutoPay] Selected={sel.Code}. Total={total:0.00}");
-
-                    AddPayment(sel.Code, total);
-                }
-            }
-            else
+            if (sel == null)
             {
                 _selectedPaymentId = "";
                 SetDenominationsEnabled(false);
+                return;
             }
 
+            _selectedPaymentId = sel.Code;
 
+            // Denominations SOLO para CASH
+            SetDenominationsEnabled(string.Equals(sel.Code, "cash", StringComparison.OrdinalIgnoreCase));
+
+            // ===== Auto pago total: Business + Card =====
+            if (string.Equals(sel.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(sel.Code, CARD_CODE, StringComparison.OrdinalIgnoreCase))
+            {
+                await ReevaluateBusinessAccountAsync(silent: false);
+
+                // 🚨 Si Reevaluate quitó Business y cambió a Cash/Card, NO metas el pago
+                if (!string.Equals(_selectedPaymentId, sel.Code, StringComparison.OrdinalIgnoreCase))
+                {
+                    _pagos.Clear();
+                    PagosList.Items.Refresh();   // si _pagos NO es ObservableCollection
+                    RefreshSummary();
+                    return;
+                }
+
+                _pagos.Clear();
+
+                var (_, _, total) = ComputeTotals();
+                AppendLog($"[AutoPay] Selected={sel.Code}. Total={total:0.00}");
+
+                AddPayment(sel.Code, total);
+
+                PagosList.Items.Refresh();       // si _pagos NO es ObservableCollection
+                RefreshSummary();
+            }
         }
+
 
 
         private async  void PaymentMethod_Click(object sender, RoutedEventArgs e)
@@ -3854,6 +3850,11 @@ namespace TruckScale.Pos
             {
                 try
                 {
+
+                    TransportAccount? acc = ClienteRegCombo?.SelectedItem as TransportAccount;
+                    //TransportAccount acc.IdCustomer;
+
+
                     int siteId = _siteId > 0
                         ? _siteId
                         : await GetDefaultSiteIdAsync(conn, (MySqlTransaction)tx);
@@ -3866,10 +3867,10 @@ namespace TruckScale.Pos
 
                     // ========== INSERT EN sales ==========
                     const string SQL_SALE = @"INSERT INTO sales
-                  (sale_uid, site_id, terminal_id, operator_id, sale_status_id, currency,
+                  (sale_uid, site_id, terminal_id, operator_id,customer_id, sale_status_id, currency,
                    subtotal, tax_total, total, reweigh_of_sale_id, created_at)
                   VALUES
-                  (@uid, @site, @term, @op, @st, @ccy,
+                  (@uid, @site, @term, @op,@customer_id, @st, @ccy,
                    @sub, @tax, @tot, @reweigh_of_sale_id, NOW());";
 
                     await using (var cmd = new MySqlCommand(SQL_SALE, conn, (MySqlTransaction)tx))
@@ -3883,6 +3884,10 @@ namespace TruckScale.Pos
                         cmd.Parameters.AddWithValue("@sub", subtotal);
                         cmd.Parameters.AddWithValue("@tax", tax);
                         cmd.Parameters.AddWithValue("@tot", total);
+                        cmd.Parameters.AddWithValue("@customer_id",
+                            (acc?.IdCustomer == 0 || acc?.IdCustomer == null)
+                                ? (object)DBNull.Value
+                                : acc.IdCustomer);
 
                         //UG usamos el UID de la venta origen
                         string? reweighSourceUid =
@@ -3941,6 +3946,18 @@ namespace TruckScale.Pos
                         await cmd.ExecuteNonQueryAsync();
                     }
 
+
+                    //UG logica para clinetes type PREPAID bussines account
+                  
+
+                    var creditType = (acc?.CreditType ?? "POSTPAID").Trim().ToUpperInvariant();
+                    //var creditType = string.IsNullOrWhiteSpace(acc.CreditType) ? "POSTPAID" : acc.CreditType!;
+                    decimal availableCredit = 0m;
+                    if (creditType == "PREPAID" && acc?.IdCustomer > 0)
+                    {
+                        availableCredit = await GetAvailableCreditAsync(conn, (MySqlTransaction)tx, acc.IdCustomer);
+                    }
+                   
                     // ========== INSERT EN payments ========== 
                     const string SQL_PAY = @"INSERT INTO payments
                             (payment_uid, sale_uid, method_id, payment_status_id, amount, currency,
@@ -3950,6 +3967,7 @@ namespace TruckScale.Pos
                              @rate, @ref, @rcvby, @rcvat);";
 
 
+                    bool businessWasReceived = false;
 
                     foreach (var p in _pagos)
                     {
@@ -3966,30 +3984,38 @@ namespace TruckScale.Pos
                         cmd.Parameters.AddWithValue("@uid", saleUid);
                         cmd.Parameters.AddWithValue("@mid", methodId.Value);
 
-                        //cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
-                        if (methodId == 3) // Business Account *el pago se tiene que poner como pendiente, se pasara a pagado por el area de cuentas por pagar
-                        {
-                            cmd.Parameters.AddWithValue("@st", STATUS_PAY_PENDING);
-
-                            // AÚN NO SE RECIBE (cobranza lo llenará después)
-                            cmd.Parameters.AddWithValue("@rcvby", DBNull.Value);
-                            cmd.Parameters.AddWithValue("@rcvat", DBNull.Value);
-                        }
-                        else
-                        {
-                            cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
-
-                            // SÍ SE RECIBE EN CAJA
-                            cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
-                            cmd.Parameters.AddWithValue("@rcvat", DateTime.Now); // o DateTime.UtcNow si manejas UTC
-
-                        }
-
                         cmd.Parameters.AddWithValue("@amt", p.Monto);
                         cmd.Parameters.AddWithValue("@ccy", _selectedCurrency ?? "USD");
                         cmd.Parameters.AddWithValue("@rate", 1m);
                         cmd.Parameters.AddWithValue("@ref", (object?)p.Ref ?? DBNull.Value);
                         //cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
+                        if (methodId == 3) // Business Account
+                        {
+                            bool canReceive =
+                                creditType == "PREPAID" && availableCredit > 0m; // o >= p.Monto / >= businessAmount
+
+                            if (canReceive)
+                            {
+                                businessWasReceived = true; // <-- aquí
+
+                                cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
+                                cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
+                                cmd.Parameters.AddWithValue("@rcvat", DateTime.Now);
+                            }
+                            else
+                            {
+                                cmd.Parameters.AddWithValue("@st", STATUS_PAY_PENDING);
+                                cmd.Parameters.AddWithValue("@rcvby", DBNull.Value);
+                                cmd.Parameters.AddWithValue("@rcvat", DBNull.Value);
+                            }
+                        }
+                        else
+                        {
+                            cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
+                            cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
+                            cmd.Parameters.AddWithValue("@rcvat", DateTime.Now);
+                        }
+
 
                         await cmd.ExecuteNonQueryAsync();
                     }
@@ -3999,21 +4025,43 @@ namespace TruckScale.Pos
                         .Where(p => string.Equals(p.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
                         .Sum(p => p.Monto);
 
+                    //if (businessAmount > 0m)
+                    //{
+                    //    //if (ClienteRegCombo?.SelectedItem is not TransportAccount acc || acc.IdCustomer <= 0)
+                    //    //    throw new InvalidOperationException("Business Account payment requires a selected customer.");
+
+                    //    //var creditType = string.IsNullOrWhiteSpace(acc.CreditType) ? "POSTPAID" : acc.CreditType!;
+
+                    //    await UpdateCustomerCreditAsync(
+                    //        conn,
+                    //        (MySqlTransaction)tx,
+                    //        acc.IdCustomer,
+                    //        businessAmount,
+                    //        creditType
+                    //    );
+                    //}
                     if (businessAmount > 0m)
                     {
-                        if (ClienteRegCombo?.SelectedItem is not TransportAccount acc || acc.IdCustomer <= 0)
+                        if (acc == null || acc.IdCustomer <= 0)
                             throw new InvalidOperationException("Business Account payment requires a selected customer.");
 
-                        var creditType = string.IsNullOrWhiteSpace(acc.CreditType) ? "POSTPAID" : acc.CreditType!;
-
-                        await UpdateCustomerCreditAsync(
-                            conn,
-                            (MySqlTransaction)tx,
-                            acc.IdCustomer,
-                            businessAmount,
-                            creditType
-                        );
+                        if (creditType == "POSTPAID")
+                        {
+                            await UpdateCustomerCreditAsync(conn, (MySqlTransaction)tx, acc.IdCustomer, businessAmount, creditType);
+                        }
+                        else if (creditType == "PREPAID")
+                        {
+                            if (businessWasReceived) // <- clave
+                            {
+                                await UpdateCustomerCreditAsync(conn, (MySqlTransaction)tx, acc.IdCustomer, businessAmount, creditType);
+                            }
+                            else
+                            {
+                                AppendLog("[CustomerCredit] PREPAID but Business payment is PENDING -> skipping credit consumption.");
+                            }
+                        }
                     }
+
 
 
                     // ========== Link driver a la venta ==========
@@ -4095,6 +4143,14 @@ namespace TruckScale.Pos
             }
         }
 
+        private async Task<decimal> GetAvailableCreditAsync(MySqlConnection conn, MySqlTransaction tx, int customerId)
+        {
+            const string sql = "SELECT COALESCE(available_credit,0) FROM customer_credit WHERE customer_id=@cid;";
+            await using var cmd = new MySqlCommand(sql, conn, tx);
+            cmd.Parameters.AddWithValue("@cid", customerId);
+            var obj = await cmd.ExecuteScalarAsync();
+            return obj == null ? 0m : Convert.ToDecimal(obj);
+        }
 
         // Campos para señales de cierre
         private TaskCompletionSource<bool>? _saleDialogTcs;
@@ -4521,6 +4577,7 @@ namespace TruckScale.Pos
 
             bool isCashSale = acc.IdCustomer == 0;
 
+
             if (isCashSale)
             {
                 SetAccountFieldsEditable(true);
@@ -4546,15 +4603,39 @@ namespace TruckScale.Pos
 
             UpdatePaymentMethodsVisibility(allowed);
 
+            await LoadCreditSnapshotAsync(acc.IdCustomer);//UG AQUI ME QUEDE
+
             if (isSuspended)
             {
-                AppendLog($"[BusinessCredit] Customer {acc.IdCustomer} suspended. Reason: {reason}");
-                await ShowAlertAsync("Business Account", reason, PackIconKind.AlertCircleOutline);
+                UpdatePaymentMethodsVisibility(false);
+                await ShowAlertAsync("Business Account", _uiSuspendReason, PackIconKind.AlertCircleOutline);
+                return;
             }
-            else
+            // Si no maneja crédito, fuera
+            if (!_uiHasCredit)
             {
-                AppendLog($"[BusinessCredit] Customer {acc.IdCustomer} allowed={allowed}. Reason={(string.IsNullOrWhiteSpace(reason) ? "OK" : reason)}");
+                UpdatePaymentMethodsVisibility(false);
+                return;
             }
+
+            if (_uiCreditType == "PREPAID")
+            {
+                const decimal WEIGH = 12m;
+                const decimal REWEIGH = 2m;
+
+                if (_uiAvailableCredit > 0m && _uiAvailableCredit < WEIGH && _uiAvailableCredit >= REWEIGH)
+                {
+                    await ShowAlertAsync(
+                        "Business Account",
+                        $"Prepaid balance {_uiAvailableCredit} is not enough for a normal Weigh (${WEIGH:0.00}). Only Reweigh (${REWEIGH:0.00}) is allowed with Business Account.",
+                        PackIconKind.AlertCircleOutline
+                    );
+                }
+            }
+            //else
+            //{
+            //    AppendLog($"[BusinessCredit] Customer {acc.IdCustomer} allowed={allowed}. Reason={(string.IsNullOrWhiteSpace(reason) ? "OK" : reason)}");
+            //}
         }
 
 
@@ -6062,6 +6143,16 @@ namespace TruckScale.Pos
 
         private void UpdatePaymentMethodsVisibility(bool canUseBusinessAccount)
         {
+            if (!canUseBusinessAccount &&
+             string.Equals(_selectedPaymentId, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
+            {
+                _pagos.Clear();
+                PagosList.Items.Refresh(); // si aplica
+                RefreshSummary();
+                SelectPaymentByCode(GetFallbackPaymentCode());
+                return;
+            }
+
             // Si por algún motivo aún no hay cache, no tronamos:
             if (_allPaymentMethods.Count == 0)
             {
@@ -6138,10 +6229,10 @@ namespace TruckScale.Pos
             else if (ct == "PREPAID")
             {
                 const string SQL = @"UPDATE customer_credit
-                    SET
-                      available_credit = available_credit - @amt,
-                      updated_at       = CURRENT_TIMESTAMP
-                    WHERE customer_id = @cid;";
+                                SET available_credit = available_credit - @amt,
+                                    updated_at = CURRENT_TIMESTAMP
+                                WHERE customer_id = @cid
+                                  AND available_credit >= @amt;";
 
                 await using var cmd = new MySqlCommand(SQL, conn, tx);
                 cmd.Parameters.AddWithValue("@amt", amount);
@@ -6320,6 +6411,36 @@ namespace TruckScale.Pos
             NewTransactionButton.IsEnabled = !okEnabled;
         }
 
+        //private async Task ReevaluateBusinessAccountAsync(bool silent = false)
+        //{
+        //    if (ClienteRegCombo.SelectedItem is not TransportAccount acc || acc.IdCustomer <= 0)
+        //    {
+        //        UpdatePaymentMethodsVisibility(canUseBusinessAccount: false);
+        //        return;
+        //    }
+
+        //    // Si aún no hay servicio seleccionado, no permitas Business 
+        //    if (_selectedProductId <= 0)
+        //    {
+        //        UpdatePaymentMethodsVisibility(canUseBusinessAccount: false);
+        //        return;
+        //    }
+
+        //    // Usa el total real (incluye impuestos/desc si aplica)
+        //    var (_, _, total) = ComputeTotals();
+        //    decimal transactionAmount = total; // en tu caso 12 o 2 normalmente
+
+        //    var allowed = CanUseBusinessAccount(acc, transactionAmount, out var reason, out var isSuspended);
+
+        //    UpdatePaymentMethodsVisibility(allowed);
+
+        //    // Si estaba seleccionado Business y ya no alcanza, haz fallback
+        //    if (!allowed && string.Equals(_selectedPaymentId, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
+        //        SelectPaymentByCode(GetFallbackPaymentCode());
+
+        //    if (!silent && !allowed)
+        //        await ShowAlertAsync("Business Account", reason, PackIconKind.AlertCircleOutline);
+        //}
         private async Task ReevaluateBusinessAccountAsync(bool silent = false)
         {
             if (ClienteRegCombo.SelectedItem is not TransportAccount acc || acc.IdCustomer <= 0)
@@ -6328,27 +6449,186 @@ namespace TruckScale.Pos
                 return;
             }
 
-            // Si aún no hay servicio seleccionado, no permitas Business 
+            // Si aún no hay servicio seleccionado, no permitas Business
             if (_selectedProductId <= 0)
             {
                 UpdatePaymentMethodsVisibility(canUseBusinessAccount: false);
                 return;
             }
 
-            // Usa el total real (incluye impuestos/desc si aplica)
+            // Total real del ticket (12 o 2 normalmente)
             var (_, _, total) = ComputeTotals();
-            decimal transactionAmount = total; // en tu caso 12 o 2 normalmente
+            decimal transactionAmount = total;
 
-            var allowed = CanUseBusinessAccount(acc, transactionAmount, out var reason, out var isSuspended);
+            bool allowed = false;
+            string reason = "";
+
+            try
+            {
+                var snap = await GetCreditSnapshotAsync(acc.IdCustomer);
+
+                // 1) Si no maneja crédito, no hay Business Account
+                if (!snap.hasCredit)
+                {
+                    allowed = false;
+                    reason = "Customer does not have credit enabled.";
+                }
+                // 2) Si está suspendido, no permitir
+                else if (snap.isSuspended)
+                {
+                    allowed = false;
+                    reason = string.IsNullOrWhiteSpace(snap.suspensionReason)
+                        ? "Customer is suspended."
+                        : snap.suspensionReason;
+                }
+                else
+                {
+                    // 3) Reglas por tipo
+                    if (snap.creditType == "PREPAID")
+                    {
+                        // PREPAID: debe alcanzar para el total
+                        if (snap.availableCredit >= transactionAmount && transactionAmount > 0m)
+                        {
+                            allowed = true;
+                        }
+                        else
+                        {
+                            allowed = false;
+
+                            // Mensaje especial: “solo reweigh” (asumiendo 12 y 2 fijos)
+                            const decimal WEIGH = 12m;
+                            const decimal REWEIGH = 2m;
+
+                            if (transactionAmount >= WEIGH && snap.availableCredit >= REWEIGH)
+                            {
+                                reason =
+                                    $"Insufficient prepaid balance for Weigh (${transactionAmount:0.00}). " +
+                                    $"Available: ${snap.availableCredit:0.00}. Only Reweigh is allowed with Business Account.";
+                            }
+                            else
+                            {
+                                reason =
+                                    $"Insufficient prepaid balance. Available: ${snap.availableCredit:0.00}. " +
+                                    $"Total: ${transactionAmount:0.00}.";
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // POSTPAID: por ahora lo dejamos permitido (salvo suspensión / has_credit)
+                        allowed = true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                allowed = false;
+                reason = "Could not validate Business Account right now.";
+                AppendLog($"[BusinessCredit] Reevaluate failed: {ex.Message}");
+            }
 
             UpdatePaymentMethodsVisibility(allowed);
 
-            // Si estaba seleccionado Business y ya no alcanza, haz fallback
+            // Si estaba seleccionado Business y ya no aplica, haz fallback
             if (!allowed && string.Equals(_selectedPaymentId, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
                 SelectPaymentByCode(GetFallbackPaymentCode());
 
-            if (!silent && !allowed)
+            if (!silent && !allowed && !string.IsNullOrWhiteSpace(reason))
                 await ShowAlertAsync("Business Account", reason, PackIconKind.AlertCircleOutline);
+        }
+
+        private async Task<(bool hasCredit, string creditType, decimal availableCredit, bool isSuspended, string suspensionReason)>
+            GetCreditSnapshotAsync(int customerId)
+        {
+            var mainConn = GetPrimaryConn();
+            var localConn = ConfigManager.Current.LocalDbStrCon;
+
+            MySqlConnection conn;
+            try
+            {
+                conn = new MySqlConnection(mainConn);
+                await conn.OpenAsync();
+            }
+            catch
+            {
+                conn = new MySqlConnection(localConn);
+                await conn.OpenAsync();
+            }
+
+            await using (conn)
+            {
+                // has_credit
+                const string SQL_HAS = @"SELECT has_credit FROM customers WHERE id_customer=@cid LIMIT 1;";
+                await using (var cmd = new MySqlCommand(SQL_HAS, conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", customerId);
+                    var v = await cmd.ExecuteScalarAsync();
+                    var hasCredit = (v != null && Convert.ToInt32(v) == 1);
+                    if (!hasCredit)
+                        return (false, "POSTPAID", 0m, false, "");
+                }
+
+                // customer_credit snapshot
+                const string SQL_CC = @"
+            SELECT credit_type, available_credit, is_suspended, suspension_reason
+            FROM customer_credit
+            WHERE customer_id=@cid
+            LIMIT 1;";
+
+                await using (var cmd = new MySqlCommand(SQL_CC, conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", customerId);
+                    await using var r = await cmd.ExecuteReaderAsync();
+
+                    if (!await r.ReadAsync())
+                        throw new InvalidOperationException($"customer_credit row not found for customer_id={customerId}.");
+
+                    string creditType = (r["credit_type"]?.ToString() ?? "POSTPAID").Trim().ToUpperInvariant();
+                    decimal available = r["available_credit"] == DBNull.Value ? 0m : Convert.ToDecimal(r["available_credit"]);
+                    bool suspended = r["is_suspended"] != DBNull.Value && Convert.ToInt32(r["is_suspended"]) == 1;
+                    string reason = r["suspension_reason"]?.ToString() ?? "";
+
+                    return (true, creditType, available, suspended, reason);
+                }
+            }
+        }
+
+        private async Task LoadCreditSnapshotAsync(int customerId)
+        {
+            _uiAvailableCredit = 0m;
+            _uiCreditType = "POSTPAID";
+            _uiHasCredit = false;
+            _uiIsSuspended = false;
+            _uiSuspendReason = "";
+
+            await using var conn = new MySqlConnection(GetPrimaryConn());
+            await conn.OpenAsync();
+
+            // has_credit (si es 0, ni busques customer_credit)
+            const string SQL1 = @"SELECT has_credit FROM customers WHERE id_customer=@cid LIMIT 1;";
+            await using (var c1 = new MySqlCommand(SQL1, conn))
+            {
+                c1.Parameters.AddWithValue("@cid", customerId);
+                var v = await c1.ExecuteScalarAsync();
+                _uiHasCredit = (v != null && Convert.ToInt32(v) == 1);
+            }
+            if (!_uiHasCredit) return;
+
+            // credit snapshot
+            const string SQL2 = @"SELECT credit_type, available_credit, is_suspended, suspension_reason
+                          FROM customer_credit WHERE customer_id=@cid LIMIT 1;";
+            await using (var c2 = new MySqlCommand(SQL2, conn))
+            {
+                c2.Parameters.AddWithValue("@cid", customerId);
+                await using var r = await c2.ExecuteReaderAsync();
+                if (await r.ReadAsync())
+                {
+                    _uiCreditType = (r["credit_type"]?.ToString() ?? "POSTPAID").Trim().ToUpperInvariant();
+                    _uiAvailableCredit = r["available_credit"] == DBNull.Value ? 0m : Convert.ToDecimal(r["available_credit"]);
+                    _uiIsSuspended = r["is_suspended"] != DBNull.Value && Convert.ToInt32(r["is_suspended"]) == 1;
+                    _uiSuspendReason = r["suspension_reason"]?.ToString() ?? "";
+                }
+            }
         }
 
 
