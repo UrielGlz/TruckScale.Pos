@@ -565,7 +565,27 @@
 
                                 <!-- Service -->
                                 <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                    <TextBlock Text="Service" Style="{StaticResource TitleLarge}" Margin="0,0,0,6"/>
+                                    <!-- Título + Paso 2 -->
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,6">
+                                        <Border Width="22"
+                Height="22"
+                CornerRadius="6"
+                Background="{DynamicResource PrimaryHueMidBrush}"
+                BorderBrush="{DynamicResource PrimaryHueMidBrush}"
+                BorderThickness="2"
+                Margin="0,0,8,0">
+                                            <TextBlock Text="2"
+                       Foreground="Red"
+                       FontWeight="SemiBold"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       TextAlignment="Center"/>
+                                        </Border>
+
+                                        <TextBlock Text="Service"
+                   Style="{StaticResource TitleLarge}"
+                   Margin="0"/>
+                                    </StackPanel>
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
@@ -728,15 +748,31 @@
                                     </Grid.RowDefinitions>
 
                                     <!-- Label -->
-                                    <TextBlock Grid.Row="0"
-                                       Text="{DynamicResource Payment.MethodTitle}"
-                                       Style="{StaticResource TitleLarge}"
-                                       Margin="0,0,0,8"
-                                       VerticalAlignment="Center"/>
+                                    <!-- Label (Paso 3 + título) -->
+                                    <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,8">
+                                        <Border Width="22"
+            Height="22"
+            CornerRadius="6"
+            Background="{DynamicResource PrimaryHueMidBrush}"
+            BorderBrush="{DynamicResource PrimaryHueMidBrush}"
+            BorderThickness="2"
+            Margin="0,0,8,0">
+                                            <TextBlock Text="3"
+                   Foreground="red"
+                   FontWeight="SemiBold"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"
+                   TextAlignment="Center"/>
+                                        </Border>
+
+                                        <TextBlock Text="{DynamicResource Payment.MethodTitle}"
+               Style="{StaticResource TitleLarge}"
+               Margin="0"
+               VerticalAlignment="Center"/>
+                                    </StackPanel>
 
                                     <!-- Botones de método de pago -->
-                                    <ItemsControl Grid.Row="1" x:Name="PaymentMethodsItems"
-              ItemsSource="{Binding PaymentMethods, RelativeSource={RelativeSource AncestorType=Window}}">
+                                    <ItemsControl Grid.Row="1" x:Name="PaymentMethodsItems" ItemsSource="{Binding PaymentMethods, RelativeSource={RelativeSource AncestorType=Window}}">
                                         <ItemsControl.ItemsPanel>
                                             <ItemsPanelTemplate>
                                                 <WrapPanel/>
@@ -745,14 +781,9 @@
 
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <Button Click="PaymentMethod_Click"
-                    Style="{StaticResource PaymentButton}"
-                    IsEnabled="{Binding IsEnabled}">
+                                                <Button Click="PaymentMethod_Click" Style="{StaticResource PaymentButton}" IsEnabled="{Binding IsEnabled}">
                                                     <StackPanel Orientation="Horizontal">
-                                                        <md:PackIcon Kind="{Binding IconKind}"
-                                 Width="18"
-                                 Height="18"
-                                 Margin="0,0,8,0"/>
+                                                        <md:PackIcon Kind="{Binding IconKind}"  Width="18" Height="18" Margin="0,0,8,0"/>
                                                         <TextBlock Text="{Binding Name}"/>
                                                     </StackPanel>
                                                 </Button>
@@ -932,19 +963,32 @@
                     <StackPanel Grid.Column="2" x:Name="RightCol">
                         <md:Card Padding="16" Margin="0,0,0,12">
                             <StackPanel>
-                                <TextBlock Text="{DynamicResource QuickActions}" FontWeight="SemiBold"/>
-                                <Button x:Name="RegisterDriverButton"
-                                    Style="{StaticResource PrimaryRaised}"
-                                    Content="Register driver"
-                                    Margin="0,12,0,8"
-                                    Click="RegisterDriver_Click"/>
-                                <!--<Button Style="{StaticResource PrimaryRaised}"
-                                        Content="{DynamicResource Ticket.New}"
-                                        Margin="0,12,0,0"
-                                        Click="Button_Click"/>
-                                <Button Style="{StaticResource PrimaryOutlined}" Content="{DynamicResource Reprint}"/>
-                                <Button Style="{StaticResource PrimaryOutlined}" Content="{DynamicResource Search}"/>-->
+                                <!-- Header con paso -->
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Border Width="22"
+        Height="22"
+        CornerRadius="6"
+        Background="{DynamicResource PrimaryHueMidBrush}"
+        BorderBrush="{DynamicResource PrimaryHueMidBrush}"
+        BorderThickness="2"
+        Margin="0,0,8,0">
+                                        <TextBlock Text="1"
+               Foreground="Red"
+               FontWeight="SemiBold"
+               HorizontalAlignment="Center"
+               VerticalAlignment="Center"
+               TextAlignment="Center"/>
+                                    </Border>
+
+
+                                    <TextBlock Text="{DynamicResource QuickActions}"
+                   FontWeight="SemiBold"
+                   VerticalAlignment="Center"/>
+                                </StackPanel>
+
+                                <Button x:Name="RegisterDriverButton" Style="{StaticResource PrimaryRaised}" Content="Find driver" Margin="0,12,0,8"  Click="RegisterDriver_Click"/>
                             </StackPanel>
+
                         </md:Card>
 
                         <TextBox x:Name="txtLogTemp"
@@ -1574,8 +1618,7 @@
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <md:PackIcon Kind="Steering" Width="20" Height="20"
                                  Opacity="0.85" Margin="0,0,8,0"/>
-                            <TextBlock Text="{DynamicResource Driver.Dialog.Title}"
-                               Style="{StaticResource TitleLarge}" />
+                            <TextBlock x:Name="lblModalName" Text="Find Driver" Style="{StaticResource TitleLarge}" />
                         </StackPanel>
                     </Border>
 
@@ -1705,7 +1748,7 @@
                             BorderThickness="0,1,0,0"
                             Padding="0,12,0,0"
                             Margin="0,8,0,6">
-                                <TextBlock Text="{DynamicResource Service.Data}" Opacity="0.7"/>
+                                <TextBlock Text="Business Account" Opacity="0.7"/>
                             </Border>
 
                             <ComboBox x:Name="ClienteRegCombo"

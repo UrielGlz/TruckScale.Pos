@@ -488,6 +488,7 @@ namespace TruckScale.Pos
         private double _lastPersistedTotal = double.NaN;
         // Prefill de chofer cuando viene de ticket reweigh (venta original)
         private DriverInfo? _reweighPrefillDriver;
+        private bool _reweighServiceReady = false; // solo TRUE cuando el usuario acepta el ticket reweigh
 
 
         private static double Get(IDictionary<int, double> map, int key)
@@ -973,6 +974,10 @@ namespace TruckScale.Pos
 
         private void ResetDriverContext()
         {
+            _reweighServiceReady = false;
+            UpdatePaymentMethodsVisibility(canUseBusinessAccount: false);
+
+
             // 1) Estado de chofer y toggles
             _driverLinked = false;
             _hasAcceptedWeight = false;
@@ -1361,30 +1366,7 @@ namespace TruckScale.Pos
         /// Si ya existe un chofer vinculado al peso actual (_driverLinked = true),
         /// carga sus datos en el formulario para permitir edición.
         /// </summary>
-        //private async void RegisterDriver_Click(object sender, RoutedEventArgs e)
-        //{
-        //    try
-        //    {
-        //        // Si ya hay chofer registrado para este peso, cargar sus datos para edición
-        //        if (_driverLinked && !string.IsNullOrWhiteSpace(_currentWeightUuid))
-        //        {
-        //            var existingDriver = await GetDriverByWeightUuidAsync(_currentWeightUuid);
-        //            if (existingDriver != null)
-        //            {
-        //                FillDriverFormFromInfo(existingDriver);
-        //                AppendLog($"[Driver] Loaded existing driver for editing: {existingDriver.First} {existingDriver.Last}");
-        //            }
-        //        }
-
-        //        RootDialog.IsOpen = true;
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        AppendLog($"[Driver] Error in RegisterDriver_Click: {ex.Message}");
-        //        // Abrimos el modal de todos modos para que el operador pueda capturar
-        //        RootDialog.IsOpen = true;
-        //    }
-        //}
+    
         private async void RegisterDriver_Click(object sender, RoutedEventArgs e)
         {
             // Abrir modal
@@ -1409,18 +1391,20 @@ namespace TruckScale.Pos
 
                 if (existing != null)
                 {
-                    FillDriverFormFromInfo(existing);
+
+                    FillDriverFormFromInfo(existing,"temp");
                 }
                 else if (isReweighPrefill)
                 {
-                    FillDriverFormFromInfo(_reweighPrefillDriver!);
+
+                    FillDriverFormFromInfo(_reweighPrefillDriver!, "reweigh");
                 }
             }
             else
             {
                 // Si no está ligado, y es reweigh con prefill, también precarga
                 if (isReweighPrefill)
-                    FillDriverFormFromInfo(_reweighPrefillDriver!);
+                    FillDriverFormFromInfo(_reweighPrefillDriver!, "reweigh");
             }
 
             // Asegurar que el producto del modal sea el del servicio ACTUAL (WEIGH/REWEIGH)
@@ -1458,6 +1442,7 @@ namespace TruckScale.Pos
         private void RegisterCancel_Click(object sender, RoutedEventArgs e)
         {
             try { RootDialog.IsOpen = false; ClearDriverForm(); } catch { }
+            SetReweighEditable(true);
         }
 
 
@@ -2954,11 +2939,20 @@ namespace TruckScale.Pos
         private void WeighToggle_Checked(object sender, RoutedEventArgs e)
         {
             if (ReweighToggle.IsChecked == true) ReweighToggle.IsChecked = false;
+
+            _reweighServiceReady = false; // por si venías de reweigh
             ApplySelected("WEIGH");
+
+            UpdatePaymentMethodsVisibility(canUseBusinessAccount: false /* o tu bool real */);
         }
+
 
         private void ReweighToggle_Checked(object sender, RoutedEventArgs e)
         {
+            _reweighServiceReady = false;
+            UpdatePaymentMethodsVisibility(canUseBusinessAccount: false /* o tu bool real */);
+
+
             // 1) Validar que ya se aceptó un peso con OK
             if (!_hasAcceptedWeight)
             {
@@ -4002,7 +3996,7 @@ namespace TruckScale.Pos
                     }
 
 
-                    //UG logica para clinetes type PREPAID bussines account
+                    //UG logica para clinetes type PREPAID business account
                   
 
                     var creditType = (acc?.CreditType ?? "POSTPAID").Trim().ToUpperInvariant();
@@ -4888,68 +4882,8 @@ namespace TruckScale.Pos
         /// Se usa tanto para cargar chofer por teléfono como para edición.
         /// Actualizado: ahora también carga el teléfono del chofer.
         /// </summary>
-        //private void FillDriverFormFromInfo(DriverInfo d)
-        //{
-        //    // Driver phone - nuevo: cargar teléfono para edición
-        //    if (!string.IsNullOrWhiteSpace(d.PhoneDigits))
-        //    {
-        //        _driverPhoneDigits = d.PhoneDigits;
-        //        DriverPhoneText.Text = FormatPhone10(d.PhoneDigits);
-        //        DriverPhoneStatusText.Visibility = Visibility.Collapsed;
-        //    }
-
-        //    // Datos básicos del chofer
-        //    ChoferNombreText.Text = d.First;
-        //    ChoferApellidosText.Text = d.Last;
-        //    LicenciaNumeroText.Text = d.License;
-        //    PlacasRegText.Text = d.Plates;
-        //    TrailerNumberText.Text = d.TrailerNumber;
-        //    TractorNumberText.Text = d.TractorNumber;
-
-        //    // License state (estado de la placa)
-        //    if (!string.IsNullOrWhiteSpace(d.LicenseStateCode))
-        //    {
-        //        var st = _licenseStates
-        //            .FirstOrDefault(x => string.Equals(x.Code, d.LicenseStateCode, StringComparison.OrdinalIgnoreCase));
-        //        if (st != null)
-        //            LicenseStateCombo.SelectedItem = st;
-        //    }
-
-        //    // Company from catálogo (buscar por account_number o account_name)
-        //    TransportAccount? acc = null;
-        //    if (!string.IsNullOrWhiteSpace(d.AccountNumber))
-        //    {
-        //        acc = _accounts.FirstOrDefault(a =>
-        //            string.Equals(a.AccountNumber, d.AccountNumber, StringComparison.OrdinalIgnoreCase));
-        //    }
-        //    if (acc == null && !string.IsNullOrWhiteSpace(d.AccountName))
-        //    {
-        //        acc = _accounts.FirstOrDefault(a =>
-        //            string.Equals(a.AccountName, d.AccountName, StringComparison.OrdinalIgnoreCase));
-        //    }
-
-        //    if (acc != null)
-        //    {
-        //        ClienteRegCombo.SelectedItem = acc;
-        //    }
-        //    else
-        //    {
-        //        ClienteRegCombo.SelectedIndex = 0; // Cash sale – no account
-        //        AccountNameText.Text = d.AccountName;
-        //        AccountAddressText.Text = d.AccountAddress;
-        //        AccountCountryText.Text = d.AccountCountry;
-        //        AccountStateText.Text = d.AccountState;
-        //    }
-
-        //    // Driver product (tipo de producto/carga)
-        //    if (d.DriverProductId.HasValue && d.DriverProductId.Value > 0)
-        //    {
-        //        var dp = _driverProducts.FirstOrDefault(x => x.Id == d.DriverProductId.Value);
-        //        if (dp != null)
-        //            ProductoRegText.SelectedItem = dp;
-        //    }
-        //}
-        private void FillDriverFormFromInfo(DriverInfo d)
+       
+        private void FillDriverFormFromInfo(DriverInfo d,string from)
         {
             // Driver phone - cargar teléfono para edición
             if (!string.IsNullOrWhiteSpace(d.PhoneDigits))
@@ -4958,11 +4892,29 @@ namespace TruckScale.Pos
                 DriverPhoneText.Text = FormatPhone10(d.PhoneDigits);
                 DriverPhoneStatusText.Visibility = Visibility.Collapsed;
             }
+            lblModalName.Text = "Update Driver";
+            if (from == "temp")
+            {
+                DriverPhoneText.Text = "";
+                ChoferNombreText.Text = "";
+                ChoferApellidosText.Text = "";
+                LicenciaNumeroText.Text = "";
+                SetReweighEditable(true);
 
-            // Datos básicos del chofer
-            ChoferNombreText.Text = d.First;
-            ChoferApellidosText.Text = d.Last;
-            LicenciaNumeroText.Text = d.License;
+
+            }
+            else if(from == "reweigh") 
+            {
+                DriverPhoneText.Text = "";
+
+
+                ChoferNombreText.Text = "";
+                ChoferApellidosText.Text = "";
+                LicenciaNumeroText.Text = "";
+                SetReweighEditable(false);
+            }
+              
+            
             PlacasRegText.Text = d.Plates;
             TrailerNumberText.Text = d.TrailerNumber;
             TractorNumberText.Text = d.TractorNumber;
@@ -5012,15 +4964,43 @@ namespace TruckScale.Pos
             // =========================
             // Driver product (NO pisar si está bloqueado)
             // =========================
-            if (ProductoRegText.IsEnabled)
+            //if (ProductoRegText.IsEnabled)
+            //{
+            //    if (d.DriverProductId.HasValue && d.DriverProductId.Value > 0)
+            //    {
+            //        var dp = _driverProducts.FirstOrDefault(x => x.Id == d.DriverProductId.Value);
+            //        if (dp != null)
+            //            ProductoRegText.SelectedItem = dp;
+            //    }
+            //}
+            if (d.DriverProductId.HasValue && d.DriverProductId.Value > 0)
             {
-                if (d.DriverProductId.HasValue && d.DriverProductId.Value > 0)
-                {
-                    var dp = _driverProducts.FirstOrDefault(x => x.Id == d.DriverProductId.Value);
-                    if (dp != null)
-                        ProductoRegText.SelectedItem = dp;
-                }
+                var dp = _driverProducts.FirstOrDefault(x => x.Id == d.DriverProductId.Value);
+                if (dp != null)
+                    ProductoRegText.SelectedItem = dp;
             }
+        }
+        private void SetReweighEditable(bool enabled)
+        {
+            PlacasRegText.IsEnabled = enabled;
+            ProductoRegText.IsEnabled = enabled;
+
+        }
+
+        private void FillDriverFormFromInfoNew(DriverInfo d)
+        {
+            // Driver phone - cargar teléfono para edición
+            if (!string.IsNullOrWhiteSpace(d.PhoneDigits))
+            {
+                _driverPhoneDigits = d.PhoneDigits;
+                DriverPhoneText.Text = FormatPhone10(d.PhoneDigits);
+                DriverPhoneStatusText.Visibility = Visibility.Collapsed;
+            }
+
+            // Datos básicos del chofer
+            ChoferNombreText.Text = d.First;
+            ChoferApellidosText.Text = d.Last;
+            LicenciaNumeroText.Text = d.License;
         }
 
 
@@ -5083,10 +5063,14 @@ namespace TruckScale.Pos
                 ChoferApellidosText.Text = "";
                 LicenciaNumeroText.Text = "";
                 PlacasRegText.Text = "";
+
+                lblModalName.Text = "Register Driver";
+
             }
             else
             {
-                FillDriverFormFromInfo(info);
+                lblModalName.Text = "Find Driver";
+                FillDriverFormFromInfoNew(info);
                 DriverPhoneStatusText.Text = $"Driver loaded: {info.First} {info.Last}";
                 DriverPhoneStatusText.Visibility = Visibility.Visible;
             }
@@ -5814,6 +5798,8 @@ namespace TruckScale.Pos
 
             // 3) Optional: clear the textbox so next time is clean
             try { ReweighTicketInputTextBox.Text = ""; } catch { }
+            _reweighServiceReady = false;
+            UpdatePaymentMethodsVisibility(canUseBusinessAccount: false /* o tu bool real */);
 
             try
             {
@@ -5830,6 +5816,9 @@ namespace TruckScale.Pos
 
             bool ok = await PrepareReweighFromTicketAsync(raw);
 
+
+            UpdatePaymentMethodsVisibility(canUseBusinessAccount: false /* o tu bool real */);
+
             if (!ok)
             {
                 // Cumplimos tu punto 4: cerramos modal y dejamos que el alert explique
@@ -5842,7 +5831,13 @@ namespace TruckScale.Pos
             // Si es válido:
             // - Aquí YA tienes _reweighSourceSaleId / _reweighSourceSaleUid / _reweighSourceTicketNumber
             // - Cierra el modal y deja que el operador capture chofer / pagos como siempre
-            try { ReweighHost.IsOpen = false; } catch { }
+            try { 
+                ReweighHost.IsOpen = false;
+                _reweighServiceReady = true;
+                try { WeighToggle.IsChecked = false; } catch { }
+                
+
+            } catch { }
 
             // Activar visualmente REWEIGH como producto seleccionado
             ApplySelected("REWEIGH");
@@ -6200,27 +6195,70 @@ namespace TruckScale.Pos
             return PaymentMethods.FirstOrDefault()?.Code ?? "cash";
         }
 
+        //private void UpdatePaymentMethodsVisibility(bool canUseBusinessAccount)
+        //{
+        //    if (!canUseBusinessAccount &&
+        //     string.Equals(_selectedPaymentId, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
+        //    {
+        //        _pagos.Clear();
+        //        PagosList.Items.Refresh(); // si aplica
+        //        RefreshSummary();
+        //        SelectPaymentByCode(GetFallbackPaymentCode());
+        //        return;
+        //    }
+
+        //    // Si por algún motivo aún no hay cache, no tronamos:
+        //    if (_allPaymentMethods.Count == 0)
+        //    {
+        //        // fallback: solo habilita/deshabilita si existe
+        //        var business = PaymentMethods.FirstOrDefault(p => string.Equals(p.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase));
+        //        if (business != null) business.IsEnabled = canUseBusinessAccount;
+
+        //        if (!canUseBusinessAccount && string.Equals(_selectedPaymentId, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
+        //            SelectPaymentByCode(GetFallbackPaymentCode());
+
+        //        return;
+        //    }
+
+        //    var allowedCodes = canUseBusinessAccount
+        //        ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cash", "card", BUSINESS_CODE }
+        //        : new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cash", "card" };
+
+        //    PaymentMethods.Clear();
+
+        //    foreach (var m in _allPaymentMethods)
+        //    {
+        //        // re-activar estado por si quedó disabled
+        //        if (string.Equals(m.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
+        //            m.IsEnabled = canUseBusinessAccount;
+
+        //        if (allowedCodes.Contains(m.Code))
+        //            PaymentMethods.Add(m);
+        //    }
+
+        //    // Si el seleccionado ya no existe (o era business), hacer fallback
+        //    if (!string.IsNullOrWhiteSpace(_selectedPaymentId) &&
+        //        !allowedCodes.Contains(_selectedPaymentId))
+        //    {
+        //        SelectPaymentByCode(GetFallbackPaymentCode());
+        //    }
+        //    else if (string.IsNullOrWhiteSpace(_selectedPaymentId))
+        //    {
+        //        SelectPaymentByCode("cash");
+        //    }
+        //}
         private void UpdatePaymentMethodsVisibility(bool canUseBusinessAccount)
         {
-            if (!canUseBusinessAccount &&
-             string.Equals(_selectedPaymentId, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
-            {
-                _pagos.Clear();
-                PagosList.Items.Refresh(); // si aplica
-                RefreshSummary();
-                SelectPaymentByCode(GetFallbackPaymentCode());
-                return;
-            }
+            var serviceReady = IsServiceReadyForPayments();
 
             // Si por algún motivo aún no hay cache, no tronamos:
             if (_allPaymentMethods.Count == 0)
             {
-                // fallback: solo habilita/deshabilita si existe
-                var business = PaymentMethods.FirstOrDefault(p => string.Equals(p.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase));
-                if (business != null) business.IsEnabled = canUseBusinessAccount;
+                foreach (var m in PaymentMethods)
+                    m.IsEnabled = serviceReady; // fallback simple
 
-                if (!canUseBusinessAccount && string.Equals(_selectedPaymentId, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
-                    SelectPaymentByCode(GetFallbackPaymentCode());
+                if (!serviceReady)
+                    SelectPaymentByCode(null);
 
                 return;
             }
@@ -6233,25 +6271,47 @@ namespace TruckScale.Pos
 
             foreach (var m in _allPaymentMethods)
             {
-                // re-activar estado por si quedó disabled
-                if (string.Equals(m.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
-                    m.IsEnabled = canUseBusinessAccount;
+                if (!allowedCodes.Contains(m.Code))
+                    continue;
 
-                if (allowedCodes.Contains(m.Code))
-                    PaymentMethods.Add(m);
+                // 🔒 regla principal: si no hay service -> todo deshabilitado
+                bool enabled = serviceReady;
+
+                // además, business solo si aplica
+                if (string.Equals(m.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
+                    enabled = serviceReady && canUseBusinessAccount;
+
+                m.IsEnabled = enabled;
+
+                PaymentMethods.Add(m);
             }
 
-            // Si el seleccionado ya no existe (o era business), hacer fallback
+            // Si NO hay service: sin método seleccionado (y no auto-cash)
+            if (!serviceReady)
+            {
+                SelectPaymentByCode(null);
+                return;
+            }
+
+            // Si traías Business seleccionado y ya no se puede, fallback
+            if (!canUseBusinessAccount &&
+                string.Equals(_selectedPaymentId, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
+            {
+                _pagos.Clear();
+                PagosList.Items.Refresh();
+                RefreshSummary();
+                SelectPaymentByCode(GetFallbackPaymentCode());
+                return;
+            }
+
+            // Si el seleccionado ya no existe, fallback; si no hay seleccionado, lo dejamos en null (NO auto-cash)
             if (!string.IsNullOrWhiteSpace(_selectedPaymentId) &&
                 !allowedCodes.Contains(_selectedPaymentId))
             {
                 SelectPaymentByCode(GetFallbackPaymentCode());
             }
-            else if (string.IsNullOrWhiteSpace(_selectedPaymentId))
-            {
-                SelectPaymentByCode("cash");
-            }
         }
+
         private async Task UpdateCustomerCreditAsync(MySqlConnection conn,MySqlTransaction tx, int customerId,decimal amount,string creditType)
         {
             if (customerId <= 0)
@@ -7061,6 +7121,15 @@ namespace TruckScale.Pos
             {
                 await ShowAlertAsync("Reprint", ex.Message, PackIconKind.AlertCircleOutline);
             }
+        }
+
+        private bool IsServiceReadyForPayments()
+        {
+            // WEIGH = listo en cuanto se selecciona
+            if (WeighToggle?.IsChecked == true) return true;
+
+            // REWEIGH = listo hasta que el modal se acepte
+            return _reweighServiceReady;
         }
 
 
