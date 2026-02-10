@@ -145,6 +145,13 @@ namespace TruckScale.Pos
         public string Label { get; set; } = "";
     }
 
+    public class DenomButtonVm
+    {
+        public decimal Amount { get; set; }
+        public string Text { get; set; } = "";
+        public bool IsSuggested { get; set; }
+        public bool IsEnabled { get; set; } = true;
+    }
 
     public partial class MainWindow : Window
     {
@@ -290,6 +297,76 @@ namespace TruckScale.Pos
             }
 
             SetUiReady(false, "Connecting…");
+        }
+
+
+        private readonly ObservableCollection<DenomButtonVm> _denomButtons = new();
+        private DenomButtonVm? _suggestedBtn;
+
+        private decimal GetTotalDue()
+        {
+            // tu regla actual (mismo cálculo que RefreshSummary)
+            return _ventaTotal - _descuento + _impuestos + _comisiones;
+        }
+
+        private decimal GetTotalPaid() => _pagos.Sum(p => p.Monto);
+
+        private decimal GetRemaining() => Math.Max(0m, GetTotalDue() - GetTotalPaid());
+
+        private void BuildKeypadUI()
+        {
+            try
+            {
+                _denomButtons.Clear();
+
+                _suggestedBtn = new DenomButtonVm { IsSuggested = true };
+                _denomButtons.Add(_suggestedBtn);
+
+                foreach (var d in _kp.Denominations)
+                {
+                    _denomButtons.Add(new DenomButtonVm
+                    {
+                        Amount = d,
+                        Text = d.ToString("0.##", CultureInfo.InvariantCulture)
+                    });
+                }
+
+                DenomsHost.ItemsSource = _denomButtons;
+
+                UpdateSuggestedPayButton();
+                RefreshKeypadDisplay();
+            }
+            catch { }
+        }
+
+        private void UpdateSuggestedPayButton()
+        {
+            try
+            {
+                if (_suggestedBtn == null) return;
+
+                var remaining = GetRemaining();
+                _suggestedBtn.Amount = remaining;
+                _suggestedBtn.Text = $"{remaining.ToString("C", _moneyCulture)}";
+                _suggestedBtn.IsEnabled = remaining > 0;
+
+                var isCard = string.Equals(_selectedPaymentId, CARD_CODE, StringComparison.OrdinalIgnoreCase);
+
+                foreach (var b in _denomButtons)
+                {
+                    if (b.IsSuggested)
+                    {
+                        b.IsEnabled = remaining > 0;
+                        continue;
+                    }
+
+                    // CARD: no permitir denoms > remaining (y remaining 0 deshabilita todo)
+                    b.IsEnabled = !isCard || (remaining > 0 && b.Amount <= remaining);
+                }
+
+                DenomsHost.Items.Refresh();
+            }
+            catch { }
         }
 
 
@@ -1121,18 +1198,18 @@ namespace TruckScale.Pos
             catch { _kp = new(); }
         }
 
-        private void BuildKeypadUI()
-        {
-            try
-            {
-                DenomsHost.ItemsSource = _kp.Denominations;
-                //KeysItems.ItemsSource = _kp.Keys;
+        //private void BuildKeypadUI()
+        //{
+        //    try
+        //    {
+        //        DenomsHost.ItemsSource = _kp.Denominations;
+        //        //KeysItems.ItemsSource = _kp.Keys;
 
 
-                RefreshKeypadDisplay();
-            }
-            catch { }
-        }
+        //        RefreshKeypadDisplay();
+        //    }
+        //    catch { }
+        //}
 
 
         private void PayButton_Click(object sender, RoutedEventArgs e)
@@ -1307,37 +1384,52 @@ namespace TruckScale.Pos
 
         async private void Denom_Click(object sender, RoutedEventArgs e)
         {
-            var tag = ((Button)sender).Tag?.ToString();
-            if (!decimal.TryParse(tag, NumberStyles.Any, CultureInfo.InvariantCulture, out var add))
-                return;
+            if (sender is not Button btn) return;
 
-            // 1) Validar método de pago
+            decimal add;
+            if (btn.Tag is decimal d) add = d;
+            else if (!decimal.TryParse(btn.Tag?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out add)) return;
+
             if (string.IsNullOrWhiteSpace(_selectedPaymentId))
             {
-                await ShowAlertAsync(
-                    "Payment method required",
+                await ShowAlertAsync("Payment method required",
                     "Please select the payment method (Cash, Card, etc.) before adding an amount.",
                     PackIconKind.Cash);
                 return;
             }
 
-            // 2) Validar chofer ligado a este peso
             if (!_driverLinked)
             {
-                await ShowAlertAsync(
-                    "Driver required",
+                await ShowAlertAsync("Driver required",
                     "Please register the driver for the current weight before recording payments.",
                     PackIconKind.AccountAlertOutline);
                 return;
             }
 
-            // 3) Agregar directamente el pago con la denominación seleccionada
+            var isCard = string.Equals(_selectedPaymentId, CARD_CODE, StringComparison.OrdinalIgnoreCase);
+            if (isCard)
+            {
+                var remaining = GetRemaining();
+                if (remaining <= 0)
+                {
+                    await ShowAlertAsync("Already paid", "There is no remaining balance to pay.", PackIconKind.CreditCard);
+                    return;
+                }
+                if (add > remaining)
+                {
+                    await ShowAlertAsync("Amount too high",
+                        $"Card payments cannot exceed the remaining balance ({remaining.ToString("C", _moneyCulture)}).",
+                        PackIconKind.CreditCard);
+                    return;
+                }
+            }
+
             AddPayment(_selectedPaymentId, add);
 
-            // 4) Limpiar buffer del keypad (por si en el futuro vuelves a usarlo)
             _keypadBuffer = "";
             RefreshKeypadDisplay();
         }
+
 
 
         private string PaymentName(string id) => id switch
@@ -2216,61 +2308,54 @@ namespace TruckScale.Pos
         private void AddPayment(string methodCode, decimal monto)
         {
             if (monto <= 0) return;
+            if (string.IsNullOrWhiteSpace(methodCode)) return;
+            if (!_driverLinked) return;
 
+            var isCash = string.Equals(methodCode, "cash", StringComparison.OrdinalIgnoreCase);
+            var isCard = string.Equals(methodCode, CARD_CODE, StringComparison.OrdinalIgnoreCase);
 
-            if (string.IsNullOrWhiteSpace(methodCode))
+            if (isCash)
             {
-                MessageBox.Show(
-                    "Please select the payment method (Cash, Credit card, etc.) before entering the amount.",
-                    "TruckScale POS",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information
-                );
-                return;
+                // ✅ cash: 1 sola línea acumulada
+                var existing = _pagos.FirstOrDefault(p =>
+                    string.Equals(p.Code, methodCode, StringComparison.OrdinalIgnoreCase));
+
+                if (existing != null)
+                {
+                    existing.Monto += monto;
+                    PagosList.Items.Refresh();
+                }
+                else
+                {
+                    _pagos.Add(new PaymentEntry
+                    {
+                        Metodo = PaymentName(methodCode),
+                        Code = methodCode,
+                        Ref = null,
+                        Monto = monto
+                    });
+                }
             }
-
-            if (!_driverLinked)
+            else if (isCard)
             {
-                MessageBox.Show(
-                    "Please register the driver for the current weight before recording payments.",
-                    "TruckScale POS",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information
-                );
-                return;
-            }
-
-            var refTxt = "";
-            try { refTxt = RefPanel.Visibility == Visibility.Visible ? (RefText?.Text ?? "") : ""; } catch { }
-
-            var refKey = string.IsNullOrWhiteSpace(refTxt) ? null : refTxt.Trim();
-
-            // ✅ Buscar existente (agrupación por método + ref)
-            var existing = _pagos.FirstOrDefault(p =>
-                string.Equals(p.Code, methodCode, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals((p.Ref ?? "").Trim(), (refKey ?? "").Trim(), StringComparison.OrdinalIgnoreCase)
-            );
-
-            if (existing != null)
-            {
-                existing.Monto += monto;
-
-                // Si PaymentEntry NO implementa INotifyPropertyChanged, fuerza refresh:
-                PagosList.Items.Refresh();
-            }
-            else
-            {
+                // ✅ card: varias líneas (simular tarjetas distintas)
                 _pagos.Add(new PaymentEntry
                 {
                     Metodo = PaymentName(methodCode),
                     Code = methodCode,
-                    Ref = refKey,
+                    Ref = null,
                     Monto = monto
                 });
             }
+            else
+            {
+                // otros métodos si aplica
+                _pagos.Add(new PaymentEntry { Metodo = PaymentName(methodCode), Code = methodCode, Ref = null, Monto = monto });
+            }
 
-            RefreshSummary();
+            RefreshSummary(); // y aquí dentro llamamos UpdateSuggestedPayButton
         }
+
 
 
         private (decimal subtotal, decimal tax, decimal total) ComputeTotals()
@@ -2481,6 +2566,8 @@ namespace TruckScale.Pos
 
                 
                 UpdateDoneButtonState();
+                UpdateSuggestedPayButton();
+
             }
             catch { }
         }
@@ -3728,40 +3815,49 @@ namespace TruckScale.Pos
             {
                 _selectedPaymentId = "";
                 SetDenominationsEnabled(false);
+                UpdateSuggestedPayButton(); // por si acaso
                 return;
             }
 
             _selectedPaymentId = sel.Code;
 
-            // Denominations SOLO para CASH
-            SetDenominationsEnabled(string.Equals(sel.Code, "cash", StringComparison.OrdinalIgnoreCase));
+            // Denoms: CASH y CARD (porque ahí vive el "Pay Remaining")
+            var isCash = string.Equals(sel.Code, "cash", StringComparison.OrdinalIgnoreCase);
+            var isCard = string.Equals(sel.Code, CARD_CODE, StringComparison.OrdinalIgnoreCase);
+            SetDenominationsEnabled(isCash || isCard);
 
-            // ===== Auto pago total: Business + Card =====
-            if (string.Equals(sel.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(sel.Code, CARD_CODE, StringComparison.OrdinalIgnoreCase))
+            // BUSINESS: sigue siendo auto total y pago único
+            if (string.Equals(sel.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
             {
                 await ReevaluateBusinessAccountAsync(silent: false);
 
-                // 🚨 Si Reevaluate quitó Business y cambió a Cash/Card, NO metas el pago
                 if (!string.Equals(_selectedPaymentId, sel.Code, StringComparison.OrdinalIgnoreCase))
                 {
                     _pagos.Clear();
-                    PagosList.Items.Refresh();   // si _pagos NO es ObservableCollection
+                    PagosList.Items.Refresh();
                     RefreshSummary();
                     return;
                 }
 
                 _pagos.Clear();
 
-                var (_, _, total) = ComputeTotals();
-                AppendLog($"[AutoPay] Selected={sel.Code}. Total={total:0.00}");
+                var totalDue = GetTotalDue();
+                AddPayment(sel.Code, totalDue);
 
-                AddPayment(sel.Code, total);
-
-                PagosList.Items.Refresh();       // si _pagos NO es ObservableCollection
+                PagosList.Items.Refresh();
                 RefreshSummary();
+                return;
             }
+
+            // CARD: NO auto-pay. Solo validar/actualizar UI
+            if (isCard)
+            {
+                await ReevaluateBusinessAccountAsync(silent: true);
+            }
+
+            UpdateSuggestedPayButton();
         }
+
 
 
 
@@ -4009,7 +4105,18 @@ namespace TruckScale.Pos
                     {
                         availableCredit = await GetAvailableCreditAsync(conn, (MySqlTransaction)tx, acc.IdCustomer);
                     }
-                   
+
+                    // 1) Colapsar pagos para DB: 1 row por método (cash/card/business)
+                    var dbPagos = _pagos
+                        .GroupBy(p => p.Code, StringComparer.OrdinalIgnoreCase)
+                        .Select(g => new PaymentEntry
+                        {
+                            Code = g.Key,
+                            Monto = g.Sum(x => x.Monto),
+                            Ref = null // aquí NO puedes guardar refs distintos; si quieres auditoría real -> tabla payment_splits
+                        })
+                        .ToList();
+
                     // ========== INSERT EN payments ========== 
                     const string SQL_PAY = @"INSERT INTO payments
                             (payment_uid, sale_uid, method_id, payment_status_id, amount, currency,
@@ -4020,36 +4127,30 @@ namespace TruckScale.Pos
 
 
                     bool businessWasReceived = false;
-
-                    foreach (var p in _pagos)
+                    // 2) Insertar ya agrupado
+                    foreach (var p in dbPagos)
                     {
                         int? methodId = FindPaymentMethodIdByCode(p.Code);
                         if (methodId == null)
                             throw new InvalidOperationException($"Payment method '{p.Code}' not found/mapped.");
-                        
-                        bool isBusiness = string.Equals(p.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase) || methodId.Value == 3; // si quieres mantenerlo
-
 
                         await using var cmd = new MySqlCommand(SQL_PAY, conn, (MySqlTransaction)tx);
-                        
+
                         cmd.Parameters.AddWithValue("@puid", Guid.NewGuid().ToString());
                         cmd.Parameters.AddWithValue("@uid", saleUid);
                         cmd.Parameters.AddWithValue("@mid", methodId.Value);
-
                         cmd.Parameters.AddWithValue("@amt", p.Monto);
                         cmd.Parameters.AddWithValue("@ccy", _selectedCurrency ?? "USD");
                         cmd.Parameters.AddWithValue("@rate", 1m);
                         cmd.Parameters.AddWithValue("@ref", (object?)p.Ref ?? DBNull.Value);
-                        //cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
-                        if (methodId == 3) // Business Account
+
+                        if (methodId.Value == 3) // Business Account
                         {
-                            bool canReceive =
-                                creditType == "PREPAID" && availableCredit > 0m; // o >= p.Monto / >= businessAmount
+                            bool canReceive = creditType == "PREPAID" && availableCredit >= p.Monto;
 
                             if (canReceive)
                             {
-                                businessWasReceived = true; // <-- aquí
-
+                                businessWasReceived = true;
                                 cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
                                 cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
                                 cmd.Parameters.AddWithValue("@rcvat", DateTime.Now);
@@ -4068,9 +4169,60 @@ namespace TruckScale.Pos
                             cmd.Parameters.AddWithValue("@rcvat", DateTime.Now);
                         }
 
-
                         await cmd.ExecuteNonQueryAsync();
                     }
+
+
+                    //foreach (var p in _pagos)
+                    //{
+                    //    int? methodId = FindPaymentMethodIdByCode(p.Code);
+                    //    if (methodId == null)
+                    //        throw new InvalidOperationException($"Payment method '{p.Code}' not found/mapped.");
+
+                    //    bool isBusiness = string.Equals(p.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase) || methodId.Value == 3; // si quieres mantenerlo
+
+
+                    //    await using var cmd = new MySqlCommand(SQL_PAY, conn, (MySqlTransaction)tx);
+
+                    //    cmd.Parameters.AddWithValue("@puid", Guid.NewGuid().ToString());
+                    //    cmd.Parameters.AddWithValue("@uid", saleUid);
+                    //    cmd.Parameters.AddWithValue("@mid", methodId.Value);
+
+                    //    cmd.Parameters.AddWithValue("@amt", p.Monto);
+                    //    cmd.Parameters.AddWithValue("@ccy", _selectedCurrency ?? "USD");
+                    //    cmd.Parameters.AddWithValue("@rate", 1m);
+                    //    cmd.Parameters.AddWithValue("@ref", (object?)p.Ref ?? DBNull.Value);
+                    //    //cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
+                    //    if (methodId == 3) // Business Account
+                    //    {
+                    //        bool canReceive =
+                    //            creditType == "PREPAID" && availableCredit > 0m; // o >= p.Monto / >= businessAmount
+
+                    //        if (canReceive)
+                    //        {
+                    //            businessWasReceived = true; // <-- aquí
+
+                    //            cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
+                    //            cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
+                    //            cmd.Parameters.AddWithValue("@rcvat", DateTime.Now);
+                    //        }
+                    //        else
+                    //        {
+                    //            cmd.Parameters.AddWithValue("@st", STATUS_PAY_PENDING);
+                    //            cmd.Parameters.AddWithValue("@rcvby", DBNull.Value);
+                    //            cmd.Parameters.AddWithValue("@rcvat", DBNull.Value);
+                    //        }
+                    //    }
+                    //    else
+                    //    {
+                    //        cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
+                    //        cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
+                    //        cmd.Parameters.AddWithValue("@rcvat", DateTime.Now);
+                    //    }
+
+
+                    //    await cmd.ExecuteNonQueryAsync();
+                    //}
 
                     // ====== UPDATE customer_credit (solo si hubo Business Account) ======
                     var businessAmount = _pagos

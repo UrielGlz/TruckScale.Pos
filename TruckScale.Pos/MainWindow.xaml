@@ -844,15 +844,29 @@
                                                 <UniformGrid Columns="2"/>
                                             </ItemsPanelTemplate>
                                         </ItemsControl.ItemsPanel>
+
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <Button Style="{StaticResource QuickAmountButton}"
-                                                        Content="{Binding}"
-                                                        Tag="{Binding}"
-                                                        Click="Denom_Click"/>
+                                                <Button Tag="{Binding Amount}"
+                    Content="{Binding Text}"
+                    IsEnabled="{Binding IsEnabled}"
+                    Click="Denom_Click">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button" BasedOn="{StaticResource QuickAmountButton}">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsSuggested}" Value="True">
+                                                                    <Setter Property="FontWeight" Value="SemiBold"/>
+                                                                    <Setter Property="Background" Value="{DynamicResource SecondaryHueMidBrush}"/>
+                                                                    <Setter Property="Foreground" Value="Black"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
+                                                </Button>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
+
                                 </StackPanel>
                             </md:Card>
 
