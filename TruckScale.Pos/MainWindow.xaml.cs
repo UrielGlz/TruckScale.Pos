@@ -812,6 +812,7 @@ namespace TruckScale.Pos
 
             return (long)cmd.LastInsertedId;
         }
+        
         private static async Task<long> SaveScaleDataOnConnection(string connStr, double eje1, double eje2, double eje3, double total, string rawLine, string uuid_weight, bool isPrimary)
         {
             const string SQL = @"INSERT INTO scale_session_axles (
@@ -944,18 +945,6 @@ namespace TruckScale.Pos
 
             if (WeightText != null) WeightText.Text = $"{value:0,0.0} {suffix}";
         }
-
-        //private void Zero_Click(object sender, RoutedEventArgs e)
-        //{
-        //    _sessionActive = false;
-        //    _axleCount = 0;
-        //    _sessionTotalLb = 0;
-        //    _currentAxles.Clear();
-        //    UpdateWeightText(0);
-        //    lblTemp.Content = "Waiting";
-        //    lblEstado.Content = "Scale ready.";
-        //    ResetDriverContext();
-        //}
 
         private void NewTransaction_Click(object sender, RoutedEventArgs e)
         {
@@ -1373,7 +1362,7 @@ namespace TruckScale.Pos
             RootDialog.IsOpen = true;
 
             // Si no hay productos cargados en el modal, evitamos nulls
-            // (tu lista _driverProducts ya existe y se usa abajo)
+            
             var desiredProductCode = _selectedProductCode ?? "";
             var desiredDp = _driverProducts.FirstOrDefault(x =>
                 string.Equals(x.Code, desiredProductCode, StringComparison.OrdinalIgnoreCase));
@@ -1412,7 +1401,7 @@ namespace TruckScale.Pos
                 ProductoRegText.SelectedItem = desiredDp;
 
             // Bloqueos en reweigh: NO cambiar producto / “caja” (Company/Account)
-            // (tu lista de campos permitidos: nombre, teléfono, licencia, trailer)
+            
             try
             {
                 ProductoRegText.IsEnabled = !isReweighPrefill;
@@ -2254,13 +2243,31 @@ namespace TruckScale.Pos
             var refTxt = "";
             try { refTxt = RefPanel.Visibility == Visibility.Visible ? (RefText?.Text ?? "") : ""; } catch { }
 
-            _pagos.Add(new PaymentEntry
+            var refKey = string.IsNullOrWhiteSpace(refTxt) ? null : refTxt.Trim();
+
+            // ✅ Buscar existente (agrupación por método + ref)
+            var existing = _pagos.FirstOrDefault(p =>
+                string.Equals(p.Code, methodCode, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals((p.Ref ?? "").Trim(), (refKey ?? "").Trim(), StringComparison.OrdinalIgnoreCase)
+            );
+
+            if (existing != null)
             {
-                Metodo = PaymentName(methodCode),
-                Code = methodCode,
-                Ref = string.IsNullOrWhiteSpace(refTxt) ? null : refTxt,
-                Monto = monto
-            });
+                existing.Monto += monto;
+
+                // Si PaymentEntry NO implementa INotifyPropertyChanged, fuerza refresh:
+                PagosList.Items.Refresh();
+            }
+            else
+            {
+                _pagos.Add(new PaymentEntry
+                {
+                    Metodo = PaymentName(methodCode),
+                    Code = methodCode,
+                    Ref = refKey,
+                    Monto = monto
+                });
+            }
 
             RefreshSummary();
         }
@@ -2421,10 +2428,6 @@ namespace TruckScale.Pos
                 return;
             }
 
-            // 👇 elimina estas dos líneas
-            // if (_isSimulated && _simSavedOnce)
-            //     return;
-
             // Snapshot listo para OK
             _snapAx1 = _ax1;
             _snapAx2 = _ax2;
@@ -2476,8 +2479,7 @@ namespace TruckScale.Pos
                 if (PagosEmpty != null)
                     PagosEmpty.Visibility = _pagos.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-                //BalanceCaption.Text = diff >= 0 ? "Change" : T("Payment.BalanceKpi");
-                //actualizar el estado del botón DONE
+                
                 UpdateDoneButtonState();
             }
             catch { }
@@ -2506,7 +2508,7 @@ namespace TruckScale.Pos
             }
             catch
             {
-                // No romper la app por temas de UI
+                
             }
         }
 
@@ -2565,6 +2567,7 @@ namespace TruckScale.Pos
                 lblEstado.Content = "Scale ready.";
             }
         }
+
         // ============================================================================
         // SYNC SERVICE INITIALIZATION
         // ============================================================================
@@ -2747,7 +2750,7 @@ namespace TruckScale.Pos
             }
             catch
             {
-                // No romper la app si falla UI
+                
             }
         }
         private void WarnAndLog(string kind, string userMessage, string? detail = null, string? raw = null)
