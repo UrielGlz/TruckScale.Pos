@@ -20,7 +20,7 @@ namespace TruckScale.Pos.Tickets
             using var generator = new QRCodeGenerator();
             using var data = generator.CreateQrCode(payload, QRCodeGenerator.ECCLevel.Q);
             using var qr = new QRCode(data);
-            using Bitmap bmp = qr.GetGraphic(20); // 20 = nivel de zoom
+            using Bitmap bmp = qr.GetGraphic(25); // 20 = nivel de zoom
 
             return BitmapToImageSource(bmp);
         }

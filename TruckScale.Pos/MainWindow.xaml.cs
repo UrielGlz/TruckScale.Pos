@@ -268,6 +268,7 @@ namespace TruckScale.Pos
         private int _cashMethodId = 0;
         private int _cardMethodId = 0;
 
+        private static readonly CultureInfo UsdCulture = CultureInfo.GetCultureInfo("en-US");
 
 
 
@@ -1006,11 +1007,11 @@ namespace TruckScale.Pos
             _palette.SetTheme(theme);
         }
 
-        private void ToggleTheme_Click(object sender, RoutedEventArgs e)
-        {
-            _dark = !_dark;
-            ApplyTheme();
-        }
+        //private void ToggleTheme_Click(object sender, RoutedEventArgs e)
+        //{
+        //    _dark = !_dark;
+        //    ApplyTheme();
+        //}
 
         // ===== Monitor de peso (label grande) =====
         private void UpdateWeightText(double lb)
@@ -2603,6 +2604,7 @@ namespace TruckScale.Pos
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
             TodayTxGrid.ItemsSource = _todayTx;
+            await EnsureCashSessionAsync();
 
             // === Config general (incluye impresora) ===
             // === Config general: conexiones de BD ===
@@ -4012,14 +4014,16 @@ namespace TruckScale.Pos
                         : await GetDefaultTerminalIdAsync(conn, (MySqlTransaction)tx);
 
                     int operatorId = GetCurrentOperatorId();
+                    
+                    await EnsureCashSessionExistsOnThisDbAsync(conn, (MySqlTransaction)tx, siteId, terminalId, operatorId);
 
                     // ========== INSERT EN sales ==========
                     const string SQL_SALE = @"INSERT INTO sales
-                  (sale_uid, site_id, terminal_id, operator_id,customer_id, sale_status_id, currency,
-                   subtotal, tax_total, total, reweigh_of_sale_id, created_at)
-                  VALUES
-                  (@uid, @site, @term, @op,@customer_id, @st, @ccy,
-                   @sub, @tax, @tot, @reweigh_of_sale_id, NOW());";
+                            (sale_uid, cash_session_uid, site_id, terminal_id, operator_id, customer_id,
+                             sale_status_id, currency, subtotal, tax_total, total, reweigh_of_sale_id, created_at)
+                        VALUES
+                            (@uid, @csuid, @site, @term, @op, @customer_id,
+                             @st, @ccy, @sub, @tax, @tot, @reweigh_of_sale_id, NOW());";
 
                     await using (var cmd = new MySqlCommand(SQL_SALE, conn, (MySqlTransaction)tx))
                     {
@@ -4047,6 +4051,11 @@ namespace TruckScale.Pos
 
                         cmd.Parameters.AddWithValue("@reweigh_of_sale_id",
                             (object?)reweighSourceUid ?? DBNull.Value);
+
+                        if (string.IsNullOrWhiteSpace(_currentCashSessionUid))
+                            throw new InvalidOperationException("No open cash session. Please open a cash session first.");
+
+                        cmd.Parameters.AddWithValue("@csuid", _currentCashSessionUid);
 
                         //cmd.Parameters.AddWithValue("@reweigh_of_sale_id",
                         //    (_selectedProductCode != null &&
@@ -4172,78 +4181,11 @@ namespace TruckScale.Pos
                         await cmd.ExecuteNonQueryAsync();
                     }
 
-
-                    //foreach (var p in _pagos)
-                    //{
-                    //    int? methodId = FindPaymentMethodIdByCode(p.Code);
-                    //    if (methodId == null)
-                    //        throw new InvalidOperationException($"Payment method '{p.Code}' not found/mapped.");
-
-                    //    bool isBusiness = string.Equals(p.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase) || methodId.Value == 3; // si quieres mantenerlo
-
-
-                    //    await using var cmd = new MySqlCommand(SQL_PAY, conn, (MySqlTransaction)tx);
-
-                    //    cmd.Parameters.AddWithValue("@puid", Guid.NewGuid().ToString());
-                    //    cmd.Parameters.AddWithValue("@uid", saleUid);
-                    //    cmd.Parameters.AddWithValue("@mid", methodId.Value);
-
-                    //    cmd.Parameters.AddWithValue("@amt", p.Monto);
-                    //    cmd.Parameters.AddWithValue("@ccy", _selectedCurrency ?? "USD");
-                    //    cmd.Parameters.AddWithValue("@rate", 1m);
-                    //    cmd.Parameters.AddWithValue("@ref", (object?)p.Ref ?? DBNull.Value);
-                    //    //cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
-                    //    if (methodId == 3) // Business Account
-                    //    {
-                    //        bool canReceive =
-                    //            creditType == "PREPAID" && availableCredit > 0m; // o >= p.Monto / >= businessAmount
-
-                    //        if (canReceive)
-                    //        {
-                    //            businessWasReceived = true; // <-- aquí
-
-                    //            cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
-                    //            cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
-                    //            cmd.Parameters.AddWithValue("@rcvat", DateTime.Now);
-                    //        }
-                    //        else
-                    //        {
-                    //            cmd.Parameters.AddWithValue("@st", STATUS_PAY_PENDING);
-                    //            cmd.Parameters.AddWithValue("@rcvby", DBNull.Value);
-                    //            cmd.Parameters.AddWithValue("@rcvat", DBNull.Value);
-                    //        }
-                    //    }
-                    //    else
-                    //    {
-                    //        cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
-                    //        cmd.Parameters.AddWithValue("@rcvby", GetCurrentOperatorId());
-                    //        cmd.Parameters.AddWithValue("@rcvat", DateTime.Now);
-                    //    }
-
-
-                    //    await cmd.ExecuteNonQueryAsync();
-                    //}
-
                     // ====== UPDATE customer_credit (solo si hubo Business Account) ======
                     var businessAmount = _pagos
                         .Where(p => string.Equals(p.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
                         .Sum(p => p.Monto);
-
-                    //if (businessAmount > 0m)
-                    //{
-                    //    //if (ClienteRegCombo?.SelectedItem is not TransportAccount acc || acc.IdCustomer <= 0)
-                    //    //    throw new InvalidOperationException("Business Account payment requires a selected customer.");
-
-                    //    //var creditType = string.IsNullOrWhiteSpace(acc.CreditType) ? "POSTPAID" : acc.CreditType!;
-
-                    //    await UpdateCustomerCreditAsync(
-                    //        conn,
-                    //        (MySqlTransaction)tx,
-                    //        acc.IdCustomer,
-                    //        businessAmount,
-                    //        creditType
-                    //    );
-                    //}
+                   
                     if (businessAmount > 0m)
                     {
                         if (acc == null || acc.IdCustomer <= 0)
@@ -4327,10 +4269,7 @@ namespace TruckScale.Pos
                     _lastTicketQrJson = BuildTicketQrPayload(
                         saleUid: saleUid,
                         ticketUid: ticketUid,
-                        ticketNumber: ticketNumber,
-                        total: total,
-                        currency: currency,
-                        date: DateTime.Now);
+                        ticketNumber: ticketNumber);
 
                     if (usedLocal)
                         AppendLog($"[SaveSale] Sale {saleUid} saved in LOCAL_DB (offline).");
@@ -4344,6 +4283,42 @@ namespace TruckScale.Pos
                     await tx.RollbackAsync();
                     throw;
                 }
+            }
+        }
+        private async Task EnsureCashSessionExistsOnThisDbAsync( MySqlConnection conn, MySqlTransaction tx,int siteId, int terminalId, int userId)
+        {
+            if (string.IsNullOrWhiteSpace(_currentCashSessionUid))
+                throw new InvalidOperationException("No open cash session in memory.");
+
+            // ¿ya existe en esta DB?
+            const string SQL_EXISTS = @"SELECT 1
+            FROM cash_sessions
+            WHERE session_uid = @uid
+            LIMIT 1;";
+
+            await using (var cmd = new MySqlCommand(SQL_EXISTS, conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@uid", _currentCashSessionUid);
+                var exists = await cmd.ExecuteScalarAsync();
+                if (exists != null) return;
+            }
+
+            // No existe: la creamos aquí (típicamente cuando caíste a LOCAL)
+            const string SQL_INS = @"INSERT INTO cash_sessions
+                        (session_uid, site_id, terminal_id, opened_by_user_id, opened_at, opening_cash, open_comment, is_open, created_at)
+                        VALUES
+                        (@uid, @site, @term, @by, @at, @cash, @cmt, 1, NOW());";
+
+            await using (var ins = new MySqlCommand(SQL_INS, conn, tx))
+            {
+                ins.Parameters.AddWithValue("@uid", _currentCashSessionUid);
+                ins.Parameters.AddWithValue("@site", siteId);
+                ins.Parameters.AddWithValue("@term", terminalId);
+                ins.Parameters.AddWithValue("@by", userId);
+                ins.Parameters.AddWithValue("@at", _cashSessionOpenedAt == default ? DateTime.Now : _cashSessionOpenedAt);
+                ins.Parameters.AddWithValue("@cash", _openingCash);
+                ins.Parameters.AddWithValue("@cmt", "Auto-created for offline continuity");
+                await ins.ExecuteNonQueryAsync();
             }
         }
 
@@ -5465,10 +5440,7 @@ namespace TruckScale.Pos
                 data.QrPayload = BuildTicketQrPayload(
                     saleUid: saleUid,
                     ticketUid: ticketUid,
-                    ticketNumber: data.TicketNumber,
-                    total: data.WeighFee,
-                    currency: currency,
-                    date: data.Date
+                    ticketNumber: data.TicketNumber                    
                 );
 
                 // Weigher = operador actual
@@ -5522,21 +5494,15 @@ namespace TruckScale.Pos
         private static string BuildTicketQrPayload(
             string saleUid,
             string? ticketUid,
-            string ticketNumber,
-            decimal total,
-            string currency,
-            DateTime date)
+            string ticketNumber)
         {
             var payload = new QrPayload
             {
                 Version = 1,
                 TicketUid = string.IsNullOrWhiteSpace(ticketUid) ? saleUid : ticketUid,
                 SaleUid = saleUid,
-                TicketNumber = ticketNumber,
-                Total = total,
-                Currency = currency,
-                DateTimeIso = date.ToString("yyyy-MM-ddTHH:mm:ss")
-            };
+                TicketNumber = ticketNumber
+            }; 
 
             var options = new JsonSerializerOptions
             {
@@ -7287,6 +7253,594 @@ namespace TruckScale.Pos
             return _reweighServiceReady;
         }
 
+        // =========================
+        // 1) Estado en memoria
+        // =========================
+        private string? _currentCashSessionUid;
+        private int _cashSessionOpenedByUserId;
+        private DateTime _cashSessionOpenedAt;
+        private decimal _openingCash;
+
+        private bool HasOpenSession => !string.IsNullOrWhiteSpace(_currentCashSessionUid);
+
+        // Helper: operador actual
+        private int CurrentUserId => PosSession.UserId;
+
+        private sealed class CashSessionRow
+        {
+            public string SessionUid { get; init; } = "";
+            public int OpenedByUserId { get; init; }
+            public DateTime OpenedAt { get; init; }
+            public decimal OpeningCash { get; init; }
+        }
+
+        private async Task EnsureCashSessionAsync()
+        {
+            // Limpia estado actual
+            _currentCashSessionUid = null;
+            _cashSessionOpenedByUserId = 0;
+            _cashSessionOpenedAt = default;
+            _openingCash = 0m;
+
+            // Asegura site/terminal
+            await EnsureSiteAndTerminalAsync();
+
+            // Busca sesión abierta
+            var open = await GetOpenCashSessionAsync(_siteId, _terminalId);
+
+            if (open == null)
+            {
+                // No hay caja abierta -> obligamos apertura
+                SetPosEnabled(false);
+                CashOpenHost.IsOpen = true;
+                OpeningCashTextBox.Focus();
+                OpeningCashTextBox.SelectAll();
+                return;
+            }
+
+            // Guardar estado en memoria (aunque sea de otro user)
+            _currentCashSessionUid = open.SessionUid;
+            _cashSessionOpenedByUserId = open.OpenedByUserId;
+            _cashSessionOpenedAt = open.OpenedAt;
+            _openingCash = open.OpeningCash;
+
+            if (open.OpenedByUserId != CurrentUserId)
+            {
+                // ==========================================================
+                // BLOQUEO POR USUARIO (regla actual):
+                // - Sí deja pasar el login
+                // - Pero NO permitimos operar POS si la caja abierta
+                //   fue creada por otro usuario.
+                // - Se muestra overlay con SOLO "Log off".
+                // ==========================================================
+                SetPosEnabled(false);
+
+                CashSessionBlockerMessage.Text =
+                    $"A cash session is already open by another user (user_id={open.OpenedByUserId}).\n\n" +
+                    $"Only that user can continue and close the session.\n\n" +
+                    $"Please log off and ask the correct user to sign in.";
+
+                CashSessionBlocker.Visibility = Visibility.Visible;
+                return;
+            }
+
+            // Sesión abierta y es del user actual
+            CashSessionBlocker.Visibility = Visibility.Collapsed;
+            SetPosEnabled(true);
+        }
+
+        private async Task EnsureSiteAndTerminalAsync()
+        {
+            // Si ya están, no hacemos nada
+            if (_siteId > 0 && _terminalId > 0) return;
+
+            // Abrimos conexión “mejor posible” (MAIN si puede, sino LOCAL)
+            var (conn, tx) = await OpenConnAndTxForReadAsync();
+            await using (conn)
+            await using (tx)
+            {
+                if (_siteId <= 0)
+                    _siteId = await GetDefaultSiteIdAsync(conn, tx);
+
+                if (_terminalId <= 0)
+                    _terminalId = await GetDefaultTerminalIdAsync(conn, tx);
+
+                await tx.CommitAsync();
+            }
+        }
+
+        private async Task<CashSessionRow?> GetOpenCashSessionAsync(int siteId, int terminalId)
+        {
+            const string SQL = @"
+SELECT session_uid, opened_by_user_id, opened_at, opening_cash
+FROM cash_sessions
+WHERE site_id = @site
+  AND terminal_id = @term
+  AND is_open = 1
+ORDER BY opened_at DESC
+LIMIT 1;";
+
+            var mainConn = GetPrimaryConn();                  // MAIN (online)
+            var localConn = ConfigManager.Current.LocalDbStrCon; // LOCAL (offline)
+
+            if (string.IsNullOrWhiteSpace(mainConn) && string.IsNullOrWhiteSpace(localConn))
+                throw new InvalidOperationException("No database connection configured (MAIN and LOCAL are empty).");
+
+            MySqlConnection? conn = null;
+            bool usedLocal = false;
+
+            try
+            {
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(mainConn))
+                        throw new InvalidOperationException("MAIN_DB connection string is empty.");
+
+                    conn = new MySqlConnection(mainConn);
+                    await conn.OpenAsync();
+                    AppendLog("[GetOpenCashSession] Using MAIN_DB.");
+                }
+                catch (Exception exMain)
+                {
+                    AppendLog($"[GetOpenCashSession] MAIN_DB failed: {exMain.Message}. Trying LOCAL_DB...");
+
+                    if (string.IsNullOrWhiteSpace(localConn))
+                        throw new InvalidOperationException("Failed to connect to MAIN_DB and LOCAL_DB is not configured.", exMain);
+
+                    conn = new MySqlConnection(localConn);
+                    await conn.OpenAsync();
+                    usedLocal = true;
+
+                    UpdateSyncStatusUI("⚠ Offline mode – using LOCAL_DB");
+                    AppendLog("[GetOpenCashSession] Using LOCAL_DB (offline mode).");
+                }
+
+                await using (conn)
+                await using (var cmd = new MySqlCommand(SQL, conn))
+                {
+                    cmd.Parameters.AddWithValue("@site", siteId);
+                    cmd.Parameters.AddWithValue("@term", terminalId);
+
+                    await using var rd = await cmd.ExecuteReaderAsync();
+
+                    if (!await rd.ReadAsync())
+                        return null;
+
+                    return new CashSessionRow
+                    {
+                        SessionUid = rd.GetGuid("session_uid").ToString(),
+                        OpenedByUserId = rd.GetInt32("opened_by_user_id"),
+                        OpenedAt = rd.GetDateTime("opened_at"),
+                        OpeningCash = rd.GetDecimal("opening_cash")
+                    };
+
+                }
+            }
+            catch (InvalidOperationException ex)
+            {
+                // este es el que te está pegando: "connection already in use"
+                AppendLog($"[GetOpenCashSession] InvalidOperationException: {ex.Message}");
+                AppendLog(ex.ToString());
+                throw;
+            }
+            catch (MySqlException ex)
+            {
+                AppendLog($"[GetOpenCashSession] MySqlException #{ex.Number}: {ex.Message}");
+                AppendLog(ex.ToString());
+                throw;
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[GetOpenCashSession] Unexpected: {ex.Message}");
+                AppendLog(ex.ToString());
+                throw;
+            }
+        }
+
+
+        // =========================
+        // 2) Modal: abrir caja
+        // =========================
+        private void OpenCashSessionCancel_Click(object sender, RoutedEventArgs e)
+        {
+            // Sin apertura, no hay POS: forzamos logoff
+            CashOpenHost.IsOpen = false;
+            Logout();
+        }
+
+        private async void OpenCashSessionConfirm_Click(object sender, RoutedEventArgs e)
+        {
+            if (!TryParseMoney(OpeningCashTextBox.Text, out var opening) || opening < 0m)
+            {
+                await ShowAlertAsync("Invalid amount", "Please enter a valid opening cash amount (e.g. 50.00).");
+                OpeningCashTextBox.Focus();
+                OpeningCashTextBox.SelectAll();
+                return;
+            }
+
+            var comment = (OpeningCommentTextBox.Text ?? "").Trim();
+            var newUid = Guid.NewGuid().ToString();
+
+            try
+            {
+                await CreateCashSessionAsync(
+                    cashSessionUid: newUid,
+                    siteId: _siteId,
+                    terminalId: _terminalId,
+                    openedBy: CurrentUserId,
+                    openingCash: opening,
+                    comment: comment
+                );
+
+                // Set estado en memoria
+                _currentCashSessionUid = newUid;
+                _cashSessionOpenedByUserId = CurrentUserId;
+                _cashSessionOpenedAt = DateTime.Now; // ok para UI; DB trae NOW()
+                _openingCash = opening;
+
+                CashOpenHost.IsOpen = false;
+                CashSessionBlocker.Visibility = Visibility.Collapsed;
+                SetPosEnabled(true);
+            }
+            catch (Exception ex)
+            {
+                await ShowAlertAsync("Open cash session failed", ex.Message);
+            }
+        }
+
+        private async Task CreateCashSessionAsync(
+            string cashSessionUid,
+            int siteId,
+            int terminalId,
+            int openedBy,
+            decimal openingCash,
+            string? comment)
+        {
+            const string SQL = @"
+                    INSERT INTO cash_sessions
+                    (session_uid, site_id, terminal_id, opened_by_user_id, opened_at,
+                     opening_cash, open_comment, is_open)
+                    VALUES
+                    (@uid, @site, @term, @by, NOW(),
+                     @cash, @cmt, 1);";
+
+            // Aquí “simple”: inserta donde esté disponible (MAIN o LOCAL)
+            // Si tú ya decidiste “dual write MAIN + LOCAL”, lo cambiamos en el siguiente paso.
+            var (conn, tx) = await OpenConnAndTxForWriteAsync();
+            await using (conn)
+            await using (tx)
+            {
+                await using var cmd = new MySqlCommand(SQL, conn, tx);
+                cmd.Parameters.AddWithValue("@uid", cashSessionUid);
+                cmd.Parameters.AddWithValue("@site", siteId);
+                cmd.Parameters.AddWithValue("@term", terminalId);
+                cmd.Parameters.AddWithValue("@by", openedBy);
+                cmd.Parameters.AddWithValue("@cash", openingCash);
+                cmd.Parameters.AddWithValue("@cmt", string.IsNullOrWhiteSpace(comment) ? (object)DBNull.Value : comment);
+
+                await cmd.ExecuteNonQueryAsync();
+                await tx.CommitAsync();
+            }
+        }
+
+        // =========================
+        // Enable/Block POS (simple)
+        // =========================
+        private void SetPosEnabled(bool enabled)
+        {
+            // Deshabilita lo “operable” del POS
+            MidCol.IsEnabled = enabled;
+            RightCol.IsEnabled = enabled;
+
+            // Si quieres: también bloquear New / Done directo
+            DoneButton.IsEnabled = enabled;
+            NewTransactionButton.IsEnabled = enabled;
+        }
+
+        // =========================
+        // Conn helpers (mínimos)
+        // =========================
+        private async Task<(MySqlConnection conn, MySqlTransaction tx)> OpenConnAndTxForReadAsync()
+        {
+            // Reusa tu patrón MAIN -> LOCAL
+            var mainConn = GetPrimaryConn();
+            var localConn = ConfigManager.Current.LocalDbStrCon;
+
+            MySqlConnection conn;
+            try
+            {
+                conn = new MySqlConnection(mainConn);
+                await conn.OpenAsync();
+            }
+            catch
+            {
+                conn = new MySqlConnection(localConn);
+                await conn.OpenAsync();
+            }
+
+            var tx = await conn.BeginTransactionAsync();
+            return (conn, (MySqlTransaction)tx);
+        }
+
+        private async Task<(MySqlConnection conn, MySqlTransaction tx)> OpenConnAndTxForWriteAsync()
+        {
+            // Igual que read por ahora.
+            // (Luego aquí metemos tu “dual insert MAIN+LOCAL”)
+            return await OpenConnAndTxForReadAsync();
+        }
+
+        // =========================
+        // Alert helper (usa tu AlertHost si ya lo tienes)
+        // =========================
+        private Task ShowAlertAsync(string title, string message)
+        {
+            AlertTitle.Text = title;
+            AlertMessage.Text = message;
+            AlertHost.IsOpen = true;
+
+            // Cierra con OK (si ya tienes handler, ok).
+            return Task.CompletedTask;
+        }
+
+        private static bool TryParseMoney(string? input, out decimal value)
+        {
+            value = 0m;
+            if (string.IsNullOrWhiteSpace(input)) return false;
+
+            // Permite "50", "50.00", "$50.00"
+            return decimal.TryParse(
+                input,
+                NumberStyles.Currency,
+                CultureInfo.CurrentCulture,
+                out value);
+        }
+
+        // =========================
+        // Logout
+        // =========================
+        private void Logout_Click(object sender, RoutedEventArgs e) => Logout();
+
+        private void Logout()
+        {
+            PosSession.UserId = 0;
+            PosSession.Username = "";
+            PosSession.FullName = "";
+            PosSession.RoleCode = "";
+
+            var login = new LoginWindow();
+            Application.Current.MainWindow = login;
+            login.Show();
+            Close();
+        }
+        
+        private void CloseCashButton_Click(object sender, RoutedEventArgs e)
+        {
+            CloseCashErrorText.Visibility = Visibility.Collapsed;
+            CloseCashAmountText.Text = "";
+            ClosingCashText.Text = "";
+            CloseCashHost.IsOpen = true;
+            CloseCashAmountText.Focus();
+        }
+
+        private void CloseCashCancel_Click(object sender, RoutedEventArgs e)
+        {
+            CloseCashHost.IsOpen = false;
+        }
+
+        private async void CloseCashConfirm_Click(object sender, RoutedEventArgs e)
+        {
+            CloseCashErrorText.Visibility = Visibility.Collapsed;
+
+            if (!TryParseUsd(CloseCashAmountText.Text, out var closing) || closing < 0)
+            {
+                CloseCashErrorText.Text = "Invalid closing cash amount.";
+                CloseCashErrorText.Visibility = Visibility.Visible;
+                return;
+            }
+
+
+            try
+            {
+                var comment = string.IsNullOrWhiteSpace(ClosingCashText.Text)
+                    ? null
+                    : ClosingCashText.Text.Trim();
+
+                await CloseCashSessionAsync(closing, comment); // tu método de BD
+                CloseCashHost.IsOpen = false;
+
+                Logout();
+            }
+            catch (Exception ex)
+            {
+                CloseCashErrorText.Text = ex.Message;
+                CloseCashErrorText.Visibility = Visibility.Visible;
+            }
+        }
+        private async Task CloseCashSessionAsync(decimal closingCash, string? comment)
+        {
+            var mainConn = GetPrimaryConn();
+            var localConn = ConfigManager.Current.LocalDbStrCon;
+
+            MySqlConnection conn;
+            bool usedLocal = false;
+
+            try
+            {
+                conn = new MySqlConnection(mainConn);
+                await conn.OpenAsync();
+                AppendLog("[CloseCash] Using MAIN_DB.");
+            }
+            catch (Exception exMain)
+            {
+                AppendLog($"[CloseCash] MAIN_DB failed: {exMain.Message}. Trying LOCAL_DB...");
+
+                conn = new MySqlConnection(localConn);
+                await conn.OpenAsync();
+                usedLocal = true;
+
+                await DatabaseHelper.UpdateQueueStatusAsync(localConn, QueueStatus.DIRTY);
+                UpdateSyncStatusUI("⚠ Offline mode – cash close stored locally");
+                AppendLog("[CloseCash] Using LOCAL_DB.");
+            }
+
+            await using (conn)
+            await using (var tx = await conn.BeginTransactionAsync())
+            {
+                // expected cash (sum de pagos cash RECEIVED en esta sesión)
+                const string SQL_EXPECTED = @"
+                    SELECT IFNULL(SUM(p.amount),0)
+                    FROM payments p
+                    JOIN payment_methods pm ON pm.method_id = p.method_id
+                    JOIN sales s ON s.sale_uid = p.sale_uid
+                    WHERE s.cash_session_uid = @csuid
+                      AND pm.code = 'cash'
+                      AND p.payment_status_id = @st;";
+
+                decimal expected;
+                await using (var cmd = new MySqlCommand(SQL_EXPECTED, conn, (MySqlTransaction)tx))
+                {
+                    cmd.Parameters.AddWithValue("@csuid", _currentCashSessionUid);
+                    cmd.Parameters.AddWithValue("@st", STATUS_PAY_RECEIVED);
+                    expected = Convert.ToDecimal(await cmd.ExecuteScalarAsync() ?? 0m);
+                }
+
+                var diff = closingCash - expected;
+
+                const string SQL_CLOSE = @"
+                    UPDATE cash_sessions
+                    SET is_open = 0,
+                        closed_by_user_id = @uid,
+                        closed_at = NOW(),
+                        closing_cash = @closing,
+                        expected_cash = @expected,
+                        diff_cash = @diff,
+                        diff_comment = @cmt,
+                        updated_at = NOW()
+                    WHERE session_uid = @csuid
+                      AND is_open = 1;";
+
+                await using (var up = new MySqlCommand(SQL_CLOSE, conn, (MySqlTransaction)tx))
+                {
+                    up.Parameters.AddWithValue("@uid", GetCurrentOperatorId());
+                    up.Parameters.AddWithValue("@closing", closingCash);
+                    up.Parameters.AddWithValue("@expected", expected);
+                    up.Parameters.AddWithValue("@diff", diff);
+                    up.Parameters.AddWithValue("@cmt", (object?)comment ?? DBNull.Value);
+                    up.Parameters.AddWithValue("@csuid", _currentCashSessionUid);
+
+                    var rows = await up.ExecuteNonQueryAsync();
+                    if (rows == 0)
+                        throw new InvalidOperationException("Cash session is not open or was already closed.");
+                }
+
+                await tx.CommitAsync();
+            }
+
+            AppendLog(usedLocal ? "[CloseCash] Closed in LOCAL_DB." : "[CloseCash] Closed in MAIN_DB.");
+        }
+        // Permite dinero con 2 decimales: 1234.56 (sin $ mientras editas)
+        private static bool IsValidMoneyRaw(string s)
+        {
+            // vacío permitido mientras escribe
+            if (string.IsNullOrWhiteSpace(s)) return true;
+
+            // Solo dígitos y opcional ".xx"
+            return Regex.IsMatch(s, @"^\d*(\.\d{0,2})?$");
+        }
+
+        private static string GetProposedText(TextBox tb, string newText)
+        {
+            // arma el texto como quedaría considerando selección/caret
+            var current = tb.Text ?? "";
+            var selStart = tb.SelectionStart;
+            var selLen = tb.SelectionLength;
+
+            var before = current.Substring(0, selStart);
+            var after = current.Substring(selStart + selLen);
+
+            return before + newText + after;
+        }
+
+        private void DecimalOnly_PreviewTextInput(object sender, TextCompositionEventArgs e)
+        {
+            if (sender is not TextBox tb) return;
+
+            // solo deja dígitos o punto
+            if (!Regex.IsMatch(e.Text, @"^[0-9.]$"))
+            {
+                e.Handled = true;
+                return;
+            }
+
+            // valida el texto resultante (máximo 2 decimales)
+            var proposed = GetProposedText(tb, e.Text);
+            if (!IsValidMoneyRaw(proposed))
+            {
+                e.Handled = true;
+                return;
+            }
+
+            e.Handled = false;
+        }
+
+
+        private void DecimalOnly_Pasting(object sender, DataObjectPastingEventArgs e)
+        {
+            if (sender is not TextBox tb) return;
+
+            if (!e.DataObject.GetDataPresent(typeof(string)))
+            {
+                e.CancelCommand();
+                return;
+            }
+
+            var text = ((string)e.DataObject.GetData(typeof(string))!).Trim();
+
+            // quita $ y comas si pegan "1,234.56" o "$1,234.56"
+            text = text.Replace("$", "").Replace(",", "");
+
+            var proposed = GetProposedText(tb, text);
+            if (!IsValidMoneyRaw(proposed))
+                e.CancelCommand();
+        }
+
+        private void Money_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+        {
+            if (sender is not TextBox tb) return;
+
+            // al entrar: mostrar número limpio (sin $ ni comas)
+            if (TryParseUsd(tb.Text, out var v))
+                tb.Text = v.ToString("0.00", UsdCulture);
+
+            tb.SelectAll();
+        }
+
+        private void Money_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+        {
+            if (sender is not TextBox tb) return;
+
+            // al salir: formatear a USD
+            if (TryParseUsd(tb.Text, out var v))
+                tb.Text = v.ToString("C2", UsdCulture);
+            else if (string.IsNullOrWhiteSpace(tb.Text))
+                tb.Text = ""; // déjalo vacío si está vacío
+        }
+
+        private static bool TryParseUsd(string? text, out decimal value)
+        {
+            value = 0m;
+            if (string.IsNullOrWhiteSpace(text)) return false;
+
+            // permite "$1,234.56" o "1234.56"
+            return decimal.TryParse(
+                text,
+                NumberStyles.Currency,
+                UsdCulture,
+                out value
+            );
+        }
 
     }
+
+
 }

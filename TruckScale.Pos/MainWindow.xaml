@@ -373,7 +373,11 @@
                         <Button Content="☰" Width="40" Height="32" Margin="0,0,8,0" Click="ToggleDrawer_Click"/>
                         <TextBlock Text="{DynamicResource App.Title}" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/>
                         <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
-                            <Button Content="{DynamicResource Theme.Toggle}" Click="ToggleTheme_Click" Margin="8,0"/>
+                            <!--<Button Content="{DynamicResource Theme.Toggle}" Click="ToggleTheme_Click" Margin="8,0"/>-->
+                            <Button x:Name="CloseCashButton" Content="Close cash" Margin="8,0,0,0" Click="CloseCashButton_Click" Style="{StaticResource MaterialDesignOutlinedButton}"/>
+
+                            <Button x:Name="LogoutButton" Content="Log off" Click="Logout_Click" Margin="8,0"/>
+
                         </StackPanel>
                     </DockPanel>
                 </md:ColorZone>
@@ -1559,6 +1563,7 @@
                     </md:DialogHost.DialogContent>
                 </md:DialogHost>
                 <!--DialogHost para pedir Void Reason (dropdown)-->
+               
                 <md:DialogHost x:Name="VoidReasonHost" Grid.RowSpan="99" Grid.ColumnSpan="99" Panel.ZIndex="130">
                     <md:DialogHost.DialogContent>
                         <Grid Width="460" HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -1605,6 +1610,165 @@
                     </md:DialogHost.DialogContent>
                 </md:DialogHost>
 
+                <!-- ================== CASH SESSION BLOCKER (cuando la caja es de otro user) ================== -->
+                <Grid x:Name="CashSessionBlocker" Grid.RowSpan="99" Grid.ColumnSpan="99" Panel.ZIndex="140"  Visibility="Collapsed" IsHitTestVisible="True">
+                    <Border Background="#AAFFFFFF">
+                        <md:Card Width="760" Padding="24" md:ElevationAssist.Elevation="Dp6" UniformCornerRadius="18" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                    <md:PackIcon Kind="LockAlert" Width="30" Height="30"
+                                 Foreground="{DynamicResource MaterialDesignValidationErrorBrush}"
+                                 Margin="0,0,10,0"/>
+                                    <TextBlock Text="Cash session already open"
+                               FontSize="22"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center"/>
+                                </StackPanel>
+
+                                <TextBlock x:Name="CashSessionBlockerMessage" TextWrapping="Wrap" Opacity=".85" Margin="0,0,0,18"/>
+
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Button Content="Log off" MinWidth="140" Height="44" Style="{StaticResource MaterialDesignRaisedButton}" Click="Logout_Click"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </md:Card>
+                    </Border>
+                </Grid>
+
+                <!-- ================== OPEN CASH SESSION MODAL ================== -->
+                <md:DialogHost x:Name="CashOpenHost" Grid.RowSpan="99" Grid.ColumnSpan="99" Panel.ZIndex="150">
+                    <md:DialogHost.DialogContent>
+                        <Grid Width="820" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <md:Card Padding="24" md:ElevationAssist.Elevation="Dp6" UniformCornerRadius="18">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Header -->
+                                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,16">
+                                        <md:PackIcon Kind="CashRegister" Width="30" Height="30"
+                                     Foreground="{DynamicResource PrimaryHueMidBrush}"
+                                     Margin="0,0,10,0"/>
+                                        <StackPanel>
+                                            <TextBlock Text="Open cash session"
+                                       FontSize="22"
+                                       FontWeight="SemiBold"/>
+                                            <TextBlock Text="Enter the opening cash amount to start the shift."
+                                       Opacity=".65"
+                                       Margin="0,2,0,0"/>
+                                        </StackPanel>
+                                    </StackPanel>
+
+                                    <!-- Opening cash -->
+                                    <StackPanel Grid.Row="1" Margin="0,0,0,12">
+                                        <TextBlock Text="Opening cash (USD)" Opacity=".7" Margin="0,0,0,6"/>
+                                        <TextBox x:Name="OpeningCashTextBox"
+                                             FontSize="18"
+                                             Height="52"
+                                             md:HintAssist.Hint="0.00"
+                                             md:TextFieldAssist.DecorationVisibility="Hidden"
+                                             Style="{StaticResource MaterialDesignOutlinedTextBox}"
+                                             PreviewTextInput="DecimalOnly_PreviewTextInput"
+                                             DataObject.Pasting="DecimalOnly_Pasting"
+                                             GotKeyboardFocus="Money_GotKeyboardFocus"
+                                             LostKeyboardFocus="Money_LostKeyboardFocus"/>
+
+                                    </StackPanel>
+
+                                    <!-- Comment optional -->
+                                    <StackPanel Grid.Row="2" Margin="0,0,0,16">
+                                        <TextBlock Text="Comment (optional)" Opacity=".7" Margin="0,0,0,6"/>
+                                        <TextBox x:Name="OpeningCommentTextBox"
+                                 Height="80"
+                                 TextWrapping="Wrap"
+                                 AcceptsReturn="True"
+                                 md:TextFieldAssist.DecorationVisibility="Hidden"
+                                 Style="{StaticResource MaterialDesignOutlinedTextBox}"/>
+                                    </StackPanel>
+
+                                    <!-- Buttons -->
+                                    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <Button Content="Cancel"
+                                Style="{StaticResource MaterialDesignOutlinedButton}"
+                                Height="44"
+                                MinWidth="120"
+                                Margin="0,0,10,0"
+                                Click="OpenCashSessionCancel_Click"/>
+                                        <Button Content="Open"
+                                Style="{StaticResource MaterialDesignRaisedButton}"
+                                Height="44"
+                                MinWidth="120"
+                                Click="OpenCashSessionConfirm_Click"/>
+                                    </StackPanel>
+                                </Grid>
+                            </md:Card>
+                        </Grid>
+                    </md:DialogHost.DialogContent>
+                </md:DialogHost>
+
+                <!-- ===== SEGUNDO DialogHost (Close Cash) ===== -->
+                <md:DialogHost x:Name="CloseCashHost" CloseOnClickAway="False" Grid.Row="0"  Grid.Column="0" Grid.RowSpan="99" Grid.ColumnSpan="99">
+
+                    <!-- ===== MODAL: Close Cash ===== -->
+                    <md:DialogHost.DialogContent>
+                        <md:Card Width="640" Padding="24" HorizontalAlignment="Center"  VerticalAlignment="Center">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Text="Close Cash Session"
+                           FontSize="20"
+                           FontWeight="SemiBold"
+                           Margin="0,0,0,16"/>
+
+                                <!-- Error -->
+                                <TextBlock x:Name="CloseCashErrorText"
+                           Grid.Row="1"
+                           Foreground="{DynamicResource MaterialDesignValidationErrorBrush}"
+                           Visibility="Collapsed"
+                           TextWrapping="Wrap"
+                           Margin="0,0,0,10"/>
+
+                                <!-- Closing cash -->
+                                <StackPanel Grid.Row="2" Margin="0,0,0,12">
+                                    <TextBlock Text="Closing cash" Opacity="0.7" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="CloseCashAmountText"
+                                         MinHeight="40"
+                                         PreviewTextInput="DecimalOnly_PreviewTextInput"
+                                         DataObject.Pasting="DecimalOnly_Pasting"
+                                         GotKeyboardFocus="Money_GotKeyboardFocus"
+                                         LostKeyboardFocus="Money_LostKeyboardFocus"/>
+
+                                </StackPanel>
+
+                                <!-- Comment -->
+                                <StackPanel Grid.Row="3" Margin="0,0,0,16">
+                                    <TextBlock Text="Comment (optional)" Opacity="0.7" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="ClosingCashText"
+                             MinHeight="80"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"/>
+                                </StackPanel>
+
+                                <!-- Buttons -->
+                                <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Button Content="Cancel" Margin="0,0,8,0" Click="CloseCashCancel_Click"/>
+                                    <Button Content="Close session" Click="CloseCashConfirm_Click"/>
+                                </StackPanel>
+
+                            </Grid>
+                        </md:Card>
+                    </md:DialogHost.DialogContent>
+                </md:DialogHost>
             </Grid>
 
         </md:DrawerHost>
@@ -1884,9 +2048,11 @@
                     </Border>
                 </Grid>
             </md:Card>
+            
         </md:DialogHost.DialogContent>
-
-
+        
+        
+            
 
 
     </md:DialogHost>
