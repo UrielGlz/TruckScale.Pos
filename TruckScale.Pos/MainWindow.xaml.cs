@@ -6472,9 +6472,14 @@ namespace TruckScale.Pos
 
             if (ct == "POSTPAID")
             {
+                //const string SQL = @"UPDATE customer_credit
+                //                    SET current_balance  = current_balance + @amt,
+                //                        available_credit = credit_limit - (current_balance + @amt),
+                //                        updated_at       = CURRENT_TIMESTAMP
+                //                    WHERE customer_id = @cid;";
                 const string SQL = @"UPDATE customer_credit
                                     SET current_balance  = current_balance + @amt,
-                                        available_credit = credit_limit - (current_balance + @amt),
+                                        available_credit = credit_limit - current_balance,
                                         updated_at       = CURRENT_TIMESTAMP
                                     WHERE customer_id = @cid;";
 
