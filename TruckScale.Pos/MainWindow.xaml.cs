@@ -1041,8 +1041,20 @@ namespace TruckScale.Pos
 
         private void ResetDriverContext()
         {
-            _reweighServiceReady = false;
+            // Sin método seleccionado al inicio
+            SelectPaymentByCode(null);
+
+            // Por default: sin cliente válido, ocultar Business
             UpdatePaymentMethodsVisibility(canUseBusinessAccount: false);
+
+            try { RootDialog.IsOpen = false; } catch { }
+            try { SaleCompletedHost.IsOpen = false; } catch { }
+            try { ReweighHost.IsOpen = false; } catch { }
+
+
+            _reweighServiceReady = false;
+     
+            lblModalName.Text = "Find Driver";
 
 
             // 1) Estado de chofer y toggles
@@ -1095,17 +1107,14 @@ namespace TruckScale.Pos
             _driverPhoneDigits = "";
 
             try { RootDialog.IsOpen = false; } catch { }
-            // Restaurar texto del botón a "Register driver" para la siguiente transacción
-            try { RegisterDriverButton.Content = "Register driver"; } catch { }
+            // Restaurar texto del botón a "Find driver" para la siguiente transacción
+            try { RegisterDriverButton.Content = "Find Driver"; } catch { }
 
             //try { ProductoRegCombo.SelectedIndex = -1; } catch { }
             try { ProductoRegText.SelectedIndex = -1; } catch { }
 
 
             try { DriverPhoneText.Text = ""; } catch { }
-
-
-
 
             // 3) Totales y producto seleccionado
             _ventaTotal = 0m;
@@ -1130,7 +1139,7 @@ namespace TruckScale.Pos
 
             // Ningún método de pago seleccionado hasta que el operador elija uno
             _selectedPaymentId = "";
-            SelectPaymentByCode(null);
+           
 
             _keypadBuffer = "";
 
@@ -3820,6 +3829,13 @@ namespace TruckScale.Pos
                 UpdateSuggestedPayButton(); // por si acaso
                 return;
             }
+            if (code == null)
+            {
+                _selectedPaymentId = "";
+                SetDenominationsEnabled(false);
+                UpdateSuggestedPayButton(); // por si acaso
+            
+            }
 
             _selectedPaymentId = sel.Code;
 
@@ -4535,6 +4551,12 @@ namespace TruckScale.Pos
         }
         private async void OkButton_Click(object sender, RoutedEventArgs e)
         {
+            // Sin método seleccionado al inicio
+            SelectPaymentByCode(null);
+
+            // Por default: sin cliente válido, ocultar Business
+            UpdatePaymentMethodsVisibility(canUseBusinessAccount: false);
+
             // Si está en modo WAIT, no hace nada
             if (!_canAccept)
             {
