@@ -294,12 +294,22 @@ namespace TruckScale.Pos.Sync
                 await using var rd = await cmd.ExecuteReaderAsync();
                 while (await rd.ReadAsync())
                 {
-                    var row = new Dictionary<string, object?>();
+                    var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
                     for (int i = 0; i < rd.FieldCount; i++)
                     {
+
                         var colName = rd.GetName(i);
-                        // Excluir campos de sync (no existen en MAIN_DB)
-                        if (colName is "synced" or "synced_at" or "sync_attempts" or "last_sync_error")
+                        //// Excluir campos de sync (no existen en MAIN_DB)
+                        //if (colName is "synced" or "synced_at" or "sync_attempts" or "last_sync_error")
+                        //    continue;
+
+                        
+                        //if (tableName == "sale_driver_info" && colName.Equals("id_driver_info", StringComparison.OrdinalIgnoreCase))
+                        //    continue;
+
+                        //if (tableName == "sale_lines" && colName.Equals("line_id", StringComparison.OrdinalIgnoreCase))
+                        //    continue;
+                        if (ShouldSkipAutoId(tableName, colName))
                             continue;
 
                         row[colName] = rd.IsDBNull(i) ? null : rd.GetValue(i);
@@ -431,8 +441,9 @@ namespace TruckScale.Pos.Sync
 
                 // 2) Tablas transaccionales (usamos UIDs)
                 total += await PullTableUpsertAsync(mainConn, localConn, "sales", "sale_uid", lastTs);
-                total += await PullTableUpsertAsync(mainConn, localConn, "sale_driver_info", "id_driver_info", lastTs);
-                total += await PullTableUpsertAsync(mainConn, localConn, "sale_lines", "line_id", lastTs);
+                total += await PullTableUpsertAsync(mainConn, localConn, "sale_driver_info", "sale_uid", lastTs);
+
+                total += await PullTableUpsertAsync(mainConn, localConn, "sale_lines", "sale_uid", lastTs);
 
 
 
@@ -440,7 +451,8 @@ namespace TruckScale.Pos.Sync
                 total += await PullTableUpsertAsync(mainConn, localConn, "scale_session_axles", "uuid_weight", lastTs);
                 total += await PullTableUpsertAsync(mainConn, localConn, "sync_logs", "log_uid", lastTs);
                 // IMPORTANTE: payments → full upsert (sin depender de updated_at / last_pull_ts)
-                total += await PullTableUpsertAsync(mainConn, localConn, "payments", "payment_uid", null);
+                //total += await PullTableUpsertAsync(mainConn, localConn, "payments", "payment_uid", null);
+                total += await PullPaymentsWithParentsAsync(mainConn, localConn, lastTs);
                 total += await PullTableUpsertAsync(mainConn, localConn, "number_sequences", "sequence_id", lastTs);
 
 
@@ -465,6 +477,179 @@ namespace TruckScale.Pos.Sync
         // ========================================================================
         // HELPERS
         // ========================================================================
+        private async Task<int> PullPaymentsWithParentsAsync(
+    MySqlConnection mainConn,
+    MySqlConnection localConn,
+    DateTime? lastTs)
+        {
+            // 0) Leer payments de MAIN (incremental si hay lastTs; full si no hay)
+            var paymentRows = new List<Dictionary<string, object?>>();
+
+            var syncColsPayments = await GetLocalSyncColumnsAsync(localConn, "payments");
+            var where = lastTs.HasValue ? "WHERE COALESCE(updated_at, created_at) > @ts" : "";
+            var sqlSelectPayments = $"SELECT * FROM payments {where};";
+
+            await using (var cmd = new MySqlCommand(sqlSelectPayments, mainConn))
+            {
+                if (lastTs.HasValue)
+                    cmd.Parameters.AddWithValue("@ts", lastTs.Value);
+
+                await using var rd = await cmd.ExecuteReaderAsync();
+                while (await rd.ReadAsync())
+                {
+                    var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+                    for (int i = 0; i < rd.FieldCount; i++)
+                    {
+                        var col = rd.GetName(i);
+
+                        // NO copiar auto IDs (payments.payment_id)
+                        if (ShouldSkipAutoId("payments", col))
+                            continue;
+
+                        row[col] = rd.IsDBNull(i) ? null : rd.GetValue(i);
+                    }
+
+                    // marcar como ya sincronizado en LOCAL si existen esas columnas
+                    if (syncColsPayments.Contains("synced") && !row.ContainsKey("synced"))
+                        row["synced"] = 1;
+                    if (syncColsPayments.Contains("synced_at") && !row.ContainsKey("synced_at"))
+                        row["synced_at"] = DateTime.UtcNow;
+                    if (syncColsPayments.Contains("sync_attempts") && !row.ContainsKey("sync_attempts"))
+                        row["sync_attempts"] = 0;
+                    if (syncColsPayments.Contains("last_sync_error") && !row.ContainsKey("last_sync_error"))
+                        row["last_sync_error"] = null;
+
+                    paymentRows.Add(row);
+                }
+            }
+
+            if (paymentRows.Count == 0)
+                return 0;
+
+            // 1) Asegurar parents: sales para todos los sale_uid de esos payments
+            var saleUids = paymentRows
+                .Select(r => r.TryGetValue("sale_uid", out var v) ? v?.ToString() : null)
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (saleUids.Count > 0)
+                await EnsureSalesExistAsync(mainConn, localConn, saleUids);
+
+            // 2) Upsert payments en LOCAL
+            await UpsertRowsAsync(localConn, "payments", "payment_uid", paymentRows);
+
+            return paymentRows.Count;
+        }
+
+        private async Task EnsureSalesExistAsync(
+            MySqlConnection mainConn,
+            MySqlConnection localConn,
+            List<string> saleUids)
+        {
+            // A) detectar cuáles faltan en LOCAL.sales
+            var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var batch in saleUids.Chunk(500))
+            {
+                var placeholders = string.Join(",", batch.Select((_, i) => $"@p{i}"));
+                var sql = $"SELECT sale_uid FROM sales WHERE sale_uid IN ({placeholders});";
+
+                await using var cmd = new MySqlCommand(sql, localConn);
+                for (int i = 0; i < batch.Length; i++)
+                    cmd.Parameters.AddWithValue($"@p{i}", batch[i]);
+
+                await using var rd = await cmd.ExecuteReaderAsync();
+                while (await rd.ReadAsync())
+                {
+                    var raw = rd.GetValue(0);          // puede ser Guid o string
+                    var uid = raw?.ToString();         // siempre string
+                    if (!string.IsNullOrWhiteSpace(uid))
+                        existing.Add(uid);
+                }
+            }
+
+            var missing = saleUids.Where(u => !existing.Contains(u)).ToList();
+            if (missing.Count == 0)
+                return;
+
+            //AppendLog($"[Sync] Missing parent sales in LOCAL: {missing.Count}. Pulling from MAIN...");
+
+            // B) traer esas sales desde MAIN y upsert en LOCAL
+            var saleRows = new List<Dictionary<string, object?>>();
+            var syncColsSales = await GetLocalSyncColumnsAsync(localConn, "sales");
+
+            foreach (var batch in missing.Chunk(300))
+            {
+                var placeholders = string.Join(",", batch.Select((_, i) => $"@s{i}"));
+                var sql = $"SELECT * FROM sales WHERE sale_uid IN ({placeholders});";
+
+                await using var cmd = new MySqlCommand(sql, mainConn);
+                for (int i = 0; i < batch.Length; i++)
+                    cmd.Parameters.AddWithValue($"@s{i}", batch[i]);
+
+                await using var rd = await cmd.ExecuteReaderAsync();
+                while (await rd.ReadAsync())
+                {
+                    var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                    for (int i = 0; i < rd.FieldCount; i++)
+                    {
+                        var col = rd.GetName(i);
+
+                        // 👇 CLAVE: NO copiar auto IDs (payments.payment_id)
+                        if (ShouldSkipAutoId("payments", col))
+                            continue;
+
+                        row[col] = rd.IsDBNull(i) ? null : rd.GetValue(i);
+                    }
+
+                    if (syncColsSales.Contains("synced") && !row.ContainsKey("synced"))
+                        row["synced"] = 1;
+                    if (syncColsSales.Contains("synced_at") && !row.ContainsKey("synced_at"))
+                        row["synced_at"] = DateTime.UtcNow;
+                    if (syncColsSales.Contains("sync_attempts") && !row.ContainsKey("sync_attempts"))
+                        row["sync_attempts"] = 0;
+                    if (syncColsSales.Contains("last_sync_error") && !row.ContainsKey("last_sync_error"))
+                        row["last_sync_error"] = null;
+
+                    saleRows.Add(row);
+                }
+            }
+
+            if (saleRows.Count > 0)
+                await UpsertRowsAsync(localConn, "sales", "sale_uid", saleRows);
+        }
+
+        private async Task UpsertRowsAsync(
+            MySqlConnection localConn,
+            string tableName,
+            string pkColumn,
+            List<Dictionary<string, object?>> rows)
+        {
+            foreach (var row in rows)
+            {
+                var columns = string.Join(", ", row.Keys.Select(k => $"`{k}`"));
+                var values = string.Join(", ", row.Keys.Select(k => $"@{k}"));
+
+                var updateSet = string.Join(", ",
+                    row.Keys
+                       .Where(k => !string.Equals(k, pkColumn, StringComparison.OrdinalIgnoreCase))
+                       .Select(k => $"`{k}` = VALUES(`{k}`)")
+                );
+
+                var sqlUpsert =
+                    $@"INSERT INTO {tableName} ({columns})
+               VALUES ({values})
+               ON DUPLICATE KEY UPDATE {updateSet};";
+
+                await using var cmd = new MySqlCommand(sqlUpsert, localConn);
+                foreach (var kvp in row)
+                    cmd.Parameters.AddWithValue($"@{kvp.Key}", kvp.Value ?? DBNull.Value);
+
+                await cmd.ExecuteNonQueryAsync();
+            }
+        }
 
         /// <summary>
         /// Lee filas de MAIN_DB y hace UPSERT en LOCAL_DB:
@@ -473,11 +658,11 @@ namespace TruckScale.Pos.Sync
         /// Si lastTs tiene valor → solo updated_at > lastTs.
         /// </summary>
         private async Task<int> PullTableUpsertAsync(
-    MySqlConnection mainConn,
-    MySqlConnection localConn,
-    string tableName,
-    string pkColumn,
-    DateTime? lastTs)
+            MySqlConnection mainConn,
+            MySqlConnection localConn,
+            string tableName,
+            string pkColumn,
+            DateTime? lastTs)
         {
             var rows = new List<Dictionary<string, object?>>();
 
@@ -496,26 +681,31 @@ namespace TruckScale.Pos.Sync
                 await using var rd = await cmd.ExecuteReaderAsync();
                 while (await rd.ReadAsync())
                 {
-                    var row = new Dictionary<string, object?>();
+                    var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
                     for (int i = 0; i < rd.FieldCount; i++)
                     {
                         var colName = rd.GetName(i);
+
+                        if (ShouldSkipAutoId(tableName, colName))
+                            continue;
+
                         row[colName] = rd.IsDBNull(i) ? null : rd.GetValue(i);
                     }
 
-                    // 🔹 Muy importante: si la tabla LOCAL tiene columnas de sync,
+                    //Muy importante: si la tabla LOCAL tiene columnas de sync,
                     // marcamos estos registros como "ya sincronizados"
-                    if (syncCols.Contains("synced") && !row.ContainsKey("synced"))
-                        row["synced"] = 1;
+                    //if (syncCols.Contains("synced") && !row.ContainsKey("synced"))
+                    //    row["synced"] = 1;
 
-                    if (syncCols.Contains("synced_at") && !row.ContainsKey("synced_at"))
-                        row["synced_at"] = DateTime.UtcNow;
+                    //if (syncCols.Contains("synced_at") && !row.ContainsKey("synced_at"))
+                    //    row["synced_at"] = DateTime.UtcNow;
 
-                    if (syncCols.Contains("sync_attempts") && !row.ContainsKey("sync_attempts"))
-                        row["sync_attempts"] = 0;
+                    //if (syncCols.Contains("sync_attempts") && !row.ContainsKey("sync_attempts"))
+                    //    row["sync_attempts"] = 0;
 
-                    if (syncCols.Contains("last_sync_error") && !row.ContainsKey("last_sync_error"))
-                        row["last_sync_error"] = null;
+                    //if (syncCols.Contains("last_sync_error") && !row.ContainsKey("last_sync_error"))
+                    //    row["last_sync_error"] = null;
+
 
                     rows.Add(row);
                 }
@@ -529,12 +719,35 @@ namespace TruckScale.Pos.Sync
             {
                 var columns = string.Join(", ", row.Keys.Select(k => $"`{k}`"));
                 var values = string.Join(", ", row.Keys.Select(k => $"@{k}"));
+                //0222.UG
+                var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                // SIEMPRE excluir PK
+                skip.Add(pkColumn);
+
+                // tablas especiales (además del PK)
+                if (tableName == "sale_driver_info")
+                {
+                    skip.Add("sale_uid");        // UNIQUE key (no lo muevas)
+                    skip.Add("id_driver_info");  // por si llega en el row
+                }
+
+                if (tableName == "sale_lines")
+                {
+                    skip.Add("sale_uid");        // parte de UNIQUE
+                    skip.Add("seq");             // parte de UNIQUE
+                    skip.Add("line_id");         // por si llega en el row
+                }
 
                 var updateSet = string.Join(", ",
                     row.Keys
-                       .Where(k => !string.Equals(k, pkColumn, StringComparison.OrdinalIgnoreCase))
+                       .Where(k => !skip.Contains(k))
                        .Select(k => $"`{k}` = VALUES(`{k}`)")
                 );
+
+                if (string.IsNullOrWhiteSpace(updateSet))
+                    updateSet = $"`{pkColumn}` = `{pkColumn}`"; // no-op (evita SQL inválido)
+                                                                // 
 
                 var sqlUpsert = $@"INSERT INTO {tableName} ({columns}) VALUES ({values}) ON DUPLICATE KEY UPDATE {updateSet};";
 
@@ -548,7 +761,16 @@ namespace TruckScale.Pos.Sync
 
             return rows.Count;
         }
+        private static bool ShouldSkipAutoId(string tableName, string colName)
+        {
+            tableName = tableName?.ToLowerInvariant() ?? "";
+            colName = colName?.ToLowerInvariant() ?? "";
 
+            return (tableName == "sales" && colName == "sale_id")
+                || (tableName == "payments" && colName == "payment_id")
+                || (tableName == "sale_lines" && colName == "line_id")
+                || (tableName == "sale_driver_info" && colName == "id_driver_info");
+        }
 
 
         private async Task<int> CountPendingAsync(MySqlConnection conn, string tableName)

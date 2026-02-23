@@ -3348,125 +3348,70 @@ namespace TruckScale.Pos
         /// </summary>
         private async Task<DriverInfo?> GetDriverByWeightUuidAsync(string uuid)
         {
-            // SQL actualizado: agregamos driver_phone y account_number
             const string SQL = @"SELECT
-            sdi.id_driver_info,
-            sdi.driver_first_name,
-            sdi.driver_last_name,
-            sdi.driver_phone,
-            sdi.account_number,
-            sdi.account_name,
-            sdi.account_address,
-            sdi.account_country,
-            sdi.account_state,
-            sdi.driver_product_id,
-            dp.name AS product_description,
-            sdi.license_number,
-            sdi.license_state,
-            sdi.vehicle_plates,
-            sdi.trailer_number,
-            sdi.tractor_number
-        FROM sale_driver_info sdi
-        LEFT JOIN driver_products dp
-            ON dp.product_id = sdi.driver_product_id
-        WHERE sdi.identify_by = 'weight_uuid'
-          AND sdi.match_key   = @uuid
-        ORDER BY sdi.id_driver_info DESC
-        LIMIT 1;";
+                sdi.id_driver_info,
+                sdi.driver_first_name,
+                sdi.driver_last_name,
+                sdi.driver_phone,
+                sdi.account_number,
+                sdi.account_name,
+                sdi.account_address,
+                sdi.account_country,
+                sdi.account_state,
+                sdi.driver_product_id,
+                dp.name AS product_description,
+                sdi.license_number,
+                sdi.license_state,
+                sdi.vehicle_plates,
+                sdi.trailer_number,
+                sdi.tractor_number
+            FROM sale_driver_info sdi
+            LEFT JOIN driver_products dp
+                ON dp.product_id = sdi.driver_product_id
+            WHERE sdi.identify_by = 'weight_uuid'
+              AND sdi.match_key   = @uuid
+            ORDER BY sdi.id_driver_info DESC
+            LIMIT 1;";
 
-            // Helper: ejecuta el SELECT en la conexión indicada
-            async Task<DriverInfo?> TryOneAsync(string connStr)
+            bool usedLocal = false;
+
+            // Abre MAIN, si falla => LOCAL (tu regla estándar)
+            await using var conn = await OpenMainThenLocalAsync("DriverByWeightUuid", ul => usedLocal = ul);
+
+            AppendLog(usedLocal
+                ? "[Driver] Looking up driver by weight_uuid in LOCAL DB…"
+                : "[Driver] Looking up driver by weight_uuid in MAIN DB…");
+
+            await using var cmd = new MySqlCommand(SQL, conn);
+            cmd.Parameters.AddWithValue("@uuid", uuid);
+
+            await using var rd = await cmd.ExecuteReaderAsync();
+            if (!await rd.ReadAsync())
+                return null;
+
+            return new DriverInfo
             {
-                if (string.IsNullOrWhiteSpace(connStr))
-                    return null;
+                Id = rd.GetInt64("id_driver_info"),
+                First = rd.GetString("driver_first_name"),
+                Last = rd.GetString("driver_last_name"),
+                PhoneDigits = rd.IsDBNull("driver_phone") ? "" : rd.GetString("driver_phone"),
 
-                await using var conn = new MySqlConnection(connStr);
-                await conn.OpenAsync();
+                AccountNumber = rd.IsDBNull("account_number") ? "" : rd.GetString("account_number"),
+                AccountName = rd.IsDBNull("account_name") ? "" : rd.GetString("account_name"),
+                AccountAddress = rd.IsDBNull("account_address") ? "" : rd.GetString("account_address"),
+                AccountCountry = rd.IsDBNull("account_country") ? "" : rd.GetString("account_country"),
+                AccountState = rd.IsDBNull("account_state") ? "" : rd.GetString("account_state"),
 
-                await using var cmd = new MySqlCommand(SQL, conn);
-                cmd.Parameters.AddWithValue("@uuid", uuid);
+                DriverProductId = rd.IsDBNull("driver_product_id") ? (int?)null : rd.GetInt32("driver_product_id"),
 
-                await using var rd = await cmd.ExecuteReaderAsync();
-                if (!await rd.ReadAsync())
-                    return null; // conexión OK pero no se encontró registro
+                ProductDescription = rd.IsDBNull("product_description") ? "" : rd.GetString("product_description"),
 
-                // Mapeo actualizado: incluye PhoneDigits y AccountNumber
-                return new DriverInfo
-                {
-                    Id = rd.GetInt64("id_driver_info"),
-                    First = rd.GetString("driver_first_name"),
-                    Last = rd.GetString("driver_last_name"),
-                    PhoneDigits = rd.IsDBNull("driver_phone") ? "" : rd.GetString("driver_phone"),
-
-                    AccountNumber = rd.IsDBNull("account_number") ? "" : rd.GetString("account_number"),
-                    AccountName = rd.IsDBNull("account_name") ? "" : rd.GetString("account_name"),
-                    AccountAddress = rd.IsDBNull("account_address") ? "" : rd.GetString("account_address"),
-                    AccountCountry = rd.IsDBNull("account_country") ? "" : rd.GetString("account_country"),
-                    AccountState = rd.IsDBNull("account_state") ? "" : rd.GetString("account_state"),
-
-                    DriverProductId = rd.IsDBNull("driver_product_id")
-                        ? (int?)null
-                        : rd.GetInt32("driver_product_id"),
-
-                    ProductDescription = rd.IsDBNull("product_description")
-                        ? ""
-                        : rd.GetString("product_description"),
-
-                    License = rd.IsDBNull("license_number") ? "" : rd.GetString("license_number"),
-                    LicenseStateCode = rd.IsDBNull("license_state") ? "" : rd.GetString("license_state"),
-                    Plates = rd.IsDBNull("vehicle_plates") ? "" : rd.GetString("vehicle_plates"),
-                    TrailerNumber = rd.IsDBNull("trailer_number") ? "" : rd.GetString("trailer_number"),
-                    TractorNumber = rd.IsDBNull("tractor_number") ? "" : rd.GetString("tractor_number"),
-                };
-            }
-
-            // Leemos las cadenas desde el config actual
-            ConfigManager.Load();
-            var localConn = ConfigManager.Current.LocalDbStrCon;
-            var primaryConn = ConfigManager.Current.MainDbStrCon;
-
-            Exception? lastEx = null;
-
-            // 1) Primero intentar en BD LOCAL (ahí se insertó cuando esta offline)
-            if (!string.IsNullOrWhiteSpace(localConn))
-            {
-                try
-                {
-                    AppendLog("[Driver] Looking up driver by weight_uuid in LOCAL DB…");
-                    var localResult = await TryOneAsync(localConn);
-                    if (localResult != null)
-                        return localResult;
-                }
-                catch (Exception ex)
-                {
-                    lastEx = ex;
-                    AppendLog("[Driver] Local DB failed in GetDriverByWeightUuidAsync: " + ex.Message);
-                }
-            }
-
-            // 2) Si no se encontró o falló local, intentar en BD PRIMARIA
-            if (!string.IsNullOrWhiteSpace(primaryConn))
-            {
-                try
-                {
-                    AppendLog("[Driver] Looking up driver by weight_uuid in PRIMARY DB…");
-                    var primaryResult = await TryOneAsync(primaryConn);
-                    if (primaryResult != null)
-                        return primaryResult;
-                }
-                catch (Exception ex)
-                {
-                    lastEx = ex;
-                    AppendLog("[Driver] Primary DB failed in GetDriverByWeightUuidAsync: " + ex.Message);
-                }
-            }
-
-            // 3) Si ambas conexiones tronaron, relanzamos el último error
-            if (lastEx != null)
-                throw lastEx;
-
-            // Conexiones OK pero no hubo registro en ninguna
-            return null;
+                License = rd.IsDBNull("license_number") ? "" : rd.GetString("license_number"),
+                LicenseStateCode = rd.IsDBNull("license_state") ? "" : rd.GetString("license_state"),
+                Plates = rd.IsDBNull("vehicle_plates") ? "" : rd.GetString("vehicle_plates"),
+                TrailerNumber = rd.IsDBNull("trailer_number") ? "" : rd.GetString("trailer_number"),
+                TractorNumber = rd.IsDBNull("tractor_number") ? "" : rd.GetString("tractor_number"),
+            };
         }
 
 
@@ -4668,16 +4613,12 @@ namespace TruckScale.Pos
                 WHERE c.is_active = 1
                 ORDER BY c.account_name;";
 
-            async Task<int> LoadFromAsync(string connStr, string sourceLabel)
+            bool usedLocal = false;
+            await using var conn = await OpenMainThenLocalAsync("Accounts", ul => usedLocal = ul);
+
+            await using (var cmd = new MySqlCommand(SQL, conn))
+            await using (var rd = await cmd.ExecuteReaderAsync())
             {
-                var count = 0;
-
-                await using var conn = new MySqlConnection(connStr);
-                await conn.OpenAsync();
-
-                await using var cmd = new MySqlCommand(SQL, conn);
-                await using var rd = await cmd.ExecuteReaderAsync();
-
                 while (await rd.ReadAsync())
                 {
                     var acc = new TransportAccount
@@ -4702,43 +4643,10 @@ namespace TruckScale.Pos
                     };
 
                     _accounts.Add(acc);
-                    count++;
-                }
-
-                AppendLog($"[Accounts] Loaded {count} account(s) from {sourceLabel}.");
-                return count;
-            }
-
-            var totalLoaded = 0;
-            var primary = GetPrimaryConn();
-            var local = GetLocalConn();
-
-            // 1) PRIMARY
-            if (!string.IsNullOrWhiteSpace(primary))
-            {
-                try
-                {
-                    totalLoaded = await LoadFromAsync(primary, "PRIMARY");
-                }
-                catch (Exception ex)
-                {
-                    AppendLog($"[Accounts] PRIMARY failed, trying LOCAL… {ex.Message}");
-                    _accounts.Clear();
                 }
             }
 
-            // 2) LOCAL
-            if (totalLoaded == 0 && !string.IsNullOrWhiteSpace(local))
-            {
-                try
-                {
-                    totalLoaded = await LoadFromAsync(local, "LOCAL");
-                }
-                catch (Exception ex)
-                {
-                    AppendLog($"[Accounts] LOCAL failed… {ex.Message}");
-                }
-            }
+            AppendLog(usedLocal ? "[Accounts] Loaded from LOCAL_DB." : "[Accounts] Loaded from MAIN_DB.");
 
             // Cash sale (siempre)
             _accounts.Insert(0, new TransportAccount
@@ -4934,99 +4842,57 @@ namespace TruckScale.Pos
         }
         private async Task<DriverInfo?> GetDriverByPhoneAsync(string phoneDigits)
         {
-                const string SQL = @"SELECT
-                sdi.id_driver_info,
-                sdi.driver_first_name,
-                sdi.driver_last_name,
-                sdi.account_number,
-                sdi.account_name,
-                sdi.account_address,
-                sdi.account_country,
-                sdi.account_state,                
-                sdi.license_number,
-                sdi.license_state,
-                sdi.vehicle_plates,
-                sdi.trailer_number,
-                sdi.tractor_number,
-                sdi.driver_phone
-            FROM sale_driver_info sdi
-            WHERE sdi.driver_phone = @phone
-            ORDER BY sdi.id_driver_info DESC
-            LIMIT 1;";
+            const string SQL = @"
+                SELECT
+                    sdi.id_driver_info,
+                    sdi.driver_first_name,
+                    sdi.driver_last_name,
+                    sdi.account_number,
+                    sdi.account_name,
+                    sdi.account_address,
+                    sdi.account_country,
+                    sdi.account_state,
+                    sdi.license_number,
+                    sdi.license_state,
+                    sdi.vehicle_plates,
+                    sdi.trailer_number,
+                    sdi.tractor_number,
+                    sdi.driver_phone
+                FROM sale_driver_info sdi
+                WHERE sdi.driver_phone = @phone
+                ORDER BY sdi.id_driver_info DESC
+                LIMIT 1;";
 
-            // Helper: intenta en una sola conexión
-            async Task<DriverInfo?> TryOneAsync(string connStr)
+            bool usedLocal = false;
+            await using var conn = await OpenMainThenLocalAsync("Driver", ul => usedLocal = ul);
+
+            if (usedLocal)
+                UpdateSyncStatusUI("⚠ Offline mode – driver loaded from local cache");
+
+            await using var cmd = new MySqlCommand(SQL, conn);
+            cmd.Parameters.AddWithValue("@phone", phoneDigits);
+
+            await using var rd = await cmd.ExecuteReaderAsync();
+            if (!await rd.ReadAsync())
+                return null;
+
+            return new DriverInfo
             {
-                await using var conn = new MySqlConnection(connStr);
-                await conn.OpenAsync();
-
-                await using var cmd = new MySqlCommand(SQL, conn);
-                cmd.Parameters.AddWithValue("@phone", phoneDigits);
-
-                await using var rd = await cmd.ExecuteReaderAsync();
-                if (!await rd.ReadAsync())
-                    return null; // sin registros, pero conexión OK
-
-                return new DriverInfo
-                {
-                    Id = rd.GetInt64("id_driver_info"),
-                    First = rd.GetString("driver_first_name"),
-                    Last = rd.GetString("driver_last_name"),
-                    AccountNumber = rd.IsDBNull("account_number") ? "" : rd.GetString("account_number"),
-                    AccountName = rd.IsDBNull("account_name") ? "" : rd.GetString("account_name"),
-                    AccountAddress = rd.IsDBNull("account_address") ? "" : rd.GetString("account_address"),
-                    AccountCountry = rd.IsDBNull("account_country") ? "" : rd.GetString("account_country"),
-                    AccountState = rd.IsDBNull("account_state") ? "" : rd.GetString("account_state"),
-                    License = rd.IsDBNull("license_number") ? "" : rd.GetString("license_number"),
-                    LicenseStateCode = rd.IsDBNull("license_state") ? "" : rd.GetString("license_state"),
-                    Plates = rd.IsDBNull("vehicle_plates") ? "" : rd.GetString("vehicle_plates"),
-                    TrailerNumber = rd.IsDBNull("trailer_number") ? "" : rd.GetString("trailer_number"),
-                    TractorNumber = rd.IsDBNull("tractor_number") ? "" : rd.GetString("tractor_number"),
-                    PhoneDigits = rd.IsDBNull("driver_phone") ? "" : rd.GetString("driver_phone")
-                };
-            }
-
-            // === PRIMARY -> LOCAL ===
-            ConfigManager.Load();
-            var primary = ConfigManager.Current.MainDbStrCon;
-            var local = ConfigManager.Current.LocalDbStrCon;
-
-            Exception? lastConnEx = null;
-
-            // 1) Intentar PRIMARY (online)
-            if (!string.IsNullOrWhiteSpace(primary))
-            {
-                try
-                {
-                    return await TryOneAsync(primary);   // si hay 0 rows, regresa null y ya
-                }
-                catch (Exception ex)
-                {
-                    lastConnEx = ex;
-                    AppendLog("[Driver] Phone lookup PRIMARY failed, trying LOCAL… " + ex.Message);
-                }
-            }
-
-            // 2) Intentar LOCAL
-            if (!string.IsNullOrWhiteSpace(local))
-            {
-                try
-                {
-                    return await TryOneAsync(local);
-                }
-                catch (Exception ex)
-                {
-                    lastConnEx = ex;
-                    AppendLog("[Driver] Phone lookup LOCAL failed. " + ex.Message);
-                }
-            }
-
-            // 3) Si fallaron las dos conexiones, lanza error (para que el UI muestre mensaje de BD)
-            if (lastConnEx != null)
-                throw lastConnEx;
-
-            // Si no hay conexiones configuradas o simplemente no hay registros
-            return null;
+                Id = rd.GetInt64("id_driver_info"),
+                First = rd.GetString("driver_first_name"),
+                Last = rd.GetString("driver_last_name"),
+                AccountNumber = rd.IsDBNull("account_number") ? "" : rd.GetString("account_number"),
+                AccountName = rd.IsDBNull("account_name") ? "" : rd.GetString("account_name"),
+                AccountAddress = rd.IsDBNull("account_address") ? "" : rd.GetString("account_address"),
+                AccountCountry = rd.IsDBNull("account_country") ? "" : rd.GetString("account_country"),
+                AccountState = rd.IsDBNull("account_state") ? "" : rd.GetString("account_state"),
+                License = rd.IsDBNull("license_number") ? "" : rd.GetString("license_number"),
+                LicenseStateCode = rd.IsDBNull("license_state") ? "" : rd.GetString("license_state"),
+                Plates = rd.IsDBNull("vehicle_plates") ? "" : rd.GetString("vehicle_plates"),
+                TrailerNumber = rd.IsDBNull("trailer_number") ? "" : rd.GetString("trailer_number"),
+                TractorNumber = rd.IsDBNull("tractor_number") ? "" : rd.GetString("tractor_number"),
+                PhoneDigits = rd.IsDBNull("driver_phone") ? "" : rd.GetString("driver_phone")
+            };
         }
 
         /// <summary>
@@ -5034,7 +4900,7 @@ namespace TruckScale.Pos
         /// Se usa tanto para cargar chofer por teléfono como para edición.
         /// Actualizado: ahora también carga el teléfono del chofer.
         /// </summary>
-       
+
         private void FillDriverFormFromInfo(DriverInfo d,string from)
         {
             // Driver phone - cargar teléfono para edición
@@ -5194,30 +5060,41 @@ namespace TruckScale.Pos
             var digits = OnlyDigits(DriverPhoneText.Text);
             if (digits.Length != DRIVER_PHONE_LEN)
             {
-                // No buscamos si no trae 10 dígitos
                 DriverPhoneStatusText.Text = "Phone must be 10 digits.";
                 DriverPhoneStatusText.Visibility = Visibility.Visible;
                 return;
             }
 
             _driverPhoneDigits = digits;
-            // Formato visual
             DriverPhoneText.Text = FormatPhone10(digits);
 
-            var info = await GetDriverByPhoneAsync(digits);
+            DriverInfo? info = null;
+
+            try
+            {
+                info = await GetDriverByPhoneAsync(digits);
+            }
+            catch (Exception ex)
+            {
+                // Si MAIN y LOCAL fallan, aquí cae
+                DriverPhoneStatusText.Text = "DB not available (MAIN/LOCAL).";
+                DriverPhoneStatusText.Visibility = Visibility.Visible;
+                AppendLog("[Driver] Phone lookup failed: " + ex.Message);
+                await ShowAlertAsync("Driver", ex.Message, PackIconKind.AlertCircleOutline);
+                return;
+            }
+
             if (info == null)
             {
                 DriverPhoneStatusText.Text = "Driver not found";
                 DriverPhoneStatusText.Visibility = Visibility.Visible;
 
-                // Limpia campos básicos para captura manual
                 ChoferNombreText.Text = "";
                 ChoferApellidosText.Text = "";
                 LicenciaNumeroText.Text = "";
                 PlacasRegText.Text = "";
 
                 lblModalName.Text = "Register Driver";
-
             }
             else
             {
@@ -6417,7 +6294,7 @@ namespace TruckScale.Pos
                 if (!allowedCodes.Contains(m.Code))
                     continue;
 
-                // 🔒 regla principal: si no hay service -> todo deshabilitado
+                // regla principal: si no hay service -> todo deshabilitado
                 bool enabled = serviceReady;
 
                 // además, business solo si aplica
@@ -6867,34 +6744,75 @@ namespace TruckScale.Pos
             _uiIsSuspended = false;
             _uiSuspendReason = "";
 
-            await using var conn = new MySqlConnection(GetPrimaryConn());
-            await conn.OpenAsync();
+            var mainConn = GetPrimaryConn();
+            var localConn = ConfigManager.Current.LocalDbStrCon;
 
-            // has_credit (si es 0, ni busques customer_credit)
-            const string SQL1 = @"SELECT has_credit FROM customers WHERE id_customer=@cid LIMIT 1;";
-            await using (var c1 = new MySqlCommand(SQL1, conn))
+            MySqlConnection conn;
+            bool usedLocal = false;
+
+            try
             {
-                c1.Parameters.AddWithValue("@cid", customerId);
-                var v = await c1.ExecuteScalarAsync();
-                _uiHasCredit = (v != null && Convert.ToInt32(v) == 1);
+                conn = new MySqlConnection(mainConn);
+                await conn.OpenAsync();
+                AppendLog("[CreditSnap] Using MAIN_DB.");
             }
-            if (!_uiHasCredit) return;
-
-            // credit snapshot
-            const string SQL2 = @"SELECT credit_type, available_credit, is_suspended, suspension_reason
-                          FROM customer_credit WHERE customer_id=@cid LIMIT 1;";
-            await using (var c2 = new MySqlCommand(SQL2, conn))
+            catch (Exception exMain)
             {
-                c2.Parameters.AddWithValue("@cid", customerId);
-                await using var r = await c2.ExecuteReaderAsync();
-                if (await r.ReadAsync())
+                AppendLog($"[CreditSnap] MAIN_DB failed: {exMain.Message}. Trying LOCAL_DB...");
+
+                try
                 {
-                    _uiCreditType = (r["credit_type"]?.ToString() ?? "POSTPAID").Trim().ToUpperInvariant();
-                    _uiAvailableCredit = r["available_credit"] == DBNull.Value ? 0m : Convert.ToDecimal(r["available_credit"]);
-                    _uiIsSuspended = r["is_suspended"] != DBNull.Value && Convert.ToInt32(r["is_suspended"]) == 1;
-                    _uiSuspendReason = r["suspension_reason"]?.ToString() ?? "";
+                    conn = new MySqlConnection(localConn);
+                    await conn.OpenAsync();
+                    usedLocal = true;
+
+                    UpdateSyncStatusUI("⚠ Offline mode – credit loaded from local cache");
+                    AppendLog("[CreditSnap] Using LOCAL_DB.");
+                }
+                catch (Exception exLocal)
+                {
+                    AppendLog($"[CreditSnap] LOCAL_DB also failed: {exLocal.Message}.");
+                    // te quedas con defaults
+                    return;
                 }
             }
+
+            await using (conn)
+            {
+                // 1) has_credit
+                const string SQL1 = @"SELECT has_credit FROM customers WHERE id_customer=@cid LIMIT 1;";
+                await using (var c1 = new MySqlCommand(SQL1, conn))
+                {
+                    c1.Parameters.AddWithValue("@cid", customerId);
+                    var v = await c1.ExecuteScalarAsync();
+                    _uiHasCredit = (v != null && Convert.ToInt32(v) == 1);
+                }
+                if (!_uiHasCredit)
+                {
+                    AppendLog(usedLocal ? "[CreditSnap] No credit (LOCAL_DB)." : "[CreditSnap] No credit (MAIN_DB).");
+                    return;
+                }
+
+                // 2) credit snapshot
+                const string SQL2 = @"SELECT credit_type, available_credit, is_suspended, suspension_reason
+                              FROM customer_credit
+                              WHERE customer_id=@cid
+                              LIMIT 1;";
+                await using (var c2 = new MySqlCommand(SQL2, conn))
+                {
+                    c2.Parameters.AddWithValue("@cid", customerId);
+                    await using var r = await c2.ExecuteReaderAsync();
+                    if (await r.ReadAsync())
+                    {
+                        _uiCreditType = (r["credit_type"]?.ToString() ?? "POSTPAID").Trim().ToUpperInvariant();
+                        _uiAvailableCredit = r["available_credit"] == DBNull.Value ? 0m : Convert.ToDecimal(r["available_credit"]);
+                        _uiIsSuspended = r["is_suspended"] != DBNull.Value && Convert.ToInt32(r["is_suspended"]) == 1;
+                        _uiSuspendReason = r["suspension_reason"]?.ToString() ?? "";
+                    }
+                }
+            }
+
+            AppendLog(usedLocal ? "[CreditSnap] Loaded from LOCAL_DB." : "[CreditSnap] Loaded from MAIN_DB.");
         }
 
         private async void OpenTodayTransactions_Click(object sender, RoutedEventArgs e)
@@ -6922,12 +6840,8 @@ namespace TruckScale.Pos
         {
             _todayTx.Clear();
 
-            var mainConn = GetPrimaryConn();
-            if (string.IsNullOrWhiteSpace(mainConn))
-                throw new InvalidOperationException("MAIN_DB is not configured.");
-
-            await using var conn = new MySqlConnection(mainConn);
-            await conn.OpenAsync();
+            bool usedLocal = false;
+            await using var conn = await OpenMainThenLocalAsync("TodayTx", ul => usedLocal = ul);
 
             // cache de method ids (cash/card) una vez
             if (_cashMethodId <= 0 || _cardMethodId <= 0)
@@ -6962,9 +6876,8 @@ namespace TruckScale.Pos
                 JOIN payment_methods pm ON pm.method_id = p.method_id
                 WHERE DATE(s.created_at) = CURDATE()
                   AND s.operator_id = @op
-               
                 ORDER BY t.printed_at DESC;";
-            // -- FUTURO: si hay caja abierta, filtrar por s.occurred_at >= caja.opened_at AND caja.status='OPEN'
+
             await using var cmd = new MySqlCommand(SQL, conn);
             cmd.Parameters.AddWithValue("@op", operatorId);
 
@@ -6974,13 +6887,11 @@ namespace TruckScale.Pos
                 var row = new TodayTxRow
                 {
                     TicketUid = ReadUid(rd, "ticket_uid"),
-
                     TicketNumber = rd.GetString("ticket_number"),
                     PrintedAt = rd.GetDateTime("printed_at"),
                     TicketStatusId = rd.GetInt32("ticket_status_id"),
 
                     SaleUid = ReadUid(rd, "sale_uid"),
-
                     Total = rd.GetDecimal("total"),
                     Currency = rd.GetString("currency"),
                     SaleStatusId = rd.GetInt32("sale_status_id"),
@@ -6993,18 +6904,17 @@ namespace TruckScale.Pos
                     ServiceDesc = rd.GetString("service_desc"),
                 };
 
-                // Reglas: solo cash/card, y solo si RECEIVED y sale COMPLETED y no void/refund
                 var isCashOrCard = row.MethodId == _cashMethodId || row.MethodId == _cardMethodId;
                 var isReceived = row.PaymentStatusId == PAY_RECEIVED;
                 var isCompleted = row.SaleStatusId == SALE_COMPLETED;
 
                 row.CanEditPayment = isCashOrCard && isReceived && isCompleted;
-
-                // VOID: solo cash/card + received + completed (no business)
                 row.CanVoid = isCashOrCard && isReceived && isCompleted;
 
                 _todayTx.Add(row);
             }
+
+            AppendLog(usedLocal ? "[TodayTx] Loaded from LOCAL_DB." : "[TodayTx] Loaded from MAIN_DB.");
         }
         private static string ReadUid(MySqlDataReader rd, string col)
         {
@@ -7221,20 +7131,56 @@ namespace TruckScale.Pos
                 await ShowAlertAsync("VOID", ex.Message, PackIconKind.AlertCircleOutline);
             }
         }
+        private async Task<MySqlConnection> OpenMainThenLocalAsync(string tag, Action<bool>? onUsedLocal = null)
+        {
+            var mainConn = GetPrimaryConn();
+            var localConn = ConfigManager.Current.LocalDbStrCon;
+
+            if (string.IsNullOrWhiteSpace(localConn))
+                throw new InvalidOperationException("LOCAL_DB is not configured.");
+
+            MySqlConnection conn;
+
+            try
+            {
+                // Si MAIN no está configurado, esto caerá al catch y probará LOCAL
+                conn = new MySqlConnection(mainConn);
+                await conn.OpenAsync();
+                AppendLog($"[{tag}] Using MAIN_DB.");
+                onUsedLocal?.Invoke(false);
+                return conn;
+            }
+            catch (Exception exMain)
+            {
+                AppendLog($"[{tag}] MAIN_DB failed: {exMain.Message}. Trying LOCAL_DB...");
+
+                try
+                {
+                    conn = new MySqlConnection(localConn);
+                    await conn.OpenAsync();
+
+                    UpdateSyncStatusUI("⚠ Offline mode – data loaded from local cache");
+                    AppendLog($"[{tag}] Using LOCAL_DB.");
+                    onUsedLocal?.Invoke(true);
+                    return conn;
+                }
+                catch (Exception exLocal)
+                {
+                    AppendLog($"[{tag}] LOCAL_DB also failed: {exLocal.Message}.");
+                    throw; // que lo atrape tu OnClick y muestre alert
+                }
+            }
+        }
 
         private async Task LoadVoidReasonsAsync()
         {
             _voidReasons.Clear();
 
-            var mainConn = GetPrimaryConn();
-            if (string.IsNullOrWhiteSpace(mainConn))
-                throw new InvalidOperationException("MAIN_DB is not configured.");
+            bool usedLocal = false;
+            await using var conn = await OpenMainThenLocalAsync("VoidReasons", ul => usedLocal = ul);
 
-            await using var conn = new MySqlConnection(mainConn);
-            await conn.OpenAsync();
-
-            // AJUSTA columnas si tu tabla usa otros nombres:
-            const string SQL = @"SELECT void_reason_id, label
+            const string SQL = @"
+                SELECT void_reason_id, label
                 FROM void_reasons
                 WHERE is_active = 1
                 ORDER BY sort_order ASC, void_reason_id ASC;";
@@ -7249,6 +7195,8 @@ namespace TruckScale.Pos
                     Label = rd.GetString("label")
                 });
             }
+
+            AppendLog(usedLocal ? "[VoidReasons] Loaded from LOCAL_DB." : "[VoidReasons] Loaded from MAIN_DB.");
         }
         private async void ReprintTicket_Click(object sender, RoutedEventArgs e)
         {
@@ -7379,13 +7327,13 @@ namespace TruckScale.Pos
         private async Task<CashSessionRow?> GetOpenCashSessionAsync(int siteId, int terminalId)
         {
             const string SQL = @"
-SELECT session_uid, opened_by_user_id, opened_at, opening_cash
-FROM cash_sessions
-WHERE site_id = @site
-  AND terminal_id = @term
-  AND is_open = 1
-ORDER BY opened_at DESC
-LIMIT 1;";
+            SELECT session_uid, opened_by_user_id, opened_at, opening_cash
+            FROM cash_sessions
+            WHERE site_id = @site
+              AND terminal_id = @term
+              AND is_open = 1
+            ORDER BY opened_at DESC
+            LIMIT 1;";
 
             var mainConn = GetPrimaryConn();                  // MAIN (online)
             var localConn = ConfigManager.Current.LocalDbStrCon; // LOCAL (offline)
