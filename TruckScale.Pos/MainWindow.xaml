@@ -407,11 +407,12 @@
                                 <TextBlock Text="{DynamicResource LiveWeight}" Style="{StaticResource TitleLarge}"/>
                                 <Border Margin="0,8,0,12" Padding="12" CornerRadius="10"
                                         Background="{DynamicResource MaterialDesignCardBackground}" Height="125">
-                                    <Viewbox Stretch="Uniform" StretchDirection="DownOnly" MaxHeight="120" Margin="0,0,0,20">
+                                    <Viewbox Stretch="Uniform" Margin="0,0,0,20">
                                         <TextBlock x:Name="WeightText"
                                                    Text="0.0 lb"
                                                    FontSize="72"
                                                    FontWeight="SemiBold"
+                                                   TextOptions.TextFormattingMode="Ideal"
                                                    HorizontalAlignment="Center"/>
                                     </Viewbox>
                                 </Border>

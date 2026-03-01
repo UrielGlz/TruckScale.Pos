@@ -27,6 +27,7 @@ using System.Windows.Xps; // para XpsDocumentWriter
 using TruckScale.Pos.Config;
 using TruckScale.Pos.Data;
 using TruckScale.Pos.Domain;
+using TruckScale.Pos.Services;
 using TruckScale.Pos.Sync;
 using TruckScale.Pos.Tickets;
 
@@ -240,6 +241,9 @@ namespace TruckScale.Pos
         private string _lastTicketNumber = "";
         private string _lastTicketQrJson = "";
 
+        // Pad de firma digital Topaz
+        private SignaturePadService? _signaturePad;
+
         //status_catalogo para TICKETS.PRINTED
         private const int STATUS_TICKET_PRINTED = 9;
         private TaskCompletionSource<string?>? _reweighTicketTcs;
@@ -298,6 +302,8 @@ namespace TruckScale.Pos
             }
 
             SetUiReady(false, "Connecting…");
+
+            _signaturePad = new SignaturePadService();
         }
 
 
@@ -610,6 +616,7 @@ namespace TruckScale.Pos
 
             // Ahora solo evaluamos estabilidad + UI; el guardado ocurre al presionar OK.
             EvaluateStabilityAndUpdateUi(_last, note);
+            Console.WriteLine("Updating WeightText with: " + w);
         }
 
         /// <summary>
@@ -1350,6 +1357,17 @@ namespace TruckScale.Pos
             try
             {
                 var saleUid = await SaveSaleAsync();
+
+                // ── FIRMA DIGITAL ────────────────────────────────────────────────
+                if (_signaturePad?.IsDeviceConnected() == true)
+                {
+                    var sigWin = new SignatureCaptureWindow(_signaturePad, _lastTicketNumber, total);
+                    sigWin.Owner = this;
+                    if (sigWin.ShowDialog() == true && sigWin.SignatureBytes?.Length > 0)
+                        await SaveSignatureAsync(saleUid, _lastTicketUid, sigWin.SignatureBytes);
+                }
+                // ── FIN FIRMA ────────────────────────────────────────────────────
+
                 var change = recibido - total;
 
                 AppendLog($"[Sale] Completed sale_uid={saleUid} Total={total:0.00} Received={recibido:0.00} Change={change:0.00}");
@@ -2487,6 +2505,7 @@ namespace TruckScale.Pos
             }
 
             TryAcceptStableSet();
+            Console.WriteLine("Updating WeightText with: " + w);
         }
 
         /// <summary>
@@ -4246,6 +4265,62 @@ namespace TruckScale.Pos
                 }
             }
         }
+        /// <summary>
+        /// Guarda la firma digital en ticket_signatures.
+        /// Intenta PRIMARY DB primero, cae a LOCAL_DB si falla.
+        /// </summary>
+        private async Task SaveSignatureAsync(string saleUid, string ticketUid, byte[] sigBytes)
+        {
+            if (string.IsNullOrWhiteSpace(ticketUid) || sigBytes.Length == 0) return;
+
+            const string SQL = @"
+                INSERT INTO ticket_signatures (sig_uid, ticket_uid, sale_uid, signature_img, captured_by)
+                VALUES (UUID(), @tuid, @suid, @img, @user)
+                ON DUPLICATE KEY UPDATE signature_img = VALUES(signature_img),
+                                        captured_by   = VALUES(captured_by);";
+
+            async Task TrySave(string connStr)
+            {
+                await using var conn = new MySqlConnection(connStr);
+                await conn.OpenAsync();
+                await using var cmd = new MySqlCommand(SQL, conn);
+                cmd.Parameters.AddWithValue("@tuid", ticketUid);
+                cmd.Parameters.AddWithValue("@suid", saleUid);
+                cmd.Parameters.AddWithValue("@img",  sigBytes);
+                cmd.Parameters.AddWithValue("@user", GetCurrentOperatorId());
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            try
+            {
+                var mainConn = GetPrimaryConn();
+                if (!string.IsNullOrWhiteSpace(mainConn))
+                {
+                    await TrySave(mainConn);
+                    AppendLog($"[Signature] Saved to MAIN_DB for ticket_uid={ticketUid}");
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[Signature] MAIN_DB failed: {ex.Message}. Trying LOCAL_DB…");
+            }
+
+            try
+            {
+                var localConn = ConfigManager.Current.LocalDbStrCon;
+                if (!string.IsNullOrWhiteSpace(localConn))
+                {
+                    await TrySave(localConn);
+                    AppendLog($"[Signature] Saved to LOCAL_DB for ticket_uid={ticketUid}");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[Signature] LOCAL_DB also failed: {ex.Message}");
+            }
+        }
+
         private async Task EnsureCashSessionExistsOnThisDbAsync( MySqlConnection conn, MySqlTransaction tx,int siteId, int terminalId, int userId)
         {
             if (string.IsNullOrWhiteSpace(_currentCashSessionUid))
@@ -5347,6 +5422,25 @@ namespace TruckScale.Pos
                     ? PosSession.Username
                     : PosSession.FullName;
                 data.Weigher = opName;
+
+                // ── Cargar firma digital (nueva conexión: el reader principal sigue abierto) ──
+                if (!string.IsNullOrWhiteSpace(data.TicketUid))
+                {
+                    try
+                    {
+                        const string SQL_SIG =
+                            "SELECT signature_img FROM ticket_signatures WHERE ticket_uid = @tuid LIMIT 1;";
+                        await using var sigConn = new MySqlConnector.MySqlConnection(connStr);
+                        await sigConn.OpenAsync();
+                        await using var sigCmd = new MySqlConnector.MySqlCommand(SQL_SIG, sigConn);
+                        sigCmd.Parameters.AddWithValue("@tuid", data.TicketUid);
+                        var sigResult = await sigCmd.ExecuteScalarAsync();
+                        if (sigResult != null && sigResult != DBNull.Value)
+                            data.SignatureImageBytes = (byte[])sigResult;
+                    }
+                    catch { }
+                }
+                // ── Fin firma ──
 
                 AppendLog($"[Ticket] Loaded ticket data for sale_uid={saleUid} from {label}.");
                 return data;

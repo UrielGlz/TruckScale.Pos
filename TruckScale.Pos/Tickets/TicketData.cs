@@ -1,5 +1,7 @@
 ﻿using System;
+using System.IO;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Globalization;
 namespace TruckScale.Pos.Tickets
 {
@@ -47,6 +49,27 @@ namespace TruckScale.Pos.Tickets
         public bool IsReweigh { get; set; } = false;
 
         public string TicketUid { get; set; } = "";
+
+        // ── Firma digital ───────────────────────────────────────────────────────
+        public byte[]? SignatureImageBytes { get; set; }
+
+        public bool HasSignature => SignatureImageBytes?.Length > 0;
+
+        public ImageSource? SignatureImage
+        {
+            get
+            {
+                if (!HasSignature) return null;
+                var bmp = new BitmapImage();
+                using var ms = new MemoryStream(SignatureImageBytes!);
+                bmp.BeginInit();
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.StreamSource = ms;
+                bmp.EndInit();
+                bmp.Freeze();
+                return bmp;
+            }
+        }
         public string QrPayload { get; set; } = "";
         //texto que se imprime en "Reweigh Form / Date & Time"
         public string ReweighDateTimeText

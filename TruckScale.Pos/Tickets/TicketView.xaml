@@ -283,9 +283,36 @@
                                        VerticalAlignment="Center"
                                        Margin="0,0,5,0"/>
 
+                            <!-- Firma digital cuando está disponible -->
+                            <Image Grid.Column="1"
+                                   Source="{Binding SignatureImage}"
+                                   Height="50" Stretch="Uniform"
+                                   HorizontalAlignment="Left" Margin="0,2,0,0">
+                                <Image.Style>
+                                    <Style TargetType="Image">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasSignature}" Value="False">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Image.Style>
+                            </Image>
+
+                            <!-- Línea de firma manual cuando no hay firma digital -->
                             <TextBlock Grid.Column="1"
                                        Text="___________________________"
-                                       VerticalAlignment="Center"/>
+                                       VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasSignature}" Value="True">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
                         </Grid>
 
                         <TextBlock Text="{Binding ReweighWarning}"

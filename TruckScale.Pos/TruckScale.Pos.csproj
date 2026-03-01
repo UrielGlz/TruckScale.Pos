@@ -3,12 +3,29 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
     <None Remove="Resources\logo.jpeg" />
   </ItemGroup>
+
+
+  <!--
+    SDK Topaz SigPlusNET (firma digital) — PASO MANUAL requerido:
+    1. Descargar SigPlusNET.dll desde https://www.topazsystems.com/software.html
+    2. Copiar a TruckScale.Pos\Libs\SigPlusNET.dll
+    3. Descomentar el bloque Reference a continuación y hacer Rebuild.
+    Sin el DLL el pad simplemente no se detecta (IsDeviceConnected = false)
+    y el flujo continúa sin firma.
+  -->
+  <ItemGroup>
+    <Reference Include="SigPlusNET">
+      <HintPath>Libs\SigPlusNET.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
 
   <ItemGroup>
     <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />

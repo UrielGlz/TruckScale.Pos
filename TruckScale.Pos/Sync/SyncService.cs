@@ -124,6 +124,7 @@ namespace TruckScale.Pos.Sync
                 stats.DriversSynced = await SyncTableAsync(localConn, mainConn, "sale_driver_info", "id_driver_info");
                
                 stats.TicketsSynced = await SyncTableAsync(localConn, mainConn, "tickets", "ticket_uid");
+                stats.WhateverSynced += await SyncTableAsync(localConn, mainConn, "ticket_signatures", "sig_uid");
                 stats.LogsSynced = await SyncTableAsync(localConn, mainConn, "sync_logs", "log_uid");
                 stats.WhateverSynced += await SyncTableAsync(localConn, mainConn, "customer_credit", "credit_id");
                 
@@ -769,7 +770,8 @@ namespace TruckScale.Pos.Sync
             return (tableName == "sales" && colName == "sale_id")
                 || (tableName == "payments" && colName == "payment_id")
                 || (tableName == "sale_lines" && colName == "line_id")
-                || (tableName == "sale_driver_info" && colName == "id_driver_info");
+                || (tableName == "sale_driver_info" && colName == "id_driver_info")
+                || (tableName == "ticket_signatures" && colName == "sig_id");
         }
 
 
