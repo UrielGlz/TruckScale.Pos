@@ -1359,12 +1359,17 @@ namespace TruckScale.Pos
                 var saleUid = await SaveSaleAsync();
 
                 // ── FIRMA DIGITAL ────────────────────────────────────────────────
-                if (_signaturePad?.IsDeviceConnected() == true)
+                try
                 {
-                    var sigWin = new SignatureCaptureWindow(_signaturePad, _lastTicketNumber, total);
+                    var sigWin = new SignatureCaptureWindow(_lastTicketNumber, total);
                     sigWin.Owner = this;
+
                     if (sigWin.ShowDialog() == true && sigWin.SignatureBytes?.Length > 0)
                         await SaveSignatureAsync(saleUid, _lastTicketUid, sigWin.SignatureBytes);
+                }
+                catch
+                {
+                    // Silencioso: no bloquea el flujo del POS
                 }
                 // ── FIN FIRMA ────────────────────────────────────────────────────
 

@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build:*)",
+      "Bash(powershell:*)",
+      "Bash(taskkill:*)",
+      "Bash(powershell.exe:*)",
+      "Bash(/tmp/inspect_pb.ps1:*)",
+      "Bash(/tmp/inspect_pb2.ps1:*)",
+      "Bash(/tmp/inspect_sigpad.ps1:*)",
+      "Bash(/tmp/inspect_ti.ps1:*)",
+      "WebSearch",
+      "Bash(/tmp/inspect_cleartablet.ps1:*)",
+      "Bash(dotnet:*)"
+    ]
+  }
+}
