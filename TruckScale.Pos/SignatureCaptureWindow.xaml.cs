@@ -53,8 +53,8 @@ namespace TruckScale.Pos
                 SigHost.Child = _panel;
 
                 // Config imagen (como demo)
-                _pad.SetImageXSize(500);
-                _pad.SetImageYSize(100);
+                _pad.SetImageXSize(900);
+                _pad.SetImageYSize(220);
                 _pad.SetImagePenWidth(6);
 
                 // Detecta si está conectado AHORA

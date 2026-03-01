@@ -4,7 +4,7 @@
         xmlns:md="http://materialdesigninxaml.net/winfx/xaml/themes"
         xmlns:wfi="clr-namespace:System.Windows.Forms.Integration;assembly=WindowsFormsIntegration"
         Title="Driver Signature"
-        Width="500" Height="370"
+        Width="620" Height="430"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
         ShowInTaskbar="False">
@@ -40,14 +40,19 @@
 
         <!-- Preview WPF (como demo: nosotros pintamos el GetSigImage aquí) -->
         <Border Grid.Row="2"
-                BorderBrush="#BDBDBD" BorderThickness="1" Background="#F5F5F5"
-                CornerRadius="4">
+        MinHeight="220"
+        BorderBrush="#BDBDBD" BorderThickness="1" Background="#F5F5F5"
+        CornerRadius="4">
             <Grid>
                 <TextBlock x:Name="TxtWaiting"
                            Text="Sign on the pad…"
                            HorizontalAlignment="Center" VerticalAlignment="Center"
                            Foreground="#9E9E9E" FontSize="14"/>
-                <Image x:Name="SigPreview" Stretch="Uniform" Margin="4"/>
+                <Image x:Name="SigPreview"
+       Stretch="Uniform"
+       Margin="4"
+       SnapsToDevicePixels="True"
+       RenderOptions.BitmapScalingMode="HighQuality"/>
             </Grid>
         </Border>
 
