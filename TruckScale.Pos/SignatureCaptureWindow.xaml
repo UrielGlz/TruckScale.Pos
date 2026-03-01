@@ -59,22 +59,34 @@
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <Button Grid.Column="0" x:Name="BtnClear"
-                    Content="Clear"
-                    HorizontalAlignment="Left"
-                    Style="{StaticResource MaterialDesignOutlinedButton}"
-                    Click="BtnClear_Click"/>
+            <!-- Left buttons -->
+            <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Left">
+                <Button x:Name="BtnRetry"
+            Style="{StaticResource MaterialDesignOutlinedButton}"
+            Click="BtnRetry_Click"
+            Margin="0,0,8,0">
+                    <StackPanel Orientation="Horizontal">
+                        <md:PackIcon Kind="Sync" Width="18" Height="18" Margin="0,0,6,0"/>
+                        <TextBlock Text="Retry"/>
+                    </StackPanel>
+                </Button>
+
+                <Button x:Name="BtnClear"
+            Content="Clear"
+            Style="{StaticResource MaterialDesignOutlinedButton}"
+            Click="BtnClear_Click"/>
+            </StackPanel>
 
             <Button Grid.Column="1" Content="Skip"
-                    Margin="8,0,0,0"
-                    Style="{StaticResource MaterialDesignOutlinedButton}"
-                    Click="BtnSkip_Click"/>
+          Margin="8,0,0,0"
+          Style="{StaticResource MaterialDesignOutlinedButton}"
+          Click="BtnSkip_Click"/>
 
             <Button Grid.Column="2" x:Name="BtnDone"
-                    Content="✓  Done"
-                    Margin="8,0,0,0"
-                    Style="{StaticResource MaterialDesignRaisedButton}"
-                    Click="BtnDone_Click"/>
+          Content="✓  Done"
+          Margin="8,0,0,0"
+          Style="{StaticResource MaterialDesignRaisedButton}"
+          Click="BtnDone_Click"/>
         </Grid>
     </Grid>
 </Window>

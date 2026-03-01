@@ -13,8 +13,8 @@ namespace TruckScale.Pos
         private SigPlusNET? _pad;
         private System.Windows.Forms.Panel? _panel;
         private DispatcherTimer? _timer;
-
         private int _lastPointCount = 0;
+        private bool _connected = false;
 
         public byte[]? SignatureBytes { get; private set; }
 
@@ -28,53 +28,103 @@ namespace TruckScale.Pos
         protected override void OnContentRendered(EventArgs e)
         {
             base.OnContentRendered(e);
+            InitializePad(startCapture: true);
+        }
+
+        private void InitializePad(bool startCapture)
+        {
+            CleanupPad();
+
+            TxtWaiting.Text = "Sign on the pad…";
+            TxtWaiting.Visibility = Visibility.Visible;
+            SigPreview.Source = null;
+            _lastPointCount = 0;
+            _connected = false;
 
             try
             {
-                // 1) Crear control WinForms SigPlusNET + hostearlo (como demo WPF)
                 _pad = new SigPlusNET();
 
-                // Opcional (si tu demo dice Model 11)
+                // Model según tu demo (si no aplica, no truena)
                 try { _pad.SetTabletModel("11"); } catch { }
 
                 _panel = new System.Windows.Forms.Panel { Width = 1, Height = 1 };
                 _panel.Controls.Add(_pad);
                 SigHost.Child = _panel;
 
-                // 2) Config de imagen (como demo)
+                // Config imagen (como demo)
                 _pad.SetImageXSize(500);
                 _pad.SetImageYSize(100);
                 _pad.SetImagePenWidth(6);
 
-                // 3) Arrancar captura AUTOMÁTICA (sin botón Sign)
-                _pad.SetTabletState(1);
+                // Detecta si está conectado AHORA
+                try { _connected = _pad.TabletConnectQuery(); } catch { _connected = false; }
 
-                // 4) Timer oficial (100ms) para preview
-                _timer = new DispatcherTimer
+                if (!_connected)
                 {
-                    Interval = TimeSpan.FromMilliseconds(100)
-                };
-                _timer.Tick += Timer_Tick;
-                _timer.Start();
+                    TxtWaiting.Text = "Signature pad not detected. Plug it in and click Retry.";
+                    StopTimer();
+                    return;
+                }
+
+                if (startCapture)
+                    _pad.SetTabletState(1);
+
+                StartTimer();
             }
             catch
             {
-                // Si falla (no hay pad/driver), cerramos silencioso para no bloquear el flujo POS
-                DialogResult = false;
-                Close();
+                // Si algo falla, no bloqueamos: dejamos Skip disponible
+                TxtWaiting.Text = "Signature pad not available. Click Retry or press Skip.";
+                StopTimer();
             }
+        }
+
+        private void StartTimer()
+        {
+            if (_timer == null)
+            {
+                _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+                _timer.Tick += Timer_Tick;
+            }
+            _timer.Start();
+        }
+
+        private void StopTimer()
+        {
+            try { _timer?.Stop(); } catch { }
         }
 
         private void Timer_Tick(object? sender, EventArgs e)
         {
             if (_pad == null) return;
 
+            // Si se desconectó en caliente, entra aquí:
+            try
+            {
+                if (!_pad.TabletConnectQuery())
+                {
+                    _connected = false;
+                    TxtWaiting.Text = "Signature pad disconnected. Plug it in and click Retry.";
+                    TxtWaiting.Visibility = Visibility.Visible;
+                    StopTimer();
+                    try { _pad.SetTabletState(0); } catch { }
+                    return;
+                }
+            }
+            catch
+            {
+                _connected = false;
+                TxtWaiting.Text = "Signature pad disconnected. Plug it in and click Retry.";
+                TxtWaiting.Visibility = Visibility.Visible;
+                StopTimer();
+                return;
+            }
+
             try
             {
                 int pts = _pad.NumberOfTabletPoints();
                 if (pts <= 0) return;
-
-                // Evitar repintar demasiado si no cambió
                 if (pts == _lastPointCount) return;
                 _lastPointCount = pts;
 
@@ -83,11 +133,12 @@ namespace TruckScale.Pos
 
                 using var ms = new MemoryStream();
                 img.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                var png = ms.ToArray();
 
                 var bmp = new BitmapImage();
                 bmp.BeginInit();
                 bmp.CacheOption = BitmapCacheOption.OnLoad;
-                bmp.StreamSource = new MemoryStream(ms.ToArray());
+                bmp.StreamSource = new MemoryStream(png);
                 bmp.EndInit();
                 bmp.Freeze();
 
@@ -96,22 +147,29 @@ namespace TruckScale.Pos
             }
             catch
             {
-                // Si el SDK truena aquí, dejamos que el modal cierre sin bloquear
-                // (mejor que tumbar la venta completa)
-                DialogResult = false;
-                Close();
+                // Si el SDK truena aquí, dejamos el modal vivo para Retry/Skip
+                TxtWaiting.Text = "Signature capture error. Click Retry or press Skip.";
+                TxtWaiting.Visibility = Visibility.Visible;
+                StopTimer();
+                try { _pad.SetTabletState(0); } catch { }
+                _connected = false;
             }
+        }
+
+        private void BtnRetry_Click(object sender, RoutedEventArgs e)
+        {
+            InitializePad(startCapture: true);
         }
 
         private void BtnClear_Click(object sender, RoutedEventArgs e)
         {
-            if (_pad == null) return;
-
+            if (_pad == null || !_connected) return;
             try
             {
                 _pad.ClearTablet();
                 _lastPointCount = 0;
                 SigPreview.Source = null;
+                TxtWaiting.Text = "Sign on the pad…";
                 TxtWaiting.Visibility = Visibility.Visible;
             }
             catch { }
@@ -125,7 +183,15 @@ namespace TruckScale.Pos
 
         private void BtnDone_Click(object sender, RoutedEventArgs e)
         {
-            if (_pad == null) return;
+            if (_pad == null || !_connected)
+            {
+                MessageBox.Show(
+                    "Signature pad not detected.\nPlug it in and click Retry, or press Skip to continue without signature.",
+                    "Signature",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
 
             try
             {
@@ -136,7 +202,6 @@ namespace TruckScale.Pos
                     return;
                 }
 
-                // Detener captura como demo
                 _pad.SetTabletState(0);
 
                 var img = _pad.GetSigImage();
@@ -156,20 +221,24 @@ namespace TruckScale.Pos
             }
             catch
             {
-                DialogResult = false;
-                Close();
+                MessageBox.Show("Signature capture failed. Click Retry or press Skip.",
+                    "Signature",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
             }
         }
 
         protected override void OnClosed(EventArgs e)
         {
-            try { _timer?.Stop(); } catch { }
-            try
-            {
-                if (_pad != null)
-                    _pad.SetTabletState(0);
-            }
-            catch { }
+            CleanupPad();
+            base.OnClosed(e);
+        }
+
+        private void CleanupPad()
+        {
+            StopTimer();
+
+            try { _pad?.SetTabletState(0); } catch { }
 
             try
             {
@@ -181,11 +250,10 @@ namespace TruckScale.Pos
             try { SigHost.Child = null; } catch { }
 
             try { _pad?.Dispose(); } catch { }
+
             _pad = null;
             _panel = null;
-            _timer = null;
-
-            base.OnClosed(e);
+            _connected = false;
         }
     }
 }
