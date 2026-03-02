@@ -39,7 +39,7 @@ namespace TruckScale.Pos
     {
         public int Columns { get; set; } = 3;
         public string[] Keys { get; set; } = new[] { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "00", "←" };
-        public decimal[] Denominations { get; set; } = new decimal[] { 1, 5, 10, 20, 50, 100, 200, 500 };
+        public decimal[] Denominations { get; set; } = new decimal[] { 1,2, 5, 10, 20, 50, 100};
     }
 
     public enum UnitSystem { Metric, Imperial }
