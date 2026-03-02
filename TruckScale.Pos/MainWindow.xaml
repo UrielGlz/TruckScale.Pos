@@ -1925,15 +1925,13 @@
                             <Border Grid.Row="4" Grid.ColumnSpan="2"
                             BorderBrush="{DynamicResource MaterialDesignDivider}"
                             BorderThickness="0,1,0,0"
-                            Padding="0,12,0,0"
-                            Margin="0,8,0,6">
-                                <TextBlock Text="Business Account" Opacity="0.7"/>
-                            </Border>
+                            Margin="0,8,0,6"/>
 
                             <ComboBox x:Name="ClienteRegCombo"
                               Grid.Row="5" Grid.ColumnSpan="2"
                               Margin="0,0,0,12"
                               MinHeight="44"
+                              FontSize="18"
                               IsEditable="False"
                               IsTextSearchEnabled="True"
                               SelectionChanged="ClienteRegCombo_SelectionChanged"

@@ -4731,7 +4731,7 @@ namespace TruckScale.Pos
             {
                 IdCustomer = 0,
                 AccountNumber = "",
-                AccountName = "(Cash sale – no account)",
+                AccountName = "Select Business Account",
                 AccountAddress = "",
                 AccountCountry = "",
                 AccountState = "",
