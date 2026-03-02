@@ -5662,8 +5662,8 @@ namespace TruckScale.Pos
                     s.sale_status_id,
                     s.reweigh_of_sale_id,                    
                     COALESCE(
-                      NULLIF(s.occurred_at, '0000-00-00 00:00:00'),
-                      NULLIF(s.created_at,  '0000-00-00 00:00:00')
+                      IF(s.occurred_at = 0, NULL, s.occurred_at),
+                      IF(s.created_at  = 0, NULL, s.created_at)
                     ) AS occurred_at,
                     t.ticket_id,
                     t.ticket_uid,
