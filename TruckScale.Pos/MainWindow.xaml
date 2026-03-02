@@ -35,7 +35,7 @@
 
         <!-- Título grande -->
         <Style x:Key="TitleLarge" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="20"/>
+            <Setter Property="FontSize" Value="22"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Margin" Value="0,0,0,8"/>
         </Style>
@@ -124,7 +124,7 @@
         <!-- Form helpers -->
         <Style x:Key="FormGrid" TargetType="Grid"/>
         <Style x:Key="FormSection" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontSize" Value="15"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Opacity" Value="0.85"/>
             <Setter Property="Margin" Value="0,8,0,4"/>
@@ -161,13 +161,35 @@
         <SolidColorBrush x:Key="WaitCtaBgHv" Color="#B71C1C"/>
         <!-- red 900 -->
 
+        <!-- Estilo botón peligro/cancelar (rojo, mismo tamaño que StartCTA) -->
+        <Style x:Key="DangerCTA" TargetType="Button" BasedOn="{StaticResource PrimaryRaised}">
+            <Setter Property="Foreground" Value="{StaticResource StartCtaFg}"/>
+            <Setter Property="Background" Value="{StaticResource WaitCtaBg}"/>
+            <Setter Property="FontSize"   Value="22"/>
+            <Setter Property="MinHeight"  Value="56"/>
+            <Setter Property="MinWidth"   Value="100"/>
+            <Setter Property="Padding"    Value="16,14"/>
+            <Setter Property="md:ButtonAssist.CornerRadius" Value="8"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource WaitCtaBgHv}"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#7B0000"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.6"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
         <!-- Estilo del botón Start -->
         <Style x:Key="StartCTA" TargetType="Button" BasedOn="{StaticResource PrimaryRaised}">
             <Setter Property="Foreground" Value="{StaticResource StartCtaFg}"/>
             <Setter Property="Background" Value="{StaticResource StartCtaBg}"/>
-            <Setter Property="FontSize" Value="18"/>
-            <Setter Property="MinHeight" Value="48"/>
-            <Setter Property="Padding" Value="22,12"/>
+            <Setter Property="FontSize" Value="22"/>
+            <Setter Property="MinHeight" Value="56"/>
+            <Setter Property="Padding" Value="22,14"/>
             <!-- Ojo: quitamos ShadowAssist.ShadowDepth -->
             <Setter Property="md:ButtonAssist.CornerRadius" Value="8"/>
             <Style.Triggers>
@@ -187,8 +209,8 @@
                BasedOn="{StaticResource PrimaryRaised}">
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="Background" Value="{StaticResource DoneCtaBg}"/>
-            <Setter Property="FontSize" Value="20"/>
-            <Setter Property="MinHeight" Value="72"/>
+            <Setter Property="FontSize" Value="24"/>
+            <Setter Property="MinHeight" Value="80"/>
             <Setter Property="MinWidth"  Value="240"/>
             <Setter Property="Padding"   Value="32,18"/>
             <Setter Property="md:ButtonAssist.CornerRadius" Value="24"/>
@@ -210,7 +232,7 @@
             <Setter Property="MinHeight" Value="64"/>
             <Setter Property="Padding"   Value="14,10"/>
             <Setter Property="Margin"    Value="0,8,12,0"/>
-            <Setter Property="FontSize"  Value="16"/>
+            <Setter Property="FontSize"  Value="18"/>
             <Setter Property="HorizontalAlignment" Value="Stretch"/>
             <Setter Property="md:ButtonAssist.CornerRadius" Value="10"/>
             <Setter Property="BorderBrush" Value="{DynamicResource MaterialDesignDivider}"/>
@@ -232,10 +254,10 @@
                TargetType="Button"
                BasedOn="{StaticResource PrimaryOutlined}">
             <Setter Property="Margin" Value="12,0,0,0"/>
-            <Setter Property="MinHeight" Value="56"/>
+            <Setter Property="MinHeight" Value="60"/>
             <Setter Property="MinWidth"  Value="150"/>
             <Setter Property="Padding"   Value="22,12"/>
-            <Setter Property="FontSize"  Value="16"/>
+            <Setter Property="FontSize"  Value="19"/>
             <Setter Property="md:ButtonAssist.CornerRadius" Value="20"/>
             <Setter Property="HorizontalAlignment" Value="Left"/>
 
@@ -433,12 +455,10 @@
 
                                     <Button Grid.Column="1"
                                         x:Name="NewTransactionButton"
-                                        Style="{StaticResource PrimaryOutlined}"
+                                        Style="{StaticResource DangerCTA}"
                                         Content="New"
                                         Margin="8,0,0,0"
-                                        Click="NewTransaction_Click"
-                                        BorderBrush="{DynamicResource MaterialDesignValidationErrorBrush}"
-                                        Foreground="{DynamicResource MaterialDesignValidationErrorBrush}"/>
+                                        Click="NewTransaction_Click"/>
 
                                 </Grid>
 
@@ -723,8 +743,8 @@
                                                    Style="{StaticResource AmountText}"
                                                    HorizontalAlignment="Center"
                                                    TextAlignment="Center"
-                                                   FontSize="28"
-                                                   Foreground="{DynamicResource MaterialDesignValidationErrorBrush}"/>
+                                                   FontSize="36"
+                                                   Foreground="{StaticResource DoneCtaBg}"/>
                                     </StackPanel>
                                 </Border>
                             </Grid>
@@ -822,7 +842,7 @@
                                                      Height="22"
                                                      Margin="0,0,10,0"/>
                                         <TextBlock Text="DONE"
-                                                   FontSize="20"
+                                                   FontSize="24"
                                                    FontWeight="Bold"/>
                                     </StackPanel>
                                 </Button>
@@ -1005,7 +1025,7 @@
                    VerticalAlignment="Center"/>
                                 </StackPanel>
 
-                                <Button x:Name="RegisterDriverButton" Style="{StaticResource PrimaryRaised}" Content="Find driver" Margin="0,12,0,8"  Click="RegisterDriver_Click"/>
+                                <Button x:Name="RegisterDriverButton" Style="{StaticResource PrimaryRaised}" Content="Find driver" Margin="0,12,0,8" FontSize="18" MinHeight="48" Click="RegisterDriver_Click"/>
                             </StackPanel>
 
                         </md:Card>
@@ -2038,10 +2058,14 @@
                             <Button Content="{DynamicResource Cancel}"
                             Style="{StaticResource PrimaryOutlined}"
                             Margin="0,0,8,0"
+                            FontSize="16"
+                            MinHeight="44"
                             Click="RegisterCancel_Click"/>
                             <Button Content="{DynamicResource Save}"
                             Style="{StaticResource PrimaryRaised}"
                             MinWidth="92"
+                            FontSize="16"
+                            MinHeight="44"
                             Click="RegisterSave_Click"/>
                         </StackPanel>
                     </Border>
