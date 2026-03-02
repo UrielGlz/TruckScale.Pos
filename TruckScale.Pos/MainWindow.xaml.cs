@@ -1203,6 +1203,23 @@ namespace TruckScale.Pos
         private void ToggleDrawer_Click(object sender, RoutedEventArgs e)
             => RootDrawerHost.IsLeftDrawerOpen = !RootDrawerHost.IsLeftDrawerOpen;
 
+        // ===== Responsive layout =====
+        private const double CompactBreakpoint = 1200;
+
+        protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
+        {
+            base.OnRenderSizeChanged(sizeInfo);
+            bool compact = sizeInfo.NewSize.Width < CompactBreakpoint;
+            RightColDef.Width = compact ? new GridLength(0) : new GridLength(260);
+            RightCol.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+            BtnRightDrawerToggle.Visibility = compact ? Visibility.Visible : Visibility.Collapsed;
+            if (!compact)
+                RootDrawerHost.IsRightDrawerOpen = false;
+        }
+
+        private void BtnRightDrawerToggle_Click(object sender, RoutedEventArgs e)
+            => RootDrawerHost.IsRightDrawerOpen = !RootDrawerHost.IsRightDrawerOpen;
+
         private void LoadKeypadConfig()
         {
             try

@@ -378,6 +378,19 @@
                 </StackPanel>
             </md:DrawerHost.LeftDrawerContent>
 
+            <!-- ===== Drawer derecho: Quick Actions (modo compacto) ===== -->
+            <md:DrawerHost.RightDrawerContent>
+                <StackPanel Margin="16" Width="240">
+                    <TextBlock Text="{DynamicResource QuickActions}" FontWeight="SemiBold"
+                               FontSize="15" Margin="0,0,0,16"/>
+                    <Button x:Name="BtnFindDriverDrawer"
+                            Style="{StaticResource PrimaryRaised}"
+                            Content="Find driver"
+                            FontSize="18" MinHeight="48"
+                            Click="RegisterDriver_Click"/>
+                </StackPanel>
+            </md:DrawerHost.RightDrawerContent>
+
             <!-- ===== CONTENIDO ===== -->
             <Grid>
                 <Grid.RowDefinitions>
@@ -396,6 +409,15 @@
                         <TextBlock Text="{DynamicResource App.Title}" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/>
                         <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
                             <!--<Button Content="{DynamicResource Theme.Toggle}" Click="ToggleTheme_Click" Margin="8,0"/>-->
+                            <Button x:Name="BtnRightDrawerToggle"
+                                    Visibility="Collapsed"
+                                    Width="40" Height="32"
+                                    Margin="0,0,4,0"
+                                    Click="BtnRightDrawerToggle_Click"
+                                    ToolTip="Quick Actions"
+                                    Style="{StaticResource MaterialDesignOutlinedButton}">
+                                <md:PackIcon Kind="Tune" Width="18" Height="18"/>
+                            </Button>
                             <Button x:Name="CloseCashButton" Content="Close cash" Margin="8,0,0,0" Click="CloseCashButton_Click" Style="{StaticResource MaterialDesignOutlinedButton}"/>
 
                             <Button x:Name="LogoutButton" Content="Log off" Click="Logout_Click" Margin="8,0"/>
@@ -411,7 +433,7 @@
                         <!-- Izquierda: Live weight -->
                         <ColumnDefinition Width="*"/>
                         <!-- Centro: formulario -->
-                        <ColumnDefinition Width="260"/>
+                        <ColumnDefinition x:Name="RightColDef" Width="260"/>
                         <!-- Derecha: quick actions + log (más angosta) -->
                     </Grid.ColumnDefinitions>
 
