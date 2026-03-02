@@ -5538,7 +5538,8 @@ namespace TruckScale.Pos
             return value?.ToString() ?? "";
         }
         // ===== Reweigh settings (por ahora fijos; luego se TENEMOS q leer de settings) =====
-        private const int REWEIGH_WINDOW_MINUTES = 120; //TODO T_AGIN en minutos (necesitamos apuntar al campo de la tabla)
+        
+        private const int REWEIGH_WINDOW_MINUTES = 120; // fallback si DB no responde
         private const int REWEIGH_MAX_TIMES = 1;   // solo un REWEIGH por venta original
         private sealed class ReweighCandidate
         {
@@ -5784,7 +5785,82 @@ namespace TruckScale.Pos
 
             return result;
         }
+        private async Task<int> GetReweighWindowMinutesAsync()
+        {
+            const string KEY = "reweigh.window_minutes";
 
+            const string SQL = @"
+                    SELECT value
+                    FROM settings
+                    WHERE `key` = @key
+                    LIMIT 1;";
+
+            async Task<int?> TryOneAsync(string connStr, string label)
+            {
+                await using var conn = new MySqlConnector.MySqlConnection(connStr);
+                await conn.OpenAsync();
+
+                await using var cmd = new MySqlConnector.MySqlCommand(SQL, conn);
+                cmd.Parameters.AddWithValue("@key", KEY);
+
+                var obj = await cmd.ExecuteScalarAsync();
+                if (obj == null || obj == DBNull.Value)
+                {
+                    AppendLog($"[Settings] {label}: '{KEY}' not found. Using default.");
+                    return null;
+                }
+
+                var s = obj.ToString()?.Trim();
+                if (!int.TryParse(s, out var minutes))
+                {
+                    AppendLog($"[Settings] {label}: '{KEY}' invalid value='{s}'. Using default.");
+                    return null;
+                }
+
+                // opcional: clamp para evitar locuras
+                if (minutes < 1) minutes = 1;
+                if (minutes > 24 * 60) minutes = 24 * 60;
+
+                AppendLog($"[Settings] {label}: {KEY}={minutes}");
+                return minutes;
+            }
+
+            ConfigManager.Load();
+            var primary = ConfigManager.Current.MainDbStrCon;
+            var local = ConfigManager.Current.LocalDbStrCon;
+
+            // 1) PRIMARY
+            if (!string.IsNullOrWhiteSpace(primary))
+            {
+                try
+                {
+                    var v = await TryOneAsync(primary, "PRIMARY");
+                    if (v.HasValue) return v.Value;
+                }
+                catch (Exception ex)
+                {
+                    AppendLog($"[Settings] PRIMARY failed: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+
+            // 2) LOCAL
+            if (!string.IsNullOrWhiteSpace(local))
+            {
+                try
+                {
+                    var v = await TryOneAsync(local, "LOCAL");
+                    if (v.HasValue) return v.Value;
+                }
+                catch (Exception ex)
+                {
+                    AppendLog($"[Settings] LOCAL failed: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+
+            // 3) fallback
+            AppendLog($"[Settings] Using default {REWEIGH_WINDOW_MINUTES} (no DB value).");
+            return REWEIGH_WINDOW_MINUTES;
+        }
         /// <summary>
         /// Valida si un ticket es elegible para REWEIGH.
         /// Aplica todas las reglas de negocio:
@@ -5872,17 +5948,19 @@ namespace TruckScale.Pos
                 return false;
             }
 
-            // 6) Ventana de tiempo T_AGIN
+            // 6) Ventana de tiempo T_AGIN (desde settings)
+            var windowMinutes = await GetReweighWindowMinutesAsync();
+
             var baseTime = cand.OccurredAt;
-            if (baseTime.Year < 2000) // por si en BD vino algo raro
+            if (baseTime.Year < 2000)
                 baseTime = DateTime.Now;
 
             var elapsedMinutes = (DateTime.UtcNow - baseTime.ToUniversalTime()).TotalMinutes;
-            if (elapsedMinutes > REWEIGH_WINDOW_MINUTES)
+            if (elapsedMinutes > windowMinutes)
             {
                 await ShowAlertAsync(
                     "Reweigh window expired",
-                    $"The reweigh window of {REWEIGH_WINDOW_MINUTES} minutes has expired for this ticket.",
+                    $"The reweigh window of {windowMinutes} minutes has expired for this ticket.",
                     PackIconKind.TimerSand);
                 return false;
             }
