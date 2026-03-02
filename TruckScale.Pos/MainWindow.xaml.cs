@@ -3082,16 +3082,16 @@ namespace TruckScale.Pos
 
             _reweighServiceReady = false; // por si venías de reweigh
             ApplySelected("WEIGH");
-
-            UpdatePaymentMethodsVisibility(canUseBusinessAccount: false /* o tu bool real */);
+            // ApplySelected → EnablePaymentMethodsForService → UpdatePaymentMethodsVisibility(correcto).
+            // NO llamar UpdatePaymentMethodsVisibility aquí: pisaría el resultado correcto con false.
         }
 
 
         private void ReweighToggle_Checked(object sender, RoutedEventArgs e)
         {
             _reweighServiceReady = false;
-            UpdatePaymentMethodsVisibility(canUseBusinessAccount: false /* o tu bool real */);
-
+            // serviceReady=false → todos disabled, pero Business sigue visible si aplica
+            UpdatePaymentMethodsVisibility(CanSelectedCustomerUseBusiness());
 
             // 1) Validar que ya se aceptó un peso con OK
             if (!_hasAcceptedWeight)
@@ -5933,12 +5933,12 @@ namespace TruckScale.Pos
             // 3) Optional: clear the textbox so next time is clean
             try { ReweighTicketInputTextBox.Text = ""; } catch { }
             _reweighServiceReady = false;
-            UpdatePaymentMethodsVisibility(canUseBusinessAccount: false /* o tu bool real */);
+            UpdatePaymentMethodsVisibility(CanSelectedCustomerUseBusiness());
 
             try
             {
                 // pick ONE that makes sense in your UI
-                OkButton?.Focus();             
+                OkButton?.Focus();
             }
             catch { }
         }
@@ -5950,8 +5950,7 @@ namespace TruckScale.Pos
 
             bool ok = await PrepareReweighFromTicketAsync(raw);
 
-
-            UpdatePaymentMethodsVisibility(canUseBusinessAccount: false /* o tu bool real */);
+            UpdatePaymentMethodsVisibility(CanSelectedCustomerUseBusiness());
 
             if (!ok)
             {
