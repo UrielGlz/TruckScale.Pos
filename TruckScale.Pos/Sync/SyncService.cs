@@ -185,6 +185,7 @@ namespace TruckScale.Pos.Sync
                 info.PendingLogs = await CountPendingAsync(conn, "sync_logs");
                 info.PendingSqcuences = await CountPendingAsync(conn, "number_sequences");
                 info.PendingPayments = await CountPendingAsync(conn, "payments");
+                info.PendingSignatures = await CountPendingAsync(conn, "ticket_signatures");
 
 
                 info.LastPushAttempt = await GetTimestampAsync(conn, "sync.last_push_attempt");
@@ -300,16 +301,10 @@ namespace TruckScale.Pos.Sync
                     {
 
                         var colName = rd.GetName(i);
-                        //// Excluir campos de sync (no existen en MAIN_DB)
-                        //if (colName is "synced" or "synced_at" or "sync_attempts" or "last_sync_error")
-                        //    continue;
+                        // Excluir columnas que NO existen en MAIN_DB
+                        if (colName is "synced" or "synced_at" or "sync_attempts" or "last_sync_error")
+                            continue;
 
-                        
-                        //if (tableName == "sale_driver_info" && colName.Equals("id_driver_info", StringComparison.OrdinalIgnoreCase))
-                        //    continue;
-
-                        //if (tableName == "sale_lines" && colName.Equals("line_id", StringComparison.OrdinalIgnoreCase))
-                        //    continue;
                         if (ShouldSkipAutoId(tableName, colName))
                             continue;
 
@@ -360,7 +355,7 @@ namespace TruckScale.Pos.Sync
             string tableName,
             string pkColumn)
         {
-            var sql = $"SELECT {pkColumn} FROM {tableName} WHERE synced = 0 LIMIT {_batchSize * 10};";
+            var sql = $"SELECT {pkColumn} FROM {tableName} WHERE (synced = 0 OR synced IS NULL) LIMIT {_batchSize * 10};";
             var uids = new List<string>();
 
             await using var cmd = new MySqlCommand(sql, conn);
@@ -449,6 +444,8 @@ namespace TruckScale.Pos.Sync
 
 
                 total += await PullTableUpsertAsync(mainConn, localConn, "tickets", "ticket_uid", lastTs);
+                // ticket_signatures no tiene updated_at (usa captured_at) → full pull con null
+                total += await PullTableUpsertAsync(mainConn, localConn, "ticket_signatures", "sig_uid", null);
                 total += await PullTableUpsertAsync(mainConn, localConn, "scale_session_axles", "uuid_weight", lastTs);
                 total += await PullTableUpsertAsync(mainConn, localConn, "sync_logs", "log_uid", lastTs);
                 // IMPORTANTE: payments → full upsert (sin depender de updated_at / last_pull_ts)
@@ -598,8 +595,8 @@ namespace TruckScale.Pos.Sync
                     {
                         var col = rd.GetName(i);
 
-                        // 👇 CLAVE: NO copiar auto IDs (payments.payment_id)
-                        if (ShouldSkipAutoId("payments", col))
+                        // 👇 CLAVE: NO copiar auto IDs (sales.sale_id)
+                        if (ShouldSkipAutoId("sales", col))
                             continue;
 
                         row[col] = rd.IsDBNull(i) ? null : rd.GetValue(i);
@@ -693,19 +690,20 @@ namespace TruckScale.Pos.Sync
                         row[colName] = rd.IsDBNull(i) ? null : rd.GetValue(i);
                     }
 
-                    //Muy importante: si la tabla LOCAL tiene columnas de sync,
-                    // marcamos estos registros como "ya sincronizados"
-                    //if (syncCols.Contains("synced") && !row.ContainsKey("synced"))
-                    //    row["synced"] = 1;
+                    // Muy importante: si la tabla LOCAL tiene columnas de sync,
+                    // marcamos estos registros como "ya sincronizados" para que no
+                    // se intenten subir de vuelta a MAIN en el siguiente Push.
+                    if (syncCols.Contains("synced") && !row.ContainsKey("synced"))
+                        row["synced"] = 1;
 
-                    //if (syncCols.Contains("synced_at") && !row.ContainsKey("synced_at"))
-                    //    row["synced_at"] = DateTime.UtcNow;
+                    if (syncCols.Contains("synced_at") && !row.ContainsKey("synced_at"))
+                        row["synced_at"] = DateTime.UtcNow;
 
-                    //if (syncCols.Contains("sync_attempts") && !row.ContainsKey("sync_attempts"))
-                    //    row["sync_attempts"] = 0;
+                    if (syncCols.Contains("sync_attempts") && !row.ContainsKey("sync_attempts"))
+                        row["sync_attempts"] = 0;
 
-                    //if (syncCols.Contains("last_sync_error") && !row.ContainsKey("last_sync_error"))
-                    //    row["last_sync_error"] = null;
+                    if (syncCols.Contains("last_sync_error") && !row.ContainsKey("last_sync_error"))
+                        row["last_sync_error"] = null;
 
 
                     rows.Add(row);
@@ -738,6 +736,12 @@ namespace TruckScale.Pos.Sync
                     skip.Add("sale_uid");        // parte de UNIQUE
                     skip.Add("seq");             // parte de UNIQUE
                     skip.Add("line_id");         // por si llega en el row
+                }
+
+                if (tableName == "ticket_signatures")
+                {
+                    skip.Add("ticket_uid");      // UNIQUE key (1 firma por ticket)
+                    skip.Add("sig_id");          // por si llega en el row
                 }
 
                 var updateSet = string.Join(", ",
@@ -777,7 +781,7 @@ namespace TruckScale.Pos.Sync
 
         private async Task<int> CountPendingAsync(MySqlConnection conn, string tableName)
         {
-            var sql = $"SELECT COUNT(*) FROM {tableName} WHERE synced = 0;";
+            var sql = $"SELECT COUNT(*) FROM {tableName} WHERE synced = 0 OR synced IS NULL;";
             await using var cmd = new MySqlCommand(sql, conn);
             var result = await cmd.ExecuteScalarAsync();
             return Convert.ToInt32(result ?? 0);

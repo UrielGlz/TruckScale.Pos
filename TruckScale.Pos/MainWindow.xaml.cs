@@ -2796,9 +2796,7 @@ namespace TruckScale.Pos
                     AppendLog($"[Sync] GetQueueInfo ERROR: {exQueue.Message}");
                 }
 
-                if (queueInfo != null &&
-                    queueInfo.Status == QueueStatus.DIRTY &&
-                    queueInfo.TotalPending > 0)
+                if (queueInfo != null && queueInfo.TotalPending > 0)
                 {
                     AppendLog($"[Sync] Pending to PUSH: {queueInfo.TotalPending} records.");
                     UpdateSyncStatusUI($"🔄 Sync: uploading {queueInfo.TotalPending}...");
