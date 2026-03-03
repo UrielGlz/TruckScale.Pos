@@ -1574,6 +1574,9 @@ namespace TruckScale.Pos
 
         private void RegisterCancel_Click(object sender, RoutedEventArgs e)
         {
+            // Si hay un save en vuelo, liberamos la guardia para no dejar el botón atascado.
+            // El save async puede completarse en background pero ya no importa (modal cerrado).
+            _isSaving = false;
             try { RootDialog.IsOpen = false; ClearDriverForm(); } catch { }
             SetReweighEditable(true);
         }
@@ -2281,10 +2284,14 @@ namespace TruckScale.Pos
             string identifyBy,
             string matchKey)
         {
-            // INSERT IGNORE: si ya existe una fila con (identify_by, match_key) única
-            // (ver UNIQUE KEY uq_driver_matchkey en sale_driver_info) la ignora sin error.
-            // Esto hace la operación idempotente ante reintentos / doble-click.
-            const string SQL = @"INSERT IGNORE INTO sale_driver_info (
+            // UPSERT: INSERT ... ON DUPLICATE KEY UPDATE
+            // Si existe UNIQUE KEY(identify_by, match_key):
+            //   - Fila nueva          → INSERT, LastInsertedId = nuevo id
+            //   - Fila ya existente   → UPDATE de todos los campos editables,
+            //                           LastInsertedId = id existente (truco LAST_INSERT_ID)
+            // Sin UNIQUE key activa actúa como INSERT normal (idempotencia DB-level
+            // requiere el constraint, UI-level la cubre _isSaving).
+            const string SQL = @"INSERT INTO sale_driver_info (
                 sale_uid,
                 account_number,
                 account_name,
@@ -2321,7 +2328,24 @@ namespace TruckScale.Pos
                 @driver_product_id,
                 @identify_by,
                 @match_key
-            );";
+            )
+            ON DUPLICATE KEY UPDATE
+                account_number    = VALUES(account_number),
+                account_name      = VALUES(account_name),
+                account_address   = VALUES(account_address),
+                account_country   = VALUES(account_country),
+                account_state     = VALUES(account_state),
+                driver_first_name = VALUES(driver_first_name),
+                driver_last_name  = VALUES(driver_last_name),
+                driver_phone      = VALUES(driver_phone),
+                license_number    = VALUES(license_number),
+                license_state     = VALUES(license_state),
+                vehicle_plates    = VALUES(vehicle_plates),
+                trailer_number    = VALUES(trailer_number),
+                tractor_number    = VALUES(tractor_number),
+                driver_product_id = VALUES(driver_product_id),
+                updated_at        = CURRENT_TIMESTAMP,
+                id_driver_info    = LAST_INSERT_ID(id_driver_info);";
 
             await using var conn = new MySqlConnection(connStr);
             await conn.OpenAsync();
@@ -2369,19 +2393,11 @@ namespace TruckScale.Pos
 
             await cmd.ExecuteNonQueryAsync();
 
-            long newId = (long)cmd.LastInsertedId;
-            if (newId > 0)
-                return newId;   // fila nueva insertada normalmente
-
-            // LastInsertedId == 0 → INSERT IGNORE suprimió un duplicado (UNIQUE uq_driver_matchkey).
-            // Recuperamos el id de la fila existente para que el caller pueda continuar sin error.
-            const string SEL = @"SELECT id_driver_info FROM sale_driver_info
-                                  WHERE identify_by = @ib AND match_key = @mk LIMIT 1;";
-            await using var sel = new MySqlCommand(SEL, conn);
-            sel.Parameters.AddWithValue("@ib", identifyBy);
-            sel.Parameters.AddWithValue("@mk", matchKey);
-            var scalar = await sel.ExecuteScalarAsync();
-            return scalar is long l ? l : Convert.ToInt64(scalar ?? 0L);
+            // Con UPSERT + LAST_INSERT_ID(id_driver_info) en la cláusula ON DUPLICATE KEY:
+            //   - INSERT nuevo  → LastInsertedId = nuevo auto-increment id
+            //   - UPDATE (dup)  → LastInsertedId = id de la fila existente
+            // En ambos casos el id es válido; no necesitamos SELECT de fallback.
+            return (long)cmd.LastInsertedId;
         }
 
 
