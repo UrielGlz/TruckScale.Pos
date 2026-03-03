@@ -201,6 +201,7 @@ namespace TruckScale.Pos
         // Para activar los botones de servicio
         private bool _driverLinked = false;
         private bool _hasAcceptedWeight;
+        private bool _isSaving = false;   // guard de re-entrada para RegisterSave_Click
         // ==== Estado WAIT/OK y snapshot de peso estable ====
         private bool _canAccept = false;          // true cuando hay snapshot estable listo para guardar
         private double _snapAx1, _snapAx2, _snapAx3, _snapTotal;
@@ -1572,6 +1573,7 @@ namespace TruckScale.Pos
 
         private void RegisterCancel_Click(object sender, RoutedEventArgs e)
         {
+            _isSaving = false;
             try { RootDialog.IsOpen = false; ClearDriverForm(); } catch { }
             SetReweighEditable(true);
         }
@@ -1726,6 +1728,13 @@ namespace TruckScale.Pos
         /// </summary>
         private async void RegisterSave_Click(object sender, RoutedEventArgs e)
         {
+            if (_isSaving) return;
+            _isSaving = true;
+
+            var btn = sender as Button;
+            var origContent = btn?.Content;
+            if (btn != null) { btn.IsEnabled = false; btn.Content = "Saving…"; }
+
             try
             {
                 var uuid = _currentWeightUuid;
@@ -1914,14 +1923,8 @@ namespace TruckScale.Pos
                     AppendLog("[Driver] Warning: driver not found right after insert/update.");
                 }
 
-                // Cerramos modal y mostramos popup de confirmación
+                // Cerramos modal
                 RootDialog.IsOpen = false;
-
-                await ShowDriverSavedDialogAsync(
-                    $"{first} {last}".Trim(),
-                    string.IsNullOrWhiteSpace(plates) ? null : plates,
-                    string.IsNullOrWhiteSpace(licNo) ? null : licNo
-                );
             }
             catch (Exception ex)
             {
@@ -1930,6 +1933,11 @@ namespace TruckScale.Pos
                     "Driver error",
                     "Error saving driver: " + ex.Message,
                     PackIconKind.AlertCircle);
+            }
+            finally
+            {
+                _isSaving = false;
+                if (btn != null) { btn.IsEnabled = true; btn.Content = origContent; }
             }
         }
 
