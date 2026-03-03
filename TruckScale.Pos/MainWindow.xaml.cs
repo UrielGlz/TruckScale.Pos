@@ -201,8 +201,6 @@ namespace TruckScale.Pos
         // Para activar los botones de servicio
         private bool _driverLinked = false;
         private bool _hasAcceptedWeight;
-        // Guardia de re-entrancia para RegisterSave_Click (evita doble-click / Enter doble)
-        private bool _isSaving = false;
         // ==== Estado WAIT/OK y snapshot de peso estable ====
         private bool _canAccept = false;          // true cuando hay snapshot estable listo para guardar
         private double _snapAx1, _snapAx2, _snapAx3, _snapTotal;
@@ -1728,14 +1726,6 @@ namespace TruckScale.Pos
         /// </summary>
         private async void RegisterSave_Click(object sender, RoutedEventArgs e)
         {
-            // ── Guardia de re-entrancia ──────────────────────────────────────────
-            if (_isSaving) return;
-            _isSaving = true;
-            var saveBtn = sender as Button;
-            var originalContent = saveBtn?.Content;
-            if (saveBtn != null) { saveBtn.IsEnabled = false; saveBtn.Content = "Saving…"; }
-            // ─────────────────────────────────────────────────────────────────────
-
             try
             {
                 var uuid = _currentWeightUuid;
@@ -1940,12 +1930,6 @@ namespace TruckScale.Pos
                     "Driver error",
                     "Error saving driver: " + ex.Message,
                     PackIconKind.AlertCircle);
-            }
-            finally
-            {
-                // Restaurar botón siempre, incluso si hubo excepción
-                _isSaving = false;
-                if (saveBtn != null) { saveBtn.IsEnabled = true; saveBtn.Content = originalContent; }
             }
         }
 
@@ -2281,10 +2265,7 @@ namespace TruckScale.Pos
             string identifyBy,
             string matchKey)
         {
-            // INSERT IGNORE: si ya existe una fila con (identify_by, match_key) única
-            // (ver UNIQUE KEY uq_driver_matchkey en sale_driver_info) la ignora sin error.
-            // Esto hace la operación idempotente ante reintentos / doble-click.
-            const string SQL = @"INSERT IGNORE INTO sale_driver_info (
+            const string SQL = @"INSERT INTO sale_driver_info (
                 sale_uid,
                 account_number,
                 account_name,
@@ -2368,20 +2349,7 @@ namespace TruckScale.Pos
             cmd.Parameters.AddWithValue("@match_key", matchKey);
 
             await cmd.ExecuteNonQueryAsync();
-
-            long newId = (long)cmd.LastInsertedId;
-            if (newId > 0)
-                return newId;   // fila nueva insertada normalmente
-
-            // LastInsertedId == 0 → INSERT IGNORE suprimió un duplicado (UNIQUE uq_driver_matchkey).
-            // Recuperamos el id de la fila existente para que el caller pueda continuar sin error.
-            const string SEL = @"SELECT id_driver_info FROM sale_driver_info
-                                  WHERE identify_by = @ib AND match_key = @mk LIMIT 1;";
-            await using var sel = new MySqlCommand(SEL, conn);
-            sel.Parameters.AddWithValue("@ib", identifyBy);
-            sel.Parameters.AddWithValue("@mk", matchKey);
-            var scalar = await sel.ExecuteScalarAsync();
-            return scalar is long l ? l : Convert.ToInt64(scalar ?? 0L);
+            return (long)cmd.LastInsertedId;
         }
 
 
