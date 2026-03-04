@@ -89,9 +89,9 @@ namespace TruckScale.Pos.Reports
             var closedStr  = d.ClosedAt.HasValue ? d.ClosedAt.Value.ToString("MM/dd/yyyy h:mm tt", CultureInfo.InvariantCulture) : "--";
             var genStr     = d.GeneratedAt.ToString("MM/dd/yyyy h:mm tt", CultureInfo.InvariantCulture);
 
-            AddInfoRow(rg, "Generated:",  genStr,           "Terminal:",    d.TerminalId.ToString());
-            AddInfoRow(rg, "Printed by:", d.OperatorName,   "Session UID:", TruncateUid(d.SessionUid));
-            AddInfoRow(rg, "Opened:",     openedStr,        "Closed:",      closedStr);
+            AddInfoRow(rg, "Generated:",  genStr,          "Terminal:", d.TerminalId.ToString());
+            AddInfoRow(rg, "Printed by:", d.OperatorName,  "",          "");
+            AddInfoRow(rg, "Opened:",     openedStr,       "Closed:",   closedStr);
 
             section.Blocks.Add(tbl);
             return section;
