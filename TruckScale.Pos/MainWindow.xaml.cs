@@ -23,6 +23,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Documents; // FlowDocument, IDocumentPaginatorSource
 using System.Windows.Xps; // para XpsDocumentWriter
 using TruckScale.Pos.Config;
 using TruckScale.Pos.Data;
@@ -5312,8 +5313,11 @@ namespace TruckScale.Pos
 
             var csb = new MySqlConnector.MySqlConnectionStringBuilder(raw)
             {
-                AllowZeroDateTime = true,
-                ConvertZeroDateTime = true
+                AllowZeroDateTime   = true,
+                ConvertZeroDateTime = true,
+                // GuidFormat=None: devuelve CHAR(36) como string, no como System.Guid.
+                // Sin esto, MySqlConnector 2.x convierte CHAR(36) a Guid y GetString() explota.
+                GuidFormat          = MySqlConnector.MySqlGuidFormat.None,
             };
             return csb.ConnectionString;
         }
@@ -7812,25 +7816,60 @@ namespace TruckScale.Pos
                 return;
             }
 
+            // Guard: sin sesión activa no se puede cerrar caja
+            if (string.IsNullOrWhiteSpace(_currentCashSessionUid))
+            {
+                MessageBox.Show(
+                    "No hay sesión de caja activa en memoria.\n" +
+                    "Cierra la aplicación, vuelve a iniciar sesión y abre la caja antes de cerrarla.",
+                    "Sin sesión activa",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
 
+            // Capturar UID ahora — se limpia durante Logout()
+            var sessionUid = _currentCashSessionUid;
+            var comment    = string.IsNullOrWhiteSpace(ClosingCashText.Text)
+                                 ? null
+                                 : ClosingCashText.Text.Trim();
+
+            // 1) Cerrar sesión de caja — abortar si falla (rowsAffected != 1 o error de BD)
+            bool usedMain;
             try
             {
-                var comment = string.IsNullOrWhiteSpace(ClosingCashText.Text)
-                    ? null
-                    : ClosingCashText.Text.Trim();
-
-                await CloseCashSessionAsync(closing, comment); // tu método de BD
-                CloseCashHost.IsOpen = false;
-
-                Logout();
+                usedMain = await CloseCashSessionAsync(closing, comment);
             }
             catch (Exception ex)
             {
                 CloseCashErrorText.Text = ex.Message;
                 CloseCashErrorText.Visibility = Visibility.Visible;
+                return; // NO imprimir, NO hacer logout
             }
+
+            CloseCashHost.IsOpen = false;
+
+            // 2) Imprimir corte de caja (best-effort — fallo no impide logout)
+            try
+            {
+                await PrintCashierCloseoutAsync(sessionUid, usedMain);
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[Closeout] Error inesperado al imprimir: {ex.Message}");
+            }
+
+            // 3) Sync silencioso SOLO si se usó MAIN (LOCAL ya tiene el cierre correcto)
+            if (usedMain)
+            {
+                try { await RunSilentSyncAsync(); }
+                catch (Exception ex) { AppendLog($"[Closeout/Sync] Error inesperado: {ex.Message}"); }
+            }
+
+            // 4) Cerrar sesión de usuario — cierre de caja ya confirmado en BD
+            Logout();
         }
-        private async Task CloseCashSessionAsync(decimal closingCash, string? comment)
+        private async Task<bool> CloseCashSessionAsync(decimal closingCash, string? comment)
         {
             var mainConn = GetPrimaryConn();
             var localConn = ConfigManager.Current.LocalDbStrCon;
@@ -7842,7 +7881,7 @@ namespace TruckScale.Pos
             {
                 conn = new MySqlConnection(mainConn);
                 await conn.OpenAsync();
-                AppendLog("[CloseCash] Using MAIN_DB.");
+                AppendLog($"[CloseCash] DB=MAIN sessionUid={_currentCashSessionUid}");
             }
             catch (Exception exMain)
             {
@@ -7854,7 +7893,7 @@ namespace TruckScale.Pos
 
                 await DatabaseHelper.UpdateQueueStatusAsync(localConn, QueueStatus.DIRTY);
                 UpdateSyncStatusUI("⚠ Offline mode – cash close stored locally");
-                AppendLog("[CloseCash] Using LOCAL_DB.");
+                AppendLog($"[CloseCash] DB=LOCAL sessionUid={_currentCashSessionUid}");
             }
 
             await using (conn)
@@ -7903,15 +7942,365 @@ namespace TruckScale.Pos
                     up.Parameters.AddWithValue("@csuid", _currentCashSessionUid);
 
                     var rows = await up.ExecuteNonQueryAsync();
-                    if (rows == 0)
-                        throw new InvalidOperationException("Cash session is not open or was already closed.");
+                    AppendLog($"[CloseCash] UPDATE rowsAffected={rows}");
+                    if (rows != 1)
+                        throw new InvalidOperationException($"Cash session not closed (rowsAffected={rows}). Verify that the session is open.");
                 }
 
                 await tx.CommitAsync();
             }
 
             AppendLog(usedLocal ? "[CloseCash] Closed in LOCAL_DB." : "[CloseCash] Closed in MAIN_DB.");
+            return !usedLocal;
         }
+
+        // ============================================================================
+        // CORTE DE CAJA — sync silencioso + carga de datos + impresión
+        // Mismo patrón que PrintTicketAsync: PrintQueue + XpsDocumentWriter.
+        // Reutiliza _syncService (mismo objeto que Ctrl+Alt+F9) sin mostrar diálogo.
+        // ============================================================================
+
+        /// <summary>
+        /// Ejecuta PUSH + PULL de forma silenciosa (sin dialog de confirmación).
+        /// Reutiliza _syncService igual que el handler de Ctrl+Alt+F9.
+        /// Devuelve true si MAIN_DB fue alcanzable (el PUSH fue exitoso).
+        /// </summary>
+        private async Task<bool> RunSilentSyncAsync()
+        {
+            if (_syncService == null)
+            {
+                AppendLog("[Closeout/Sync] SyncService no inicializado — omitiendo sync pre-corte.");
+                return false;
+            }
+
+            if (_syncInProgress)
+            {
+                AppendLog("[Closeout/Sync] Sync ya en progreso — omitiendo sync pre-corte.");
+                return false;
+            }
+
+            AppendLog("[Closeout/Sync] Iniciando sync silencioso pre-corte (PUSH + PULL)…");
+
+            bool mainReachable = false;
+            try
+            {
+                var pushResult = await _syncService.PushTransactionsAsync();
+                mainReachable = pushResult.Success;
+                AppendLog($"[Closeout/Sync] PUSH: {(pushResult.Success ? $"OK ({pushResult.RecordsSynced} registros)" : "FALLO — " + pushResult.Message)}");
+
+                if (mainReachable)
+                {
+                    var pullResult = await _syncService.PullUpdatesAsync();
+                    AppendLog($"[Closeout/Sync] PULL: {(pullResult.Success ? $"OK ({pullResult.RecordsSynced} registros)" : "FALLO — " + pullResult.Message)}");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[Closeout/Sync] Error inesperado: {ex.Message}");
+                mainReachable = false;
+            }
+
+            return mainReachable;
+        }
+
+        /// <summary>
+        /// Carga los datos del corte consultando MAIN_DB (si está disponible) o LOCAL_DB.
+        /// </summary>
+        private async Task<Reports.CashierCloseoutData?> LoadCashierCloseoutDataAsync(
+            string sessionUid, bool useMain)
+        {
+            // ── SQL: info de la sesión ────────────────────────────────────────
+            const string SQL_SESSION = @"
+                SELECT terminal_id, site_id, opened_at, closed_at,
+                       opening_cash, closing_cash, expected_cash, diff_cash
+                FROM cash_sessions
+                WHERE session_uid = @sid
+                LIMIT 1;";
+
+            // ── SQL: detalle (1 fila por sale_uid) ───────────────────────────
+            // Monto con signo: COMPLETED(2)=+SUM(received), CANCELLED(3)=−SUM(voided)|−total
+            // Fecha: IF(occurred_at=0, created_at, occurred_at) — evita NO_ZERO_DATE en LOCAL
+            const string SQL_DETAIL = @"
+                SELECT
+                    s.sale_uid,
+                    IF(s.occurred_at = 0, s.created_at, s.occurred_at)           AS sale_datetime,
+                    MAX(t.ticket_number)                                           AS ticket_number,
+                    TRIM(CONCAT(COALESCE(sdi.driver_first_name,''), ' ',
+                                COALESCE(sdi.driver_last_name, '')))               AS driver_name,
+                    COALESCE(sdi.vehicle_plates, '')                               AS plates,
+                    COALESCE(sdi.license_state,  '')                               AS lic_state,
+                    COALESCE(sdi.tractor_number, '')                               AS tractor,
+                    COALESCE(sdi.trailer_number, '')                               AS trailer,
+                    COALESCE(dp.name, p.name, sl.description, '')                  AS service_name,
+                    s.sale_status_id,
+                    COALESCE(GROUP_CONCAT(DISTINCT pm.name
+                             ORDER BY pm.name SEPARATOR ' + '), '')                AS method_names,
+                    CASE s.sale_status_id
+                        WHEN 2 THEN COALESCE(
+                            SUM(CASE WHEN pay.payment_status_id = 6 THEN pay.amount ELSE 0 END),
+                            s.total)
+                        WHEN 3 THEN -COALESCE(
+                            NULLIF(SUM(CASE WHEN pay.payment_status_id = 7 THEN pay.amount ELSE 0 END), 0),
+                            s.total)
+                        ELSE s.total
+                    END                                                             AS net_amount,
+                    COALESCE(u.full_name, u.username, '')                           AS operator_name
+                FROM sales s
+                LEFT JOIN tickets t            ON t.sale_uid    = s.sale_uid
+                LEFT JOIN sale_lines sl        ON sl.sale_uid   = s.sale_uid AND sl.seq = 1
+                LEFT JOIN products p           ON p.product_id  = sl.product_id
+                LEFT JOIN sale_driver_info sdi ON sdi.sale_uid  = s.sale_uid
+                LEFT JOIN driver_products dp   ON dp.product_id = sdi.driver_product_id
+                LEFT JOIN payments pay         ON pay.sale_uid  = s.sale_uid
+                LEFT JOIN payment_methods pm   ON pm.method_id  = pay.method_id
+                LEFT JOIN users u              ON u.user_id     = s.operator_id
+                WHERE s.cash_session_uid = @sid
+                  AND s.sale_status_id IN (2, 3)
+                GROUP BY
+                    s.sale_uid, s.sale_status_id, s.total,
+                    s.occurred_at, s.created_at,
+                    sdi.driver_first_name, sdi.driver_last_name,
+                    sdi.vehicle_plates, sdi.license_state,
+                    sdi.tractor_number, sdi.trailer_number,
+                    dp.name, p.name, sl.description,
+                    u.full_name, u.username
+                ORDER BY IF(s.occurred_at = 0, s.created_at, s.occurred_at) ASC;";
+
+            // ── SQL: totales por método (neto con signo) ──────────────────────
+            const string SQL_TOTALS = @"
+                SELECT
+                    pm.code AS method_code,
+                    pm.name AS method_name,
+                    SUM(CASE
+                        WHEN s.sale_status_id = 2 AND pay.payment_status_id = 6 THEN  pay.amount
+                        WHEN s.sale_status_id = 3 AND pay.payment_status_id = 7 THEN -pay.amount
+                        ELSE 0
+                    END)                                                              AS net_total,
+                    COUNT(DISTINCT CASE WHEN s.sale_status_id = 2 THEN s.sale_uid END) AS completed_count,
+                    COUNT(DISTINCT CASE WHEN s.sale_status_id = 3 THEN s.sale_uid END) AS cancelled_count
+                FROM sales s
+                JOIN payments pay
+                    ON pay.sale_uid = s.sale_uid
+                    AND ((s.sale_status_id = 2 AND pay.payment_status_id = 6)
+                      OR (s.sale_status_id = 3 AND pay.payment_status_id = 7))
+                JOIN payment_methods pm ON pm.method_id = pay.method_id
+                WHERE s.cash_session_uid = @sid
+                  AND s.sale_status_id IN (2, 3)
+                GROUP BY pm.method_id, pm.code, pm.name
+                ORDER BY pm.name;";
+
+            var rawConn  = useMain
+                ? GetPrimaryConn()
+                : ConfigManager.Current.LocalDbStrCon;
+            var dbLabel  = useMain ? "MAIN_DB" : "LOCAL_DB";
+
+            if (string.IsNullOrWhiteSpace(rawConn))
+            {
+                AppendLog($"[Closeout] {dbLabel}: connection string vacío/nulo. Verifica ConfigManager.");
+                return null;
+            }
+
+            string connStr;
+            try
+            {
+                connStr = BuildSafeConnectorConnStr(rawConn);
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[Closeout] {dbLabel}: error parseando connection string — {ex.Message}");
+                return null;
+            }
+
+            // Log diagnóstico: host/db visible, password nunca expuesto
+            try
+            {
+                var csb = new MySqlConnector.MySqlConnectionStringBuilder(connStr);
+                AppendLog($"[Closeout] {dbLabel} host={csb.Server}:{csb.Port} db={csb.Database} sid={TruncateUid(sessionUid)}");
+            }
+            catch
+            {
+                AppendLog($"[Closeout] {dbLabel} connStr inválido para MySqlConnector — sid={TruncateUid(sessionUid)}");
+                return null;
+            }
+
+            await using var conn = new MySqlConnector.MySqlConnection(connStr);
+            await conn.OpenAsync();
+
+            var data = new Reports.CashierCloseoutData
+            {
+                GeneratedAt    = DateTime.Now,
+                SessionUid     = sessionUid,
+                TerminalId     = _terminalId,
+                OperatorName   = string.IsNullOrWhiteSpace(PosSession.FullName)
+                                    ? PosSession.Username
+                                    : PosSession.FullName,
+            };
+
+            // ── Sesión ────────────────────────────────────────────────────────
+            await using (var cmd = new MySqlConnector.MySqlCommand(SQL_SESSION, conn))
+            {
+                cmd.Parameters.AddWithValue("@sid", sessionUid);
+                await using var rd = await cmd.ExecuteReaderAsync();
+                if (await rd.ReadAsync())
+                {
+                    data.TerminalId   = rd.IsDBNull(rd.GetOrdinal("terminal_id"))   ? _terminalId : rd.GetInt32("terminal_id");
+                    data.OpeningCash  = rd.IsDBNull(rd.GetOrdinal("opening_cash"))  ? 0m : rd.GetDecimal("opening_cash");
+                    data.ClosingCash  = rd.IsDBNull(rd.GetOrdinal("closing_cash"))  ? 0m : rd.GetDecimal("closing_cash");
+                    data.ExpectedCash = rd.IsDBNull(rd.GetOrdinal("expected_cash")) ? 0m : rd.GetDecimal("expected_cash");
+                    data.DiffCash     = rd.IsDBNull(rd.GetOrdinal("diff_cash"))     ? 0m : rd.GetDecimal("diff_cash");
+                    data.OpenedAt     = rd.IsDBNull(rd.GetOrdinal("opened_at"))     ? null : rd.GetDateTime("opened_at");
+                    data.ClosedAt     = rd.IsDBNull(rd.GetOrdinal("closed_at"))     ? null : rd.GetDateTime("closed_at");
+                }
+            }
+
+            // ── Detalle ───────────────────────────────────────────────────────
+            await using (var cmd = new MySqlConnector.MySqlCommand(SQL_DETAIL, conn))
+            {
+                cmd.Parameters.AddWithValue("@sid", sessionUid);
+                await using var rd = await cmd.ExecuteReaderAsync();
+                while (await rd.ReadAsync())
+                {
+                    var cancelled = rd.GetInt32("sale_status_id") == 3;
+                    var rawDate   = rd.IsDBNull(rd.GetOrdinal("sale_datetime"))
+                                        ? DateTime.Now
+                                        : rd.GetDateTime("sale_datetime");
+                    if (rawDate.Year < 2000) rawDate = DateTime.Now;
+
+                    data.Rows.Add(new Reports.CashierCloseoutRow
+                    {
+                        // SafeGetString usa GetValue().ToString() — safe con CHAR(36)→Guid de MySqlConnector
+                        SaleUid      = SafeGetString(rd, "sale_uid"),
+                        SaleDateTime = rawDate,
+                        TicketNumber = SafeGetString(rd, "ticket_number"),
+                        DriverName   = SafeGetString(rd, "driver_name").Trim(),
+                        Plates       = SafeGetString(rd, "plates"),
+                        LicState     = SafeGetString(rd, "lic_state"),
+                        Tractor      = SafeGetString(rd, "tractor"),
+                        Trailer      = SafeGetString(rd, "trailer"),
+                        ServiceName  = SafeGetString(rd, "service_name"),
+                        IsCancelled  = cancelled,
+                        MethodNames  = SafeGetString(rd, "method_names"),
+                        NetAmount    = rd.IsDBNull(rd.GetOrdinal("net_amount"))     ? 0m : rd.GetDecimal("net_amount"),
+                        OperatorName = SafeGetString(rd, "operator_name"),
+                    });
+                }
+            }
+
+            // ── Totales por método ────────────────────────────────────────────
+            await using (var cmd = new MySqlConnector.MySqlCommand(SQL_TOTALS, conn))
+            {
+                cmd.Parameters.AddWithValue("@sid", sessionUid);
+                await using var rd = await cmd.ExecuteReaderAsync();
+                while (await rd.ReadAsync())
+                {
+                    data.TotalsByMethod.Add(new Reports.PaymentTotalRow
+                    {
+                        MethodCode     = SafeGetString(rd, "method_code"),
+                        MethodName     = SafeGetString(rd, "method_name"),
+                        NetTotal       = rd.IsDBNull(rd.GetOrdinal("net_total"))       ? 0m : rd.GetDecimal("net_total"),
+                        CompletedCount = rd.IsDBNull(rd.GetOrdinal("completed_count")) ? 0  : rd.GetInt32("completed_count"),
+                        CancelledCount = rd.IsDBNull(rd.GetOrdinal("cancelled_count")) ? 0  : rd.GetInt32("cancelled_count"),
+                    });
+                }
+            }
+
+            data.CompletedCount    = data.Rows.Count(r => !r.IsCancelled);
+            data.CancelledCount    = data.Rows.Count(r =>  r.IsCancelled);
+            data.TotalTransactions = data.Rows.Count;
+
+            AppendLog($"[Closeout] {dbLabel}: {data.CompletedCount} completadas, " +
+                      $"{data.CancelledCount} canceladas — neto: {data.GrandTotal:C}");
+            return data;
+        }
+
+        /// <summary>
+        /// Carga datos e imprime el corte de caja en el hilo STA (Dispatcher).
+        /// No realiza sync — el caller es responsable de sincronizar después.
+        /// Misma cadena de impresoras que PrintTicketAsync.
+        /// </summary>
+        private async Task PrintCashierCloseoutAsync(string sessionUid, bool useMain)
+        {
+            AppendLog($"[Closeout] sessionUid={TruncateUid(sessionUid)} useMain={useMain}");
+
+            // 1) Cargar datos desde la BD elegida por el caller
+            Reports.CashierCloseoutData? data = null;
+            try
+            {
+                data = await LoadCashierCloseoutDataAsync(sessionUid, useMain);
+            }
+            catch (Exception ex)
+            {
+                var errMsg = $"No se pudieron cargar los datos del corte de caja.\n\n" +
+                             $"DB: {(useMain ? "MAIN" : "LOCAL")}\nError: {ex.Message}";
+                AppendLog($"[Closeout] Error cargando datos: {ex.Message}");
+                MessageBox.Show(errMsg, "Error — Corte de Caja", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            if (data == null)
+            {
+                var errMsg = $"Corte de caja sin datos (DB={( useMain ? "MAIN" : "LOCAL")}).\n\n" +
+                              "Posible causa: connection string inválido o sesión no encontrada.\n" +
+                              "Revisa el log de actividad para más detalles.";
+                AppendLog($"[Closeout] LoadCashierCloseoutDataAsync devolvió null — DB={( useMain ? "MAIN" : "LOCAL")}");
+                MessageBox.Show(errMsg, "Error — Corte de Caja", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            AppendLog($"[Closeout] Load OK rows={data.TotalTransactions} totals={data.GrandTotal:C}");
+
+            // 2) Construir FlowDocument e imprimir garantizando hilo STA
+            await Dispatcher.InvokeAsync(() =>
+            {
+                var doc       = Reports.CashierCloseoutBuilder.Build(data);
+                var paginator = ((IDocumentPaginatorSource)doc).DocumentPaginator;
+                paginator.PageSize = new Size(8.5 * 96, 11.0 * 96);
+
+                // ── Selección de impresora (misma cadena que el ticket) ───────────
+                var server = new LocalPrintServer();
+                PrintQueue? queue = null;
+
+                if (!string.IsNullOrWhiteSpace(_ticketPrinterName))
+                {
+                    try { queue = new PrintQueue(server, _ticketPrinterName); }
+                    catch (Exception ex)
+                    {
+                        AppendLog($"[Closeout] Impresora '{_ticketPrinterName}' no disponible: {ex.Message}");
+                    }
+                }
+
+                if (queue == null)
+                {
+                    try { queue = new PrintQueue(server, "Microsoft Print to PDF"); }
+                    catch { /* no disponible, sigue */ }
+                }
+
+                if (queue == null)
+                    queue = LocalPrintServer.GetDefaultPrintQueue();
+
+                AppendLog($"[Closeout] Printing printer={queue.FullName}");
+
+                try
+                {
+                    PrintQueue.CreateXpsDocumentWriter(queue).Write(paginator);
+                    AppendLog("[Closeout] Print OK");
+                }
+                catch (Exception ex)
+                {
+                    AppendLog($"[Closeout] Print FAILED ex={ex.Message}");
+                    MessageBox.Show(
+                        "No se pudo imprimir el corte de caja:\n" + ex.Message,
+                        "Error de impresión",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }
+            });
+        }
+
+        // Auxiliar reutilizable para truncar UIDs en logs
+        private static string TruncateUid(string uid) =>
+            uid.Length > 16 ? uid[..16] + "…" : uid;
+
         // Permite dinero con 2 decimales: 1234.56 (sin $ mientras editas)
         private static bool IsValidMoneyRaw(string s)
         {

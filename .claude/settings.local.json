@@ -11,7 +11,8 @@
       "Bash(/tmp/inspect_ti.ps1:*)",
       "WebSearch",
       "Bash(/tmp/inspect_cleartablet.ps1:*)",
-      "Bash(dotnet:*)"
+      "Bash(dotnet:*)",
+      "Bash(python3:*)"
     ]
   }
 }
