@@ -8035,9 +8035,11 @@ namespace TruckScale.Pos
                     s.sale_status_id,
                     COALESCE(GROUP_CONCAT(DISTINCT pm.name
                              ORDER BY pm.name SEPARATOR ' + '), '')                AS method_names,
+                    -- COMPLETED: sum RECEIVED(6); if 0 (Business Account=PENDING(5)), fall back to sales.total
+                    -- CANCELLED: negative of VOIDED(7); if none, fall back to -sales.total
                     CASE s.sale_status_id
                         WHEN 2 THEN COALESCE(
-                            SUM(CASE WHEN pay.payment_status_id = 6 THEN pay.amount ELSE 0 END),
+                            NULLIF(SUM(CASE WHEN pay.payment_status_id = 6 THEN pay.amount ELSE 0 END), 0),
                             s.total)
                         WHEN 3 THEN -COALESCE(
                             NULLIF(SUM(CASE WHEN pay.payment_status_id = 7 THEN pay.amount ELSE 0 END), 0),
@@ -8067,13 +8069,18 @@ namespace TruckScale.Pos
                 ORDER BY IF(s.occurred_at = 0, s.created_at, s.occurred_at) ASC;";
 
             // ── SQL: totales por método (neto con signo) ──────────────────────
+            // SQL_TOTALS: net totals grouped by payment method.
+            // COMPLETED: include RECEIVED(6) + Business-Account PENDING(5).
+            // CANCELLED: include VOIDED(7) as negative.
+            // Cancelled sales with no VOIDED rows (edge case) are excluded from method totals
+            // but DO appear in the detail (handled by -sales.total fallback in SQL_DETAIL).
             const string SQL_TOTALS = @"
                 SELECT
                     pm.code AS method_code,
                     pm.name AS method_name,
                     SUM(CASE
-                        WHEN s.sale_status_id = 2 AND pay.payment_status_id = 6 THEN  pay.amount
-                        WHEN s.sale_status_id = 3 AND pay.payment_status_id = 7 THEN -pay.amount
+                        WHEN s.sale_status_id = 2 AND pay.payment_status_id IN (5, 6) THEN  pay.amount
+                        WHEN s.sale_status_id = 3 AND pay.payment_status_id = 7       THEN -pay.amount
                         ELSE 0
                     END)                                                              AS net_total,
                     COUNT(DISTINCT CASE WHEN s.sale_status_id = 2 THEN s.sale_uid END) AS completed_count,
@@ -8081,7 +8088,7 @@ namespace TruckScale.Pos
                 FROM sales s
                 JOIN payments pay
                     ON pay.sale_uid = s.sale_uid
-                    AND ((s.sale_status_id = 2 AND pay.payment_status_id = 6)
+                    AND ((s.sale_status_id = 2 AND pay.payment_status_id IN (5, 6))
                       OR (s.sale_status_id = 3 AND pay.payment_status_id = 7))
                 JOIN payment_methods pm ON pm.method_id = pay.method_id
                 WHERE s.cash_session_uid = @sid
@@ -8179,6 +8186,7 @@ namespace TruckScale.Pos
                         Trailer      = SafeGetString(rd, "trailer"),
                         ServiceName  = SafeGetString(rd, "service_name"),
                         IsCancelled  = cancelled,
+                        StatusLabel  = cancelled ? "CANCELLED" : "COMPLETED",
                         MethodNames  = SafeGetString(rd, "method_names"),
                         NetAmount    = rd.IsDBNull(rd.GetOrdinal("net_amount"))     ? 0m : rd.GetDecimal("net_amount"),
                         OperatorName = SafeGetString(rd, "operator_name"),

@@ -56,9 +56,11 @@ namespace TruckScale.Pos.Reports
         public string   Trailer      { get; set; } = "";
         public string   ServiceName  { get; set; } = "";
         public bool     IsCancelled  { get; set; }
-        /// <summary>Métodos concatenados: "Cash", "Card", "Cash + Card".</summary>
+        /// <summary>"COMPLETED" or "CANCELLED"</summary>
+        public string   StatusLabel  { get; set; } = "COMPLETED";
+        /// <summary>Concatenated payment methods: "Cash", "Card", "Cash + Card".</summary>
         public string   MethodNames  { get; set; } = "";
-        /// <summary>Negativo si IsCancelled = true.</summary>
+        /// <summary>Negative when IsCancelled = true.</summary>
         public decimal  NetAmount    { get; set; }
         public string   OperatorName { get; set; } = "";
     }
