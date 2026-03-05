@@ -8046,7 +8046,7 @@ namespace TruckScale.Pos
                             s.total)
                         ELSE s.total
                     END                                                             AS net_amount,
-                    COALESCE(u.full_name, u.username, '')                           AS operator_name
+                    COALESCE(u.full_name, u.username, CAST(s.operator_id AS CHAR), '') AS operator_name
                 FROM sales s
                 LEFT JOIN tickets t            ON t.sale_uid    = s.sale_uid
                 LEFT JOIN sale_lines sl        ON sl.sale_uid   = s.sale_uid AND sl.seq = 1
@@ -8065,7 +8065,7 @@ namespace TruckScale.Pos
                     sdi.vehicle_plates, sdi.license_state,
                     sdi.tractor_number, sdi.trailer_number,
                     dp.name, p.name, sl.description,
-                    u.full_name, u.username
+                    u.full_name, u.username, s.operator_id
                 ORDER BY IF(s.occurred_at = 0, s.created_at, s.occurred_at) ASC;";
 
             // ── SQL: totales por método (neto con signo) ──────────────────────
@@ -8210,6 +8210,15 @@ namespace TruckScale.Pos
                         CancelledCount = rd.IsDBNull(rd.GetOrdinal("cancelled_count")) ? 0  : rd.GetInt32("cancelled_count"),
                     });
                 }
+            }
+
+            // ── Settings: brand name para el footer ───────────────────────────
+            const string SQL_BRAND = "SELECT value FROM settings WHERE `key` = 'reports.company_name' LIMIT 1;";
+            await using (var cmd = new MySqlConnector.MySqlCommand(SQL_BRAND, conn))
+            {
+                var val = await cmd.ExecuteScalarAsync();
+                if (val != null && val != DBNull.Value)
+                    data.ReportBrand = val.ToString()!;
             }
 
             data.CompletedCount    = data.Rows.Count(r => !r.IsCancelled);

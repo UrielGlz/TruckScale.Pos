@@ -31,17 +31,18 @@ namespace TruckScale.Pos.Reports
         private static readonly SolidColorBrush _canceledFg  = Brushes.DarkRed;
 
         // ── Detail table columns ─────────────────────────────────────────────
-        // Width in GridLength stars (proportional). Total ≈ 8.7 stars.
+        // Width in GridLength stars (proportional). Total ≈ 9.25 stars.
         private static readonly (string Label, double W, TextAlignment Align)[] _cols =
         {
-            ("Time",    0.80, TextAlignment.Left),
-            ("Ticket",  0.85, TextAlignment.Left),
-            ("Driver",  1.80, TextAlignment.Left),
-            ("Plates",  0.85, TextAlignment.Left),
-            ("Service", 1.20, TextAlignment.Left),
-            ("Payment", 1.10, TextAlignment.Left),
-            ("Amount",  0.85, TextAlignment.Right),
-            ("Status",  1.00, TextAlignment.Left),
+            ("Date/Time", 1.40, TextAlignment.Left),
+            ("Ticket",    0.75, TextAlignment.Left),
+            ("Driver",    1.60, TextAlignment.Left),
+            ("Plates",    0.75, TextAlignment.Left),
+            ("Service",   1.10, TextAlignment.Left),
+            ("Payment",   1.00, TextAlignment.Left),
+            ("Amount",    0.85, TextAlignment.Right),
+            ("Status",    0.85, TextAlignment.Left),
+            ("Operator",  0.95, TextAlignment.Left),
         };
 
         // ────────────────────────────────────────────────────────────────────
@@ -103,11 +104,10 @@ namespace TruckScale.Pos.Reports
             var section = new Section { Margin = new Thickness(0, 4, 0, 4) };
 
             // Totals-by-method table
-            var methodTbl = new Table { CellSpacing = 0, Margin = new Thickness(0, 2, 0, 4) };
-            methodTbl.Columns.Add(Col(3.0));   // Payment Method
-            methodTbl.Columns.Add(Col(1.2));   // Collected (Tx)
-            methodTbl.Columns.Add(Col(1.2));   // Cancelled
-            methodTbl.Columns.Add(Col(1.2));   // Net
+            // ~50% del ancho de página — margen derecho empuja la tabla a la izquierda
+            var methodTbl = new Table { CellSpacing = 0, Margin = new Thickness(0, 2, 360, 4) };
+            methodTbl.Columns.Add(Col(2.0));   // Payment Method
+            methodTbl.Columns.Add(Col(1.4));   // Collected Amount
 
             var rg = new TableRowGroup();
             methodTbl.RowGroups.Add(rg);
@@ -116,9 +116,7 @@ namespace TruckScale.Pos.Reports
             var hdr = new TableRow { Background = _headerBg };
             rg.Rows.Add(hdr);
             hdr.Cells.Add(SummaryHdrCell("Payment Method"));
-            hdr.Cells.Add(SummaryHdrCell("Collected (Tx)", TextAlignment.Right));
-            hdr.Cells.Add(SummaryHdrCell("Cancelled",      TextAlignment.Right));
-            hdr.Cells.Add(SummaryHdrCell("Net",            TextAlignment.Right));
+            hdr.Cells.Add(SummaryHdrCell("Collected Amount", TextAlignment.Right));
 
             // Data rows
             foreach (var r in d.TotalsByMethod)
@@ -126,9 +124,7 @@ namespace TruckScale.Pos.Reports
                 var dataRow = new TableRow();
                 rg.Rows.Add(dataRow);
                 dataRow.Cells.Add(DataCell(r.MethodName));
-                dataRow.Cells.Add(DataCell($"{r.CompletedCount} tx",                                       TextAlignment.Right));
-                dataRow.Cells.Add(DataCell(r.CancelledCount > 0 ? $"{r.CancelledCount} void" : "—",       TextAlignment.Right));
-                dataRow.Cells.Add(DataCell(r.NetTotal.ToString("C", _money),                               TextAlignment.Right,
+                dataRow.Cells.Add(DataCell(r.NetTotal.ToString("C", _money), TextAlignment.Right,
                                            bold: true, fg: r.NetTotal < 0 ? _canceledFg : null));
             }
 
@@ -136,9 +132,6 @@ namespace TruckScale.Pos.Reports
             var totRow = new TableRow { Background = _subtotalBg };
             rg.Rows.Add(totRow);
             totRow.Cells.Add(DataCell($"SESSION TOTAL  ({d.TotalTransactions} transactions)", bold: true));
-            totRow.Cells.Add(DataCell($"{d.CompletedCount} completed",                        TextAlignment.Right, bold: true));
-            totRow.Cells.Add(DataCell(d.CancelledCount > 0 ? $"{d.CancelledCount} void" : "—",
-                                      TextAlignment.Right, bold: true));
             totRow.Cells.Add(DataCell(d.GrandTotal.ToString("C", _money), TextAlignment.Right,
                                       bold: true, fg: d.GrandTotal < 0 ? _canceledFg : null));
 
@@ -197,7 +190,7 @@ namespace TruckScale.Pos.Reports
                 var amountFg   = r.IsCancelled ? _canceledFg : (Brush)Brushes.Black;
                 var statusFg   = r.IsCancelled ? _canceledFg : (Brush)Brushes.Black;
 
-                row.Cells.Add(DetailDataCell(r.SaleDateTime.ToString("h:mm tt", CultureInfo.InvariantCulture)));
+                row.Cells.Add(DetailDataCell(r.SaleDateTime.ToString("MM/dd/yyyy h:mm tt", CultureInfo.InvariantCulture)));
                 row.Cells.Add(DetailDataCell(r.TicketNumber));
                 row.Cells.Add(DetailDataCell(r.DriverName));
                 row.Cells.Add(DetailDataCell(PlatesText(r)));
@@ -205,6 +198,7 @@ namespace TruckScale.Pos.Reports
                 row.Cells.Add(DetailDataCell(r.MethodNames));
                 row.Cells.Add(DetailDataCell(r.NetAmount.ToString("C", _money), TextAlignment.Right, fg: amountFg));
                 row.Cells.Add(DetailDataCell(r.StatusLabel,                     TextAlignment.Left,  fg: statusFg, bold: r.IsCancelled));
+                row.Cells.Add(DetailDataCell(r.OperatorName));
             }
 
             // Footer totals row
@@ -230,7 +224,7 @@ namespace TruckScale.Pos.Reports
 
         // ── Footer ───────────────────────────────────────────────────────────
         private static Block BuildFooter(CashierCloseoutData d) =>
-            Para($"Generated: {d.GeneratedAt:MM/dd/yyyy h:mm tt} — TruckScale POS",
+            Para($"Generated: {d.GeneratedAt:MM/dd/yyyy h:mm tt} — {d.ReportBrand}",
                  8, center: true, margin: new Thickness(0, 4, 0, 0));
 
         // ────────────────────────────────────────────────────────────────────
@@ -305,7 +299,7 @@ namespace TruckScale.Pos.Reports
         {
             Padding         = new Thickness(4, 3, 4, 3),
             BorderBrush     = Brushes.DarkGray,
-            BorderThickness = new Thickness(0, 0, 0, 0.5)
+            BorderThickness = new Thickness(0, 0, 0.3, 0.5)
         };
 
         private static TableCell DataCell(string text,
@@ -320,7 +314,7 @@ namespace TruckScale.Pos.Reports
         {
             Padding         = new Thickness(4, 2, 4, 2),
             BorderBrush     = _borderColor,
-            BorderThickness = new Thickness(0, 0, 0, 0.5)
+            BorderThickness = new Thickness(0, 0, 0.3, 0.5)
         };
 
         // ── Detail table cells ────────────────────────────────────────────────

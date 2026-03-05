@@ -14,6 +14,8 @@ namespace TruckScale.Pos.Reports
         public string    OperatorName   { get; set; } = "";   // quien imprime
         public int       TerminalId     { get; set; }
         public string    SessionUid     { get; set; } = "";
+        /// <summary>Nombre de la app/empresa para el footer. Lee de settings key 'reports.company_name'.</summary>
+        public string    ReportBrand    { get; set; } = "TruckScale POS";
 
         // ── Info de la sesión de caja ─────────────────────────────────────
         public DateTime? OpenedAt      { get; set; }
