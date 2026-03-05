@@ -4024,7 +4024,9 @@ namespace TruckScale.Pos
 
                     int operatorId = GetCurrentOperatorId();
                     
-                    await EnsureCashSessionExistsOnThisDbAsync(conn, (MySqlTransaction)tx, siteId, terminalId, operatorId);
+                    // Fix relevo: usar el opener original de la sesión, no el operador activo,
+                    // para que LOCAL_DB quede consistente con MAIN_DB en auditoría.
+                    await EnsureCashSessionExistsOnThisDbAsync(conn, (MySqlTransaction)tx, siteId, terminalId, _cashSessionOpenedByUserId);
 
                     // ========== INSERT EN sales ==========
                     const string SQL_SALE = @"INSERT INTO sales
@@ -4380,6 +4382,7 @@ namespace TruckScale.Pos
                 ins.Parameters.AddWithValue("@site", siteId);
                 ins.Parameters.AddWithValue("@term", terminalId);
                 ins.Parameters.AddWithValue("@by", userId);
+                AppendLog($"[CashSession] Local ensure: opened_by_user_id used = {userId} (original opener)");
                 ins.Parameters.AddWithValue("@at", _cashSessionOpenedAt == default ? DateTime.Now : _cashSessionOpenedAt);
                 ins.Parameters.AddWithValue("@cash", _openingCash);
                 ins.Parameters.AddWithValue("@cmt", "Auto-created for offline continuity");
@@ -7482,27 +7485,13 @@ namespace TruckScale.Pos
             _cashSessionOpenedAt = open.OpenedAt;
             _openingCash = open.OpeningCash;
 
-            if (open.OpenedByUserId != CurrentUserId)
-            {
-                // ==========================================================
-                // BLOQUEO POR USUARIO (regla actual):
-                // - Sí deja pasar el login
-                // - Pero NO permitimos operar POS si la caja abierta
-                //   fue creada por otro usuario.
-                // - Se muestra overlay con SOLO "Log off".
-                // ==========================================================
-                SetPosEnabled(false);
+            // Relevo de turno: cualquier operador puede tomar una caja abierta del mismo terminal.
+            // Trazabilidad: sales.operator_id registra quién vendió; cash_sessions guarda
+            // opened_by_user_id / closed_by_user_id para auditoría de apertura/cierre.
+            // TODO: CashSessionBlocker en XAML ya no aplica — dead code, limpiar en próxima iteración.
+            AppendLog($"[CashSession] Open session found uid={TruncateUid(open.SessionUid)} " +
+                      $"openedBy={open.OpenedByUserId} currentUser={CurrentUserId} (takeover allowed)");
 
-                CashSessionBlockerMessage.Text =
-                    $"A cash session is already open by another user (user_id={open.OpenedByUserId}).\n\n" +
-                    $"Only that user can continue and close the session.\n\n" +
-                    $"Please log off and ask the correct user to sign in.";
-
-                CashSessionBlocker.Visibility = Visibility.Visible;
-                return;
-            }
-
-            // Sesión abierta y es del user actual
             CashSessionBlocker.Visibility = Visibility.Collapsed;
             SetPosEnabled(true);
         }
