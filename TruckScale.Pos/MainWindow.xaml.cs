@@ -386,6 +386,8 @@ namespace TruckScale.Pos
         private void StartReader()
         {
             var portName = _scaleComPort; // viene de BD
+            _simCts?.Cancel();
+            _simCts = null;
 
             try
             {
@@ -439,8 +441,35 @@ namespace TruckScale.Pos
                 throw;
             }
         }
+        private readonly object _scaleLock = new();
 
+        private void StopScale()
+        {
+            lock (_scaleLock)
+            {
+                // Stop simulated loop
+                try { _simCts?.Cancel(); } catch { }
+                _simCts = null;
 
+                // Stop serial port
+                try
+                {
+                    if (_port != null)
+                    {
+                        _port.DataReceived -= OnDataReceived;
+                        if (_port.IsOpen) _port.Close();
+                        _port.Dispose();
+                        _port = null;
+                    }
+                }
+                catch { }
+            }
+        }
+        protected override void OnClosed(EventArgs e)
+        {
+            StopScale();
+            base.OnClosed(e);
+        }
         /// <summary>
         /// Conexión automática al arrancar (real → si falla, simulado).
         /// </summary>
@@ -449,8 +478,8 @@ namespace TruckScale.Pos
             try
             {
                 AppendLog($"[Boot] Trying to open scale on {_scaleComPort}…");
-                //StartReader(); // ya no recibe parámetro
-               StartSimulatedReader(); //TODO UG | IMPORTANTE QUITAR ESTO
+                StartReader(); // ya no recibe parámetro
+               //StartSimulatedReader(); //TODO UG | IMPORTANTE QUITAR ESTO
 
             }
             catch (Exception ex)
@@ -521,24 +550,46 @@ namespace TruckScale.Pos
             }
         }
 
+        //private void OnDataReceived(object sender, SerialDataReceivedEventArgs e)
+        //{
+        //    try
+        //    {
+        //        while (_port.BytesToRead > 0)
+        //        {
+        //            var line = _port.ReadLine();
+        //            if (!string.IsNullOrWhiteSpace(line))
+        //            {
+        //                //CaptureRaw1(line);
+        //                ProcessLine2(line);
+        //            }
+        //        }
+        //    }
+        //    catch (TimeoutException) { }
+        //    catch (Exception)
+        //    {
+        //        // log si quieres
+        //    }
+        //}
         private void OnDataReceived(object sender, SerialDataReceivedEventArgs e)
         {
+            SerialPort? p;
+            lock (_scaleLock) p = _port;
+            if (p == null) return;
+
             try
             {
-                while (_port.BytesToRead > 0)
+                while (p.BytesToRead > 0)
                 {
-                    var line = _port.ReadLine();
+                    var line = p.ReadLine();
                     if (!string.IsNullOrWhiteSpace(line))
-                    {
-                        //CaptureRaw1(line);
                         ProcessLine2(line);
-                    }
                 }
             }
             catch (TimeoutException) { }
-            catch (Exception)
+            catch (ObjectDisposedException) { } // se cerró durante logout
+            catch (Exception ex)
             {
-                // log si quieres
+                AppendLog($"[Scale] DataReceived error: {ex.Message}");
             }
         }
 
@@ -2662,16 +2713,19 @@ namespace TruckScale.Pos
         // ===== DB init en Window_Loaded =====
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
-            TodayTxGrid.ItemsSource = _todayTx;
-            await EnsureCashSessionAsync();
-
-            // === Config general (incluye impresora) ===
-            // === Config general: conexiones de BD ===
             ConfigManager.Load();
-            UpdateOkNewButtonsEnabled(); // _hasAcceptedWeight inicia false => OK enabled, New disabled
 
             // === Config de tickets: desde tabla settings en BD ===
             await LoadTicketSettingsFromDbAsync();
+            AppendLog($"[Config] scale.com='{_scaleComPort}'");
+
+            TodayTxGrid.ItemsSource = _todayTx;
+            await EnsureCashSessionAsync();
+
+            // === Config general (incluye impresora) ===         
+            UpdateOkNewButtonsEnabled(); // _hasAcceptedWeight inicia false => OK enabled, New disabled
+
+          
 
             var dbCfg = new DatabaseConfig();
             var factory = new MySqlConnectionFactory(dbCfg);
@@ -6651,6 +6705,7 @@ namespace TruckScale.Pos
         /// </summary>
         private async Task LoadTicketSettingsFromDbAsync()
         {
+            ConfigManager.Load();
             const string SQL = @"
                 SELECT `key`, `value`
                 FROM settings
@@ -7769,6 +7824,8 @@ namespace TruckScale.Pos
 
         private void Logout()
         {
+            StopScale();
+
             PosSession.UserId = 0;
             PosSession.Username = "";
             PosSession.FullName = "";

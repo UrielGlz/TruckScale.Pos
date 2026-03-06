@@ -9,6 +9,8 @@
   </PropertyGroup>
   <ItemGroup>
     <None Remove="Resources\logo.jpeg" />
+    <None Remove="Resources\logo.png" />
+    <None Remove="Resources\TexasSeal.png" />
   </ItemGroup>
 
 
@@ -39,10 +41,10 @@
     <!-- (NO instales paquetes WinUI/Uno) -->
   </ItemGroup>
 
+
   <ItemGroup>
-    <Resource Include="Resources\logo.jpeg">
-      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-    </Resource>
+    <Resource Include="Resources\logo.png" />
+    <Resource Include="Resources\TexasSeal.png" />
   </ItemGroup>
 
   <ItemGroup>

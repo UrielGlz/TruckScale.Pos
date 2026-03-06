@@ -31,8 +31,13 @@
                         Margin="0 0 24 0">
 
                 <!-- LOGO -->
-                <Border Width="150" Height="150" CornerRadius="12" Margin="0 0 0 24" Background="#E0E0E0" Padding="12">
-                                <Image Source="Resources/logo.jpeg" Stretch="Uniform" SnapsToDevicePixels="True" />
+
+
+
+                <!-- Título principal -->
+                <!-- LOGO -->
+                <Border Width="248" Height="150" CornerRadius="12" Background="#E0E0E0" Padding="12">
+                    <Image Source="Resources/logo.png" Stretch="Uniform" SnapsToDevicePixels="True" />
                 </Border>
 
 
@@ -52,14 +57,6 @@
                         CornerRadius="2"
                         Background="{DynamicResource PrimaryHueMidBrush}"
                         Margin="0 0 0 16" />
-
-                <!-- Descripción corta -->
-                <!--<TextBlock Text="Capture axle weights, register drivers and issue tickets from a single, focused screen."
-                           FontSize="13"
-                           TextWrapping="Wrap"
-                           Foreground="{DynamicResource MaterialDesignBodySecondary}"
-                           MaxWidth="320"
-                           Margin="0 0 0 24" />-->
 
                 <!-- Nombre del sitio / planta -->
                 <Border BorderThickness="1"

@@ -9,7 +9,7 @@ namespace TruckScale.Pos.Reports
         // ── Encabezado ────────────────────────────────────────────────────
         public string    CompanyName    { get; set; } = "McAllen Foreign Trade Zone";
         public string    CompanyAddress { get; set; } = "6401 S. 33rd Street · McAllen, Texas 78503";
-        public string    CompanyPhone   { get; set; } = "(956) 682-4306 · (956) 882-9111 Fax";
+        public string    CompanyPhone   { get; set; } = "(956) 682-4306";//· (956) 882-9111 Fax
         public DateTime  GeneratedAt    { get; set; } = DateTime.Now;
         public string    OperatorName   { get; set; } = "";   // quien imprime
         public int       TerminalId     { get; set; }
