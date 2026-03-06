@@ -49,6 +49,9 @@ namespace TruckScale.Pos.Tickets
 
         public bool IsReweigh { get; set; } = false;
 
+        // ticket_number de la venta original (viene de tickets.ticket_number via sale_uid; vacío si no es reweigh)
+        public string? OriginalTicketNumber { get; set; }
+
         public string TicketUid { get; set; } = "";
 
         // ── Firma digital ───────────────────────────────────────────────────────

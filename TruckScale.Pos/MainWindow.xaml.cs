@@ -5403,7 +5403,8 @@ namespace TruckScale.Pos
                 ax.peso_total,
 
                 t.ticket_number,
-                t.ticket_uid
+                t.ticket_uid,
+                t_orig.ticket_number AS original_ticket_number
             FROM sales s
             JOIN sale_lines sl
                 ON sl.sale_uid = s.sale_uid AND sl.seq = 1
@@ -5411,13 +5412,15 @@ namespace TruckScale.Pos
                 ON p.product_id = sl.product_id
             LEFT JOIN sale_driver_info sdi
                 ON sdi.sale_uid = s.sale_uid
-            JOIN driver_products dp 
+            JOIN driver_products dp
 			    ON sdi.driver_product_id = dp.product_id
             LEFT JOIN scale_session_axles ax
                 ON ax.uuid_weight = sdi.match_key
                AND sdi.identify_by = 'weight_uuid'
             LEFT JOIN tickets t
                 ON t.sale_uid = s.sale_uid
+            LEFT JOIN tickets t_orig
+                ON t_orig.sale_uid = s.reweigh_of_sale_id
             WHERE s.sale_uid = @uid
             ORDER BY t.ticket_id DESC
             LIMIT 1;";
@@ -5485,6 +5488,8 @@ namespace TruckScale.Pos
 
                 var prodCode = SafeGetString(rd, "product_code");
                 data.IsReweigh = string.Equals(prodCode, "REWEIGH", StringComparison.OrdinalIgnoreCase);
+
+                data.OriginalTicketNumber = SafeGetString(rd, "original_ticket_number");
 
                 var currency = SafeGetString(rd, "currency");
                 if (string.IsNullOrWhiteSpace(currency))
