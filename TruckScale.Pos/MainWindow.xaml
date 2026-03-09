@@ -433,8 +433,8 @@
                         <!-- Izquierda: Live weight -->
                         <ColumnDefinition Width="*"/>
                         <!-- Centro: formulario -->
-                        <ColumnDefinition x:Name="RightColDef" Width="260"/>
-                        <!-- Derecha: quick actions + log (más angosta) -->
+                        <ColumnDefinition x:Name="RightColDef" Width="200"/>
+                        <!-- Derecha: log (más angosta) -->
                     </Grid.ColumnDefinitions>
 
                     <!-- ===== COLUMNA IZQUIERDA ===== -->
@@ -442,7 +442,7 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto" MinHeight="491"/>
-                            <RowDefinition Height="Auto" MinHeight="61"/>
+                            <RowDefinition Height="*" MinHeight="100"/>
                         </Grid.RowDefinitions>
 
                         <!-- MONITOR -->
@@ -498,79 +498,99 @@
                             </StackPanel>
                         </md:Card>
 
-                        <!-- STATUS CARD -->
-                        <md:Card Grid.Row="2" x:Name="StatusCard" Padding="40" Margin="0,8,0,0">
-                            <md:Card.Resources>
-                                <SolidColorBrush x:Key="StIdleBg" Color="#ECEFF1"/>
-                                <SolidColorBrush x:Key="StIdleBr" Color="#90A4AE"/>
-                                <SolidColorBrush x:Key="StIdleFg" Color="#37474F"/>
+                        <!-- STATUS + LOGS (inferior izquierdo) -->
+                        <Grid Grid.Row="2" Margin="0,8,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <!-- status compacto -->
+                                <RowDefinition Height="*"/>
+                                <!-- log viewer -->
+                            </Grid.RowDefinitions>
 
-                                <SolidColorBrush x:Key="StConnectedBg" Color="#E8F5E9"/>
-                                <SolidColorBrush x:Key="StConnectedBr" Color="#2E7D32"/>
-                                <SolidColorBrush x:Key="StConnectedFg" Color="#1B5E20"/>
+                            <!-- Status strip compacto (mismo comportamiento, menor padding) -->
+                            <md:Card Grid.Row="0" x:Name="StatusCard" Padding="10,6" Margin="0,0,0,6">
+                                <md:Card.Resources>
+                                    <SolidColorBrush x:Key="StIdleBg" Color="#ECEFF1"/>
+                                    <SolidColorBrush x:Key="StIdleBr" Color="#90A4AE"/>
+                                    <SolidColorBrush x:Key="StIdleFg" Color="#37474F"/>
 
-                                <SolidColorBrush x:Key="StConnectingBg" Color="#FFF8E1"/>
-                                <SolidColorBrush x:Key="StConnectingBr" Color="#F9A825"/>
-                                <SolidColorBrush x:Key="StConnectingFg" Color="#5D4037"/>
+                                    <SolidColorBrush x:Key="StConnectedBg" Color="#E8F5E9"/>
+                                    <SolidColorBrush x:Key="StConnectedBr" Color="#2E7D32"/>
+                                    <SolidColorBrush x:Key="StConnectedFg" Color="#1B5E20"/>
 
-                                <SolidColorBrush x:Key="StErrorBg" Color="#FFEBEE"/>
-                                <SolidColorBrush x:Key="StErrorBr" Color="#C62828"/>
-                                <SolidColorBrush x:Key="StErrorFg" Color="#B71C1C"/>
-                            </md:Card.Resources>
+                                    <SolidColorBrush x:Key="StConnectingBg" Color="#FFF8E1"/>
+                                    <SolidColorBrush x:Key="StConnectingBr" Color="#F9A825"/>
+                                    <SolidColorBrush x:Key="StConnectingFg" Color="#5D4037"/>
 
-                            <md:Card.Style>
-                                <Style TargetType="{x:Type md:Card}">
-                                    <Setter Property="Background" Value="{DynamicResource MaterialDesignCardBackground}"/>
-                                    <Setter Property="BorderBrush" Value="{DynamicResource MaterialDesignDivider}"/>
-                                    <Setter Property="BorderThickness" Value="1"/>
-                                    <Setter Property="md:ElevationAssist.Elevation" Value="Dp2"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding ElementName=lblTemp, Path=Content}" Value="Waiting">
-                                            <Setter Property="Background"  Value="{StaticResource StIdleBg}"/>
-                                            <Setter Property="BorderBrush" Value="{StaticResource StIdleBr}"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding ElementName=lblTemp, Path=Content}" Value="Connected">
-                                            <Setter Property="Background"  Value="{StaticResource StConnectedBg}"/>
-                                            <Setter Property="BorderBrush" Value="{StaticResource StConnectedBr}"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding ElementName=lblTemp, Path=Content}" Value="Connecting">
-                                            <Setter Property="Background"  Value="{StaticResource StConnectingBg}"/>
-                                            <Setter Property="BorderBrush" Value="{StaticResource StConnectingBr}"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding ElementName=lblTemp, Path=Content}" Value="Error">
-                                            <Setter Property="Background"  Value="{StaticResource StErrorBg}"/>
-                                            <Setter Property="BorderBrush" Value="{StaticResource StErrorBr}"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </md:Card.Style>
+                                    <SolidColorBrush x:Key="StErrorBg" Color="#FFEBEE"/>
+                                    <SolidColorBrush x:Key="StErrorBr" Color="#C62828"/>
+                                    <SolidColorBrush x:Key="StErrorFg" Color="#B71C1C"/>
+                                </md:Card.Resources>
 
-                            <Label x:Name="lblTemp"
-                                   Content="Waiting"
-                                   HorizontalContentAlignment="Center"
-                                   FontSize="24"
-                                   FontWeight="SemiBold">
-                                <Label.Style>
-                                    <Style TargetType="Label">
-                                        <Setter Property="Foreground" Value="{DynamicResource Foreground}"/>
+                                <md:Card.Style>
+                                    <Style TargetType="{x:Type md:Card}">
+                                        <Setter Property="Background" Value="{DynamicResource MaterialDesignCardBackground}"/>
+                                        <Setter Property="BorderBrush" Value="{DynamicResource MaterialDesignDivider}"/>
+                                        <Setter Property="BorderThickness" Value="1"/>
+                                        <Setter Property="md:ElevationAssist.Elevation" Value="Dp2"/>
                                         <Style.Triggers>
-                                            <DataTrigger Binding="{Binding Content, RelativeSource={RelativeSource Self}}" Value="Waiting">
-                                                <Setter Property="Foreground" Value="{StaticResource StIdleFg}"/>
+                                            <DataTrigger Binding="{Binding ElementName=lblTemp, Path=Content}" Value="Waiting">
+                                                <Setter Property="Background"  Value="{StaticResource StIdleBg}"/>
+                                                <Setter Property="BorderBrush" Value="{StaticResource StIdleBr}"/>
                                             </DataTrigger>
-                                            <DataTrigger Binding="{Binding Content, RelativeSource={RelativeSource Self}}" Value="Connected">
-                                                <Setter Property="Foreground" Value="{StaticResource StConnectedFg}"/>
+                                            <DataTrigger Binding="{Binding ElementName=lblTemp, Path=Content}" Value="Connected">
+                                                <Setter Property="Background"  Value="{StaticResource StConnectedBg}"/>
+                                                <Setter Property="BorderBrush" Value="{StaticResource StConnectedBr}"/>
                                             </DataTrigger>
-                                            <DataTrigger Binding="{Binding Content, RelativeSource={RelativeSource Self}}" Value="Connecting">
-                                                <Setter Property="Foreground" Value="{StaticResource StConnectingFg}"/>
+                                            <DataTrigger Binding="{Binding ElementName=lblTemp, Path=Content}" Value="Connecting">
+                                                <Setter Property="Background"  Value="{StaticResource StConnectingBg}"/>
+                                                <Setter Property="BorderBrush" Value="{StaticResource StConnectingBr}"/>
                                             </DataTrigger>
-                                            <DataTrigger Binding="{Binding Content, RelativeSource={RelativeSource Self}}" Value="Error">
-                                                <Setter Property="Foreground" Value="{StaticResource StErrorFg}"/>
+                                            <DataTrigger Binding="{Binding ElementName=lblTemp, Path=Content}" Value="Error">
+                                                <Setter Property="Background"  Value="{StaticResource StErrorBg}"/>
+                                                <Setter Property="BorderBrush" Value="{StaticResource StErrorBr}"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
-                                </Label.Style>
-                            </Label>
-                        </md:Card>
+                                </md:Card.Style>
+
+                                <Label x:Name="lblTemp"
+                                       Content="Waiting"
+                                       HorizontalContentAlignment="Center"
+                                       FontSize="14"
+                                       FontWeight="SemiBold">
+                                    <Label.Style>
+                                        <Style TargetType="Label">
+                                            <Setter Property="Foreground" Value="{DynamicResource Foreground}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Content, RelativeSource={RelativeSource Self}}" Value="Waiting">
+                                                    <Setter Property="Foreground" Value="{StaticResource StIdleFg}"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Content, RelativeSource={RelativeSource Self}}" Value="Connected">
+                                                    <Setter Property="Foreground" Value="{StaticResource StConnectedFg}"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Content, RelativeSource={RelativeSource Self}}" Value="Connecting">
+                                                    <Setter Property="Foreground" Value="{StaticResource StConnectingFg}"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Content, RelativeSource={RelativeSource Self}}" Value="Error">
+                                                    <Setter Property="Foreground" Value="{StaticResource StErrorFg}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Label.Style>
+                                </Label>
+                            </md:Card>
+
+                            <!-- Log viewer (reubicado desde columna derecha) -->
+                            <TextBox Grid.Row="1"
+                                     x:Name="txtLogTemp"
+                                     TextWrapping="Wrap"
+                                     Text="TextBox"
+                                     VerticalScrollBarVisibility="Auto"
+                                     FontSize="10"
+                                     Padding="4"
+                                     Background="{DynamicResource MaterialDesignCardBackground}"/>
+                        </Grid>
 
                         <Label x:Name="lblEstado"
                                Content="Label"
@@ -585,9 +605,11 @@
                                Width="284"/>
                     </Grid>
 
-                    <!-- ===== COLUMNA CENTRAL ===== -->
-                    <Grid Grid.Column="1" x:Name="MidCol" Margin="0,0,16,0">
+                    <!-- ===== COLUMNA CENTRAL (ahora ocupa cols 1+2) ===== -->
+                    <Grid Grid.Column="1" Grid.ColumnSpan="2" x:Name="MidCol" Margin="0">
                         <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <!-- Find Driver -->
                             <RowDefinition Height="Auto"/>
                             <!-- Service + resumen -->
                             <RowDefinition Height="Auto"/>
@@ -596,8 +618,40 @@
                             <!-- Denominations + Driver summary -->
                         </Grid.RowDefinitions>
 
-                        <!-- ROW 0: Service + Payment summary + Payments received + Balance -->
-                        <md:Card Grid.Row="0" Margin="0,0,0,16">
+                        <!-- ROW 0: Find Driver (movido desde columna derecha) -->
+                        <md:Card Grid.Row="0" Padding="16" Margin="0,0,0,16">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Border Width="22"
+                                            Height="22"
+                                            CornerRadius="6"
+                                            Background="{DynamicResource PrimaryHueMidBrush}"
+                                            BorderBrush="{DynamicResource PrimaryHueMidBrush}"
+                                            BorderThickness="2"
+                                            Margin="0,0,8,0">
+                                        <TextBlock Text="1"
+                                                   Foreground="Red"
+                                                   FontWeight="SemiBold"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   TextAlignment="Center"/>
+                                    </Border>
+                                    <TextBlock Text="{DynamicResource QuickActions}"
+                                               FontWeight="SemiBold"
+                                               VerticalAlignment="Center"/>
+                                </StackPanel>
+                                <Button x:Name="RegisterDriverButton"
+                                        Style="{StaticResource PrimaryRaised}"
+                                        Content="Find driver"
+                                        Margin="0,12,0,0"
+                                        FontSize="18"
+                                        MinHeight="48"
+                                        Click="RegisterDriver_Click"/>
+                            </StackPanel>
+                        </md:Card>
+
+                        <!-- ROW 1: Service + Payment summary + Payments received + Balance -->
+                        <md:Card Grid.Row="1" Margin="0,0,0,16">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="2.2*"/>
@@ -774,8 +828,8 @@
                             </Grid>
                         </md:Card>
 
-                        <!-- ROW 1: Payment method + DONE -->
-                        <md:Card Grid.Row="1"
+                        <!-- ROW 2: Payment method + DONE -->
+                        <md:Card Grid.Row="2"
                                  MinHeight="130"
                                  Margin="0,0,0,16"
                                  Padding="18,18,18,18">
@@ -873,8 +927,8 @@
 
                             </Grid>
                         </md:Card>
-                        <!-- ROW 2: Denominations (mitad) + Driver summary (mitad) -->
-                        <Grid Grid.Row="2" Margin="0,16,0,0">
+                        <!-- ROW 3: Denominations (mitad) + Driver summary (mitad) -->
+                        <Grid Grid.Row="3" Margin="0,16,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="*"/>
@@ -1022,45 +1076,8 @@
                         </Grid>
                     </Grid>
 
-                    <!-- ===== COLUMNA DERECHA (más pequeña) ===== -->
-                    <StackPanel Grid.Column="2" x:Name="RightCol">
-                        <md:Card Padding="16" Margin="0,0,0,12">
-                            <StackPanel>
-                                <!-- Header con paso -->
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Border Width="22"
-        Height="22"
-        CornerRadius="6"
-        Background="{DynamicResource PrimaryHueMidBrush}"
-        BorderBrush="{DynamicResource PrimaryHueMidBrush}"
-        BorderThickness="2"
-        Margin="0,0,8,0">
-                                        <TextBlock Text="1"
-               Foreground="Red"
-               FontWeight="SemiBold"
-               HorizontalAlignment="Center"
-               VerticalAlignment="Center"
-               TextAlignment="Center"/>
-                                    </Border>
-
-
-                                    <TextBlock Text="{DynamicResource QuickActions}"
-                   FontWeight="SemiBold"
-                   VerticalAlignment="Center"/>
-                                </StackPanel>
-
-                                <Button x:Name="RegisterDriverButton" Style="{StaticResource PrimaryRaised}" Content="Find driver" Margin="0,12,0,8" FontSize="18" MinHeight="48" Click="RegisterDriver_Click"/>
-                            </StackPanel>
-
-                        </md:Card>
-
-                        <TextBox x:Name="txtLogTemp"
-                                 TextWrapping="Wrap"
-                                 Text="TextBox"
-                                 Width="Auto"
-                                 Height="309"
-                                 VerticalScrollBarVisibility="Auto"/>
-                    </StackPanel>
+                    <!-- ===== COLUMNA DERECHA (reservada para code-behind responsive; sin contenido visual) ===== -->
+                    <StackPanel Grid.Column="2" x:Name="RightCol"/>
 
                     <!-- BLOQUEO UI (cubre columnas 1 y 2) -->
                     <Grid Grid.Column="1" Grid.ColumnSpan="2" x:Name="UiBlocker" Visibility="Visible" IsHitTestVisible="True">

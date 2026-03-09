@@ -2731,17 +2731,17 @@ namespace TruckScale.Pos
             var factory = new MySqlConnectionFactory(dbCfg);
             _logger = new WeightLogger(factory);
 
-            try
-            {
-                using var _ = await factory.CreateOpenConnectionAsync();
-            }
-            catch (Exception ex)
-            {
-                WarnAndLog("UI_BIND_ERROR",
-                    "No se pudo preparar la lista de recientes.",
-                    ex.ToString(),
-                    "RecientesList.ItemsSource");
-            }
+            //try
+            //{
+            //    using var _ = await factory.CreateOpenConnectionAsync();
+            //}
+            //catch (Exception ex)
+            //{
+            //    WarnAndLog("UI_BIND_ERROR",
+            //        "No se pudo preparar la lista de recientes.",
+            //        ex.ToString(),
+            //        "RecientesList.ItemsSource");
+            //}
 
             InitSummaryUi();
 
