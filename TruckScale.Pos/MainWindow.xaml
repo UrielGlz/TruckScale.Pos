@@ -636,7 +636,7 @@
                                                    VerticalAlignment="Center"
                                                    TextAlignment="Center"/>
                                     </Border>
-                                    <TextBlock Text="{DynamicResource QuickActions}"
+                                    <TextBlock Text="Driver details"
                                                FontWeight="SemiBold"
                                                VerticalAlignment="Center"/>
                                 </StackPanel>
@@ -1418,7 +1418,7 @@
                 </md:DialogHost>
 
                 <md:DialogHost x:Name="TodayTxHost" Grid.RowSpan="99" Grid.ColumnSpan="99" Panel.ZIndex="120">
-                     
+
                     <md:DialogHost.DialogContent>
                         <Grid Width="980" HorizontalAlignment="Center" VerticalAlignment="Center">
                             <md:Card Padding="18" md:ElevationAssist.Elevation="Dp3" UniformCornerRadius="16">
@@ -1625,7 +1625,7 @@
                     </md:DialogHost.DialogContent>
                 </md:DialogHost>
                 <!--DialogHost para pedir Void Reason (dropdown)-->
-               
+
                 <md:DialogHost x:Name="VoidReasonHost" Grid.RowSpan="99" Grid.ColumnSpan="99" Panel.ZIndex="130">
                     <md:DialogHost.DialogContent>
                         <Grid Width="460" HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -1857,7 +1857,7 @@
                         <Setter Property="FontSize" Value="16"/>
                         <Setter Property="MinHeight" Value="46"/>
                         <Setter Property="Padding" Value="12,10"/>
-                        
+
                         <Setter Property="md:HintAssist.Foreground" Value="#111111"/>
                     </Style>
 
@@ -1866,7 +1866,7 @@
                         <Setter Property="FontSize" Value="16"/>
                         <Setter Property="MinHeight" Value="46"/>
                         <Setter Property="Padding" Value="10,6"/>
-                       
+
                         <Setter Property="md:HintAssist.Foreground" Value="#111111"/>
                     </Style>
 
