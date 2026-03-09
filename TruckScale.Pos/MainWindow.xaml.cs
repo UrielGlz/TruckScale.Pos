@@ -1114,7 +1114,7 @@ namespace TruckScale.Pos
 
             _reweighServiceReady = false;
      
-            lblModalName.Text = "Find Driver";
+            lblModalName.Text = "Search driver";
 
 
             // 1) Estado de chofer y toggles
@@ -1168,7 +1168,7 @@ namespace TruckScale.Pos
 
             try { RootDialog.IsOpen = false; } catch { }
             // Restaurar texto del botón a "Find driver" para la siguiente transacción
-            try { RegisterDriverButton.Content = "Find Driver"; } catch { }
+            try { RegisterDriverButton.Content = "Search driver"; } catch { }
 
             //try { ProductoRegCombo.SelectedIndex = -1; } catch { }
             try { ProductoRegText.SelectedIndex = -1; } catch { }
@@ -5259,7 +5259,7 @@ namespace TruckScale.Pos
             }
             else
             {
-                lblModalName.Text = "Find Driver";
+                lblModalName.Text = "Search driver";
                 FillDriverFormFromInfoNew(info);
                 DriverPhoneStatusText.Text = $"Driver loaded: {info.First} {info.Last}";
                 DriverPhoneStatusText.Visibility = Visibility.Visible;
