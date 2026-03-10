@@ -7169,7 +7169,10 @@ namespace TruckScale.Pos
                 JOIN payment_methods pm ON pm.method_id = p.method_id
                 WHERE DATE(s.created_at) = CURDATE()
                   AND s.operator_id = @op
-                ORDER BY t.printed_at DESC;";
+                ORDER BY t.printed_at DESC
+                LIMIT 5;";
+
+
 
             await using var cmd = new MySqlCommand(SQL, conn);
             cmd.Parameters.AddWithValue("@op", operatorId);
