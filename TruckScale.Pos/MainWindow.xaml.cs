@@ -7348,25 +7348,21 @@ namespace TruckScale.Pos
                     return;
                 }
 
-                var mainConn = GetPrimaryConn();
-                if (string.IsNullOrWhiteSpace(mainConn))
-                    throw new InvalidOperationException("MAIN_DB is not configured.");
+                int userId = GetCurrentOperatorId();
+                bool usedLocal = false;
 
-                await using var conn = new MySqlConnection(mainConn);
-                await conn.OpenAsync();
-
+                await using var conn = await OpenMainThenLocalAsync("VOID", ul => usedLocal = ul);
                 await using var tx = await conn.BeginTransactionAsync();
 
-                int userId = GetCurrentOperatorId();
-
                 // 1) sales -> CANCELLED + reason + voided_at/by
-                const string SQL_SALE = @"UPDATE sales
-                    SET sale_status_id = @st,
-                        void_reason_id = @rid,
-                        voided_at = NOW(),
-                        voided_by_user = @uid
-                    WHERE sale_uid = @suid
-                      AND sale_status_id = @mustCompleted;";
+                const string SQL_SALE = @"
+                    UPDATE sales
+                       SET sale_status_id = @st,
+                           void_reason_id = @rid,
+                           voided_at = NOW(),
+                           voided_by_user = @uid
+                     WHERE sale_uid = @suid
+                       AND sale_status_id = @mustCompleted;";
 
                 await using (var cmd = new MySqlCommand(SQL_SALE, conn, (MySqlTransaction)tx))
                 {
@@ -7382,10 +7378,11 @@ namespace TruckScale.Pos
                 }
 
                 // 2) payments -> VOIDED (solo si RECEIVED)
-                const string SQL_PAY = @"UPDATE payments
-                    SET payment_status_id = @voided
-                    WHERE sale_uid = @suid
-                      AND payment_status_id = @received;";
+                const string SQL_PAY = @"
+                    UPDATE payments
+                       SET payment_status_id = @voided
+                     WHERE sale_uid = @suid
+                       AND payment_status_id = @received;";
 
                 await using (var cmd = new MySqlCommand(SQL_PAY, conn, (MySqlTransaction)tx))
                 {
@@ -7396,10 +7393,11 @@ namespace TruckScale.Pos
                 }
 
                 // 3) tickets -> VOIDED (si está PRINTED/REPRINTED)
-                const string SQL_TKT = @"UPDATE tickets
-                    SET ticket_status_id = @voided
-                    WHERE sale_uid = @suid
-                      AND ticket_status_id IN (9,10);"; // PRINTED/REPRINTED
+                const string SQL_TKT = @"
+                    UPDATE tickets
+                       SET ticket_status_id = @voided
+                     WHERE sale_uid = @suid
+                       AND ticket_status_id IN (9,10);";
 
                 await using (var cmd = new MySqlCommand(SQL_TKT, conn, (MySqlTransaction)tx))
                 {
@@ -7410,7 +7408,9 @@ namespace TruckScale.Pos
 
                 await tx.CommitAsync();
 
-                // UI: deshabilitar botones
+                AppendLog($"[VOID] Sale {_voidTargetRow.SaleUid} voided in {(usedLocal ? "LOCAL" : "MAIN")}.");
+
+                // UI
                 _voidTargetRow.SaleStatusId = SALE_CANCELLED;
                 _voidTargetRow.PaymentStatusId = PAY_VOIDED;
                 _voidTargetRow.TicketStatusId = TICKET_VOIDED;
