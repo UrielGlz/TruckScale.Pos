@@ -1838,7 +1838,6 @@
 
 
         <!-- ===== MODAL: Registrar chofer ===== -->
-        <!-- ===== MODAL: Find Driver (REDISEÑO SOLO UI) ===== -->
         <md:DialogHost.DialogContent>
             <md:Card Width="980" MaxHeight="1100" Padding="0" HorizontalAlignment="Center">
 

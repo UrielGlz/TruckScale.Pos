@@ -627,6 +627,16 @@ namespace TruckScale.Pos
         private DriverInfo? _reweighPrefillDriver;
         private bool _reweighServiceReady = false; // solo TRUE cuando el usuario acepta el ticket reweigh
 
+        private int _operatorId = 0;
+
+        private int GetCurrentOperatorId()
+        {
+            if (_operatorId > 0) return _operatorId;
+            if (PosSession.IsLoggedIn)
+                _operatorId = PosSession.UserId;
+            return _operatorId > 0 ? _operatorId : 1; // fallback por si acaso
+        }
+
 
         private static double Get(IDictionary<int, double> map, int key)
         {
@@ -872,7 +882,7 @@ namespace TruckScale.Pos
             TruckScale.Pos.Config.ConfigManager.Load();
 
             Exception? lastConnEx = null;
-
+           
             // 1) Intentar BD PRIMARY (online)
             if (!string.IsNullOrWhiteSpace(ConfigManager.Current.MainDbStrCon))
             {
@@ -881,7 +891,7 @@ namespace TruckScale.Pos
                     AppendLog("[DB] Trying PRIMARY DB for scale_session_axles...");
                     return await SaveScaleDataOnConnection(
                         ConfigManager.Current.MainDbStrCon,
-                        eje1, eje2, eje3, total, rawLine, uuid_weight,
+                         GetCurrentOperatorId(),eje1, eje2, eje3, total, rawLine, uuid_weight,
                         isPrimary: true);
                 }
                 catch (Exception ex)
@@ -899,7 +909,7 @@ namespace TruckScale.Pos
                     AppendLog("[DB] Trying LOCAL DB for scale_session_axles...");
                     return await SaveScaleDataOnConnection(
                         ConfigManager.Current.LocalDbStrCon,
-                        eje1, eje2, eje3, total, rawLine, uuid_weight,
+                         GetCurrentOperatorId(),eje1, eje2, eje3, total, rawLine, uuid_weight,
                         isPrimary: false);
                 }
                 catch (Exception ex)
@@ -951,13 +961,16 @@ namespace TruckScale.Pos
             return (long)cmd.LastInsertedId;
         }
         
-        private static async Task<long> SaveScaleDataOnConnection(string connStr, double eje1, double eje2, double eje3, double total, string rawLine, string uuid_weight, bool isPrimary)
+        private static async Task<long> SaveScaleDataOnConnection(string connStr, int operator_id,double eje1, double eje2, double eje3, double total, string rawLine, string uuid_weight, bool isPrimary)
         {
+         
+
             const string SQL = @"INSERT INTO scale_session_axles (
                                  uuid_weight,axle_index,weight_lb,captured_utc, captured_local,
                                  captured_local_time,
                                  raw_line,
                                  status_id,
+                                 operator_id,
                                  eje1,
                                  eje2,
                                  eje3,
@@ -972,6 +985,7 @@ namespace TruckScale.Pos
                                  @local_time,
                                  @raw,
                                  1,
+                                 @operator_id,
                                  @e1,
                                  @e2,
                                  @e3,
@@ -979,6 +993,7 @@ namespace TruckScale.Pos
                              );";
 
             var nowLocal = DateTime.Now;
+
 
             await using var conn = new MySqlConnection(connStr);
             await conn.OpenAsync();
@@ -993,6 +1008,9 @@ namespace TruckScale.Pos
                 string.IsNullOrEmpty(rawLine)
                     ? (object)DBNull.Value
                     : (rawLine.Length > 128 ? rawLine[..128] : rawLine));
+            
+            cmd.Parameters.AddWithValue("@operator_id", operator_id);
+
             cmd.Parameters.AddWithValue("@e1", (int)Math.Round(eje1));
             cmd.Parameters.AddWithValue("@e2", (int)Math.Round(eje2));
             cmd.Parameters.AddWithValue("@e3", (int)Math.Round(eje3));
@@ -3959,17 +3977,7 @@ namespace TruckScale.Pos
         private int _siteId = 0;       // setéalo al arrancar (ej. 1)
         private int _terminalId = 0;   // setéalo al arrancar (ej. 1)       
 
-        private int _operatorId = 0;
-
-        private int GetCurrentOperatorId()
-        {
-            if (_operatorId > 0) return _operatorId;
-            if (PosSession.IsLoggedIn)
-                _operatorId = PosSession.UserId;
-            return _operatorId > 0 ? _operatorId : 1; // fallback por si acaso
-        }
-
-
+       
         private async Task<int> GetDefaultSiteIdAsync(MySqlConnection conn, MySqlTransaction tx)
         {
             const string Q = "SELECT site_id FROM sites ORDER BY site_id LIMIT 1;";
@@ -4814,7 +4822,7 @@ namespace TruckScale.Pos
             {
                 IdCustomer = 0,
                 AccountNumber = "",
-                AccountName = "Select Business Account",
+                AccountName = "Select Business Account1",
                 AccountAddress = "",
                 AccountCountry = "",
                 AccountState = "",
