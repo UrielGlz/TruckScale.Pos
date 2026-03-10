@@ -2054,7 +2054,8 @@
                                           IsEditable="False"
                                           IsTextSearchEnabled="True"
                                           md:HintAssist.Hint="{DynamicResource LicenseState}"
-                                          Margin="0,0,0,14"/>
+                                          Margin="0,0,0,14"
+                                          FontSize="18"/>
 
                                         <Grid>
                                             <Grid.ColumnDefinitions>
@@ -2094,7 +2095,8 @@
                                           IsEditable="False"
                                           IsTextSearchEnabled="True"
                                           md:HintAssist.Hint="{DynamicResource Product}"
-                                          Margin="0,0,0,0"/>
+                                          Margin="0,0,0,0"
+                                          FontSize="18"/>
                                     </StackPanel>
                                 </Border>
 

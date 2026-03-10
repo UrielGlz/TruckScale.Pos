@@ -101,7 +101,10 @@ namespace TruckScale.Pos
         public string Code { get; set; } = "";   // state_code
         public string Name { get; set; } = "";   // state_name
 
-        public string Display => $"{Name} ({Code})";
+        public string Display =>
+    string.IsNullOrWhiteSpace(Code)
+        ? Name
+        : $"{Name} ({Code})";
     }
     public sealed class DriverProduct
     {
@@ -4822,7 +4825,7 @@ namespace TruckScale.Pos
             {
                 IdCustomer = 0,
                 AccountNumber = "",
-                AccountName = "Select Business Account1",
+                AccountName = "Select Business Account",
                 AccountAddress = "",
                 AccountCountry = "",
                 AccountState = "",
@@ -4941,7 +4944,10 @@ namespace TruckScale.Pos
         {
             _licenseStates.Clear();
 
-            const string SQL = @"SELECT id_state, country_code, state_code, state_name FROM license_states WHERE is_active = 1 ORDER BY country_code, state_name;";
+            const string SQL = @"SELECT id_state, country_code, state_code, state_name 
+                         FROM license_states 
+                         WHERE is_active = 1 
+                         ORDER BY country_code, state_name;";
 
             async Task LoadFromAsync(string connStr)
             {
@@ -4970,7 +4976,6 @@ namespace TruckScale.Pos
 
             try
             {
-                // 1) Intentar PRIMARY
                 if (!string.IsNullOrWhiteSpace(primary))
                 {
                     try
@@ -4985,7 +4990,6 @@ namespace TruckScale.Pos
                     }
                 }
 
-                // 2) Si no cargó nada o no había PRIMARY, intentar LOCAL
                 if (_licenseStates.Count == 0 && !string.IsNullOrWhiteSpace(local))
                 {
                     try
@@ -5002,12 +5006,21 @@ namespace TruckScale.Pos
             }
             catch (Exception ex)
             {
-                // catch de seguridad por si algo raro se escapa
                 AppendLog($"[LicenseStates] {ex.GetType().Name}: {ex.Message}");
             }
 
+            // Placeholder
+            _licenseStates.Insert(0, new LicenseState
+            {
+                Id = 0,
+                CountryCode = "",
+                Code = "",
+                Name = "Select Plate State"
+            });
+
             LicenseStateCombo.ItemsSource = _licenseStates;
             LicenseStateCombo.DisplayMemberPath = "Display";
+            LicenseStateCombo.SelectedIndex = 0;
         }
         private async Task<DriverInfo?> GetDriverByPhoneAsync(string phoneDigits)
         {
@@ -5273,12 +5286,14 @@ namespace TruckScale.Pos
                 DriverPhoneStatusText.Visibility = Visibility.Visible;
             }
         }
-
         private async Task LoadDriverProductsAsync()
         {
             _driverProducts.Clear();
 
-            const string SQL = @"SELECT product_id, code, name FROM driver_products WHERE is_active = 1 ORDER BY name;";
+            const string SQL = @"SELECT product_id, code, name 
+                         FROM driver_products 
+                         WHERE is_active = 1 
+                         ORDER BY name;";
 
             async Task<int> TryOneAsync(string connStr, string sourceLabel)
             {
@@ -5314,7 +5329,6 @@ namespace TruckScale.Pos
 
             try
             {
-                // 1) Intentar PRIMARY
                 if (!string.IsNullOrWhiteSpace(primary))
                 {
                     try
@@ -5328,7 +5342,6 @@ namespace TruckScale.Pos
                     }
                 }
 
-                // 2) Si no cargó nada o no hay PRIMARY, intentar LOCAL
                 if (totalLoaded == 0 && !string.IsNullOrWhiteSpace(local))
                 {
                     try
@@ -5358,12 +5371,18 @@ namespace TruckScale.Pos
                 AppendLog("[DrvProducts] No products found in PRIMARY/LOCAL database.");
             }
 
-            // Bind al ComboBox del modal
+            // Placeholder
+            _driverProducts.Insert(0, new DriverProduct
+            {
+                Id = 0,
+                Code = "",
+                Name = "Select Product"
+            });
+
             ProductoRegText.ItemsSource = _driverProducts;
             ProductoRegText.DisplayMemberPath = nameof(DriverProduct.Display);
-            //ProductoRegText.SelectedIndex = -1; // si luego quieres limpiar selección
+            ProductoRegText.SelectedIndex = 0;
         }
-
         private async void DoneButton_Click(object sender, RoutedEventArgs e)
         {
             await TryAutoCompleteSaleAsync();
