@@ -7856,22 +7856,30 @@ namespace TruckScale.Pos
         // Logout
         // =========================
         private void Logout_Click(object sender, RoutedEventArgs e) => Logout();
-
         private void Logout()
         {
-            StopScale();
+            LogoutConfirmHost.IsOpen = true;
+        }
 
+        private void LogoutCancel_Click(object sender, RoutedEventArgs e)
+        {
+            LogoutConfirmHost.IsOpen = false;
+        }
+
+        private void LogoutConfirm_Click(object sender, RoutedEventArgs e)
+        {
+            LogoutConfirmHost.IsOpen = false;
+            StopScale();
             PosSession.UserId = 0;
             PosSession.Username = "";
             PosSession.FullName = "";
             PosSession.RoleCode = "";
-
             var login = new LoginWindow();
             Application.Current.MainWindow = login;
             login.Show();
             Close();
         }
-        
+
         private void CloseCashButton_Click(object sender, RoutedEventArgs e)
         {
             CloseCashErrorText.Visibility = Visibility.Collapsed;

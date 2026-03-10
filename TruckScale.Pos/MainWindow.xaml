@@ -1831,6 +1831,51 @@
                         </md:Card>
                     </md:DialogHost.DialogContent>
                 </md:DialogHost>
+
+                <!-- ================== LOGOUT CONFIRM DIALOG ================== -->
+                <md:DialogHost x:Name="LogoutConfirmHost" Grid.RowSpan="99" Grid.ColumnSpan="99" Panel.ZIndex="130">
+                    <md:DialogHost.DialogContent>
+                        <Grid Width="460" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <md:Card Padding="18" md:ElevationAssist.Elevation="Dp3" UniformCornerRadius="16">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Header -->
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                        <md:PackIcon Kind="LogoutVariant" Width="26" Height="26"
+                                     Foreground="{DynamicResource PrimaryHueMidBrush}"
+                                     Margin="0,0,8,0"/>
+                                        <TextBlock Text="Log off" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                    </StackPanel>
+
+                                    <!-- Message -->
+                                    <TextBlock Grid.Row="1"
+                               Text="Please confirm that you want to log off the current user."
+                               TextWrapping="Wrap"
+                               Opacity=".85"
+                               Margin="0,0,0,18"/>
+
+                                    <!-- Buttons -->
+                                    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <Button Content="Cancel"
+                                Style="{StaticResource MaterialDesignOutlinedButton}"
+                                Padding="16,6"
+                                Margin="0,0,8,0"
+                                Click="LogoutCancel_Click"/>
+                                        <Button Content="OK"
+                                Style="{StaticResource MaterialDesignRaisedButton}"
+                                Padding="16,6"
+                                Click="LogoutConfirm_Click"/>
+                                    </StackPanel>
+                                </Grid>
+                            </md:Card>
+                        </Grid>
+                    </md:DialogHost.DialogContent>
+                </md:DialogHost>
             </Grid>
 
         </md:DrawerHost>
