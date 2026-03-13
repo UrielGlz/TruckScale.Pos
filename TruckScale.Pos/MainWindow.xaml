@@ -498,13 +498,13 @@
                             </StackPanel>
                         </md:Card>
 
-                        <!-- STATUS + LOGS (inferior izquierdo) -->
+                        <!-- STATUS (inferior izquierdo) -->
                         <Grid Grid.Row="2" Margin="0,8,0,0">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <!-- status compacto -->
-                                <RowDefinition Height="*"/>
-                                <!-- log viewer -->
+                                <RowDefinition Height="0"/>
+                                <!-- log viewer removido — logs van a C:\TruckScaleLogs\ -->
                             </Grid.RowDefinitions>
 
                             <!-- Status strip compacto (mismo comportamiento, menor padding) -->
@@ -581,15 +581,7 @@
                                 </Label>
                             </md:Card>
 
-                            <!-- Log viewer (reubicado desde columna derecha) -->
-                            <TextBox Grid.Row="1"
-                                     x:Name="txtLogTemp"
-                                     TextWrapping="Wrap"
-                                     Text="TextBox"
-                                     VerticalScrollBarVisibility="Auto"
-                                     FontSize="10"
-                                     Padding="4"
-                                     Background="{DynamicResource MaterialDesignCardBackground}"/>
+                            <!-- Log viewer removido — logs van a C:\TruckScaleLogs\ -->
                         </Grid>
 
                         <Label x:Name="lblEstado"

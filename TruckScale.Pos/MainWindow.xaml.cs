@@ -1025,19 +1025,7 @@ namespace TruckScale.Pos
         }
 
 
-        private void AppendLog(string text)
-        {
-            void append()
-            {
-                txtLogTemp.AppendText(text + Environment.NewLine);
-                txtLogTemp.ScrollToEnd();
-            }
-
-            if (txtLogTemp.Dispatcher.CheckAccess())
-                append();
-            else
-                txtLogTemp.Dispatcher.BeginInvoke((Action)append);
-        }
+        private static void AppendLog(string text) => AppLogger.Log(text);
 
         private static readonly char[] UID_CHARS =
             "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".ToCharArray(); // 24 letras + 8 dígitos = 32 símbolos
@@ -3459,7 +3447,7 @@ namespace TruckScale.Pos
             catch (Exception ex)
             {
                 var msg = $"LinkDriverToSaleAsync(tx) failed. uuid='{weightUuid}', sale='{saleUid}'. {ex.Message}";
-                try { Dispatcher?.Invoke(() => txtLogTemp.AppendText(msg + Environment.NewLine)); } catch { }
+                AppLogger.Log(msg);
                 throw new Exception(msg, ex);
             }
         }
