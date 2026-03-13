@@ -1156,7 +1156,7 @@ namespace TruckScale.Pos
             // Unidad
             try { TrailerNumberText.Text = ""; } catch { }
             try { TractorNumberText.Text = ""; } catch { }
-            try { LicenseStateCombo.SelectedIndex = -1; } catch { }
+            try { LicenseStateCombo.SelectedIndex = 0; } catch { }  // 0 = placeholder "Select Plate State"
 
             // Datos de cuenta
             try { AccountNameText.Text = ""; } catch { }
@@ -6829,7 +6829,7 @@ namespace TruckScale.Pos
 
             try { TrailerNumberText.Text = ""; } catch { }
             try { TractorNumberText.Text = ""; } catch { }
-            try { LicenseStateCombo.SelectedIndex = -1; } catch { }
+            try { LicenseStateCombo.SelectedIndex = 0; } catch { }  // 0 = placeholder "Select Plate State"
 
             try { DriverPhoneText.Text = ""; } catch { }
             _driverPhoneDigits = "";
