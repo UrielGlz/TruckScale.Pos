@@ -7697,9 +7697,9 @@ namespace TruckScale.Pos
         // =========================
         private void OpenCashSessionCancel_Click(object sender, RoutedEventArgs e)
         {
-            // Sin apertura, no hay POS: forzamos logoff
+            // Sin apertura, no hay POS: forzamos logoff sin confirmación adicional
             CashOpenHost.IsOpen = false;
-            Logout();
+            Logout(skipConfirmation: true);
         }
 
         private async void OpenCashSessionConfirm_Click(object sender, RoutedEventArgs e)
@@ -7853,9 +7853,12 @@ namespace TruckScale.Pos
         // Logout
         // =========================
         private void Logout_Click(object sender, RoutedEventArgs e) => Logout();
-        private void Logout()
+        private void Logout(bool skipConfirmation = false)
         {
-            LogoutConfirmHost.IsOpen = true;
+            if (skipConfirmation)
+                DoLogout();
+            else
+                LogoutConfirmHost.IsOpen = true;
         }
 
         private void LogoutCancel_Click(object sender, RoutedEventArgs e)
@@ -7866,6 +7869,11 @@ namespace TruckScale.Pos
         private void LogoutConfirm_Click(object sender, RoutedEventArgs e)
         {
             LogoutConfirmHost.IsOpen = false;
+            DoLogout();
+        }
+
+        private void DoLogout()
+        {
             StopScale();
             PosSession.UserId = 0;
             PosSession.Username = "";
@@ -7952,8 +7960,8 @@ namespace TruckScale.Pos
                 catch (Exception ex) { AppendLog($"[Closeout/Sync] Error inesperado: {ex.Message}"); }
             }
 
-            // 4) Cerrar sesión de usuario — cierre de caja ya confirmado en BD
-            Logout();
+            // 4) Cerrar sesión de usuario — cierre de caja ya confirmado en BD, no pedir confirmación
+            Logout(skipConfirmation: true);
         }
         private async Task<bool> CloseCashSessionAsync(decimal closingCash, string? comment)
         {
