@@ -1015,6 +1015,34 @@
 
                                         <Separator Margin="0,4,0,10"/>
 
+                                        <!-- NO CREDIT BANNER — visible only when available_credit <= 0 -->
+                                        <Border x:Name="NoCreditBanner"
+                                                Visibility="Collapsed"
+                                                CornerRadius="6"
+                                                Background="#FFEBEE"
+                                                BorderBrush="#C62828"
+                                                BorderThickness="1.5"
+                                                Padding="12,10"
+                                                Margin="0,0,0,12">
+                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                                <md:PackIcon Kind="AlertOctagon"
+                                                             Width="22" Height="22"
+                                                             Foreground="#C62828"
+                                                             VerticalAlignment="Center"
+                                                             Margin="0,0,8,0"/>
+                                                <StackPanel VerticalAlignment="Center">
+                                                    <TextBlock Text="NO CREDIT AVAILABLE"
+                                                               FontSize="16"
+                                                               FontWeight="Bold"
+                                                               Foreground="#C62828"/>
+                                                    <TextBlock Text="This account cannot use Business Account"
+                                                               FontSize="11"
+                                                               Foreground="#B71C1C"
+                                                               Opacity="0.85"/>
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Border>
+
                                         <TextBlock x:Name="DriverNameText" Text="—" FontSize="22" FontWeight="Bold" Margin="0,0,0,8"/>
                                         <TextBlock Text="Account and service" FontSize="12" Opacity="0.7" Margin="0,0,0,4"/>
 

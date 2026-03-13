@@ -3595,6 +3595,12 @@ namespace TruckScale.Pos
                 DriverAccountAddressText.Text = "Address: —";
             }
 
+            // Mostrar banner de sin crédito cuando la cuenta es business y el crédito está agotado
+            bool isBusinessAccount = !string.IsNullOrWhiteSpace(d.AccountName);
+            NoCreditBanner.Visibility = (isBusinessAccount && _uiAvailableCredit <= 0m)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+
             DriverCard.Visibility = Visibility.Visible;
         }
 
@@ -3604,6 +3610,7 @@ namespace TruckScale.Pos
         private void HideDriverCard()
         {
             DriverCard.Visibility = Visibility.Collapsed;
+            NoCreditBanner.Visibility = Visibility.Collapsed;
 
             DriverNameText.Text = "—";
             DriverAccountText.Text = "Account: —";
@@ -4885,8 +4892,10 @@ namespace TruckScale.Pos
                 await ShowAlertAsync("Business Account", _uiSuspendReason, PackIconKind.AlertCircleOutline);
                 return;
             }
-            // Si no maneja crédito, fuera
-            if (!_uiHasCredit)
+            // Si no maneja crédito, o crédito agotado (dato fresco de BD) → bloquear.
+            // Cubre el caso donde acc.AvailableCredit en memoria está desactualizado
+            // respecto a lo que ya se consumió en ventas anteriores de la misma sesión.
+            if (!_uiHasCredit || _uiAvailableCredit <= 0m)
             {
                 UpdatePaymentMethodsVisibility(false);
                 return;
@@ -6948,8 +6957,16 @@ namespace TruckScale.Pos
                     }
                     else
                     {
-                        // POSTPAID: por ahora lo dejamos permitido (salvo suspensión / has_credit)
-                        allowed = true;
+                        // POSTPAID: permitido solo si aún tiene crédito disponible
+                        if (snap.availableCredit > 0m)
+                        {
+                            allowed = true;
+                        }
+                        else
+                        {
+                            allowed = false;
+                            reason = $"No available credit (${snap.availableCredit:0.00}).";
+                        }
                     }
                 }
             }
