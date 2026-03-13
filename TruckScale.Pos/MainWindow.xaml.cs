@@ -1718,12 +1718,13 @@ namespace TruckScale.Pos
                 return false;
             }
 
-            // Phone digits
+            // Phone digits — optional field. Empty = saved as NULL.
+            // If the user typed something it must be exactly 10 digits.
             _driverPhoneDigits = OnlyDigits(DriverPhoneText.Text);
-            if (string.IsNullOrEmpty(_driverPhoneDigits) || _driverPhoneDigits.Length != DRIVER_PHONE_LEN)
+            if (!string.IsNullOrEmpty(_driverPhoneDigits) && _driverPhoneDigits.Length != DRIVER_PHONE_LEN)
             {
-                await ShowAlertAsync("Required field",
-                    "Please enter a 10-digit phone number for the driver.",
+                await ShowAlertAsync("Invalid phone",
+                    "Phone number must be exactly 10 digits, or leave it empty.",
                     PackIconKind.InformationOutline);
                 DriverPhoneText.Focus();
                 return false;
@@ -5228,6 +5229,14 @@ namespace TruckScale.Pos
         private async Task ValidateAndLoadDriverByPhoneAsync()
         {
             var digits = OnlyDigits(DriverPhoneText.Text);
+
+            // Empty = optional, no search, no error.
+            if (digits.Length == 0)
+            {
+                DriverPhoneStatusText.Visibility = Visibility.Collapsed;
+                return;
+            }
+
             if (digits.Length != DRIVER_PHONE_LEN)
             {
                 DriverPhoneStatusText.Text = "Phone must be 10 digits.";
