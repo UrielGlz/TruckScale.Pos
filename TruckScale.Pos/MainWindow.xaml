@@ -461,6 +461,27 @@
                                     </Viewbox>
                                 </Border>
 
+                                <!-- Live axles (tiempo real, debajo del peso grande) -->
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" HorizontalAlignment="Center">
+                                        <TextBlock Text="Axle 1" FontSize="10" Opacity="0.55" HorizontalAlignment="Center"/>
+                                        <TextBlock x:Name="txtLiveAx1" Text="— lb" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" HorizontalAlignment="Center">
+                                        <TextBlock Text="Axle 2" FontSize="10" Opacity="0.55" HorizontalAlignment="Center"/>
+                                        <TextBlock x:Name="txtLiveAx2" Text="— lb" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2" HorizontalAlignment="Center">
+                                        <TextBlock Text="Axle 3" FontSize="10" Opacity="0.55" HorizontalAlignment="Center"/>
+                                        <TextBlock x:Name="txtLiveAx3" Text="— lb" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Grid>
+
                                 <Grid Margin="0,8,0,0">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>

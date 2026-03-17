@@ -672,9 +672,9 @@ namespace TruckScale.Pos
             // 2) UI en “tiempo real”
             Dispatcher.InvokeAsync(() =>
             {
-                if (ch == 0) lblEje1.Content = $"{_last[0]:0} lb";
-                if (ch == 1) lblEje2.Content = $"{_last[1]:0} lb";
-                if (ch == 2) lblEje3.Content = $"{_last[2]:0} lb";
+                if (ch == 0) txtLiveAx1.Text = $"{_last[0]:0} lb";
+                if (ch == 1) txtLiveAx2.Text = $"{_last[1]:0} lb";
+                if (ch == 2) txtLiveAx3.Text = $"{_last[2]:0} lb";
                 if (ch == 3) WeightText.Text = $"{_last[3]:0}";
             });
 
@@ -2580,15 +2580,15 @@ namespace TruckScale.Pos
             {
                 case 0:
                     _ax1 = w; _tAx1 = DateTime.UtcNow;
-                    //lblEje1.Content = $"Axle 1: {w:0} lb";
+                    txtLiveAx1.Text = $"{w:0} lb";
                     break;
                 case 1:
                     _ax2 = w; _tAx2 = DateTime.UtcNow;
-                    //lblEje2.Content = $"Axle 2: {w:0} lb";
+                    txtLiveAx2.Text = $"{w:0} lb";
                     break;
                 case 2:
                     _ax3 = w; _tAx3 = DateTime.UtcNow;
-                    //lblEje3.Content = $"Axle 3: {w:0} lb";
+                    txtLiveAx3.Text = $"{w:0} lb";
                     break;
                 case 3:
                     _total = w; _tTotal = DateTime.UtcNow;
@@ -4709,12 +4709,15 @@ namespace TruckScale.Pos
                 Dispatcher.Invoke(() =>
                 {
                     // Mostrar el peso que REALMENTE se guardó (redondeado igual que en DB)
-                    lblEje1.Content = ax1;
-                    lblEje2.Content = ax2;
-                    lblEje3.Content = ax3;
+                    int r1 = (int)Math.Round(ax1);
+                    int r2 = (int)Math.Round(ax2);
+                    int r3 = (int)Math.Round(ax3);
+                    lblEje1.Content = $"Axle 1: {r1} lb";
+                    lblEje2.Content = $"Axle 2: {r2} lb";
+                    lblEje3.Content = $"Axle 3: {r3} lb";
 
-                    int pesoEntero = (int)Math.Round(total);
-                    lblUUID.Content = $"{pesoEntero} lb";
+                    // Total = suma exacta de los 3 ejes mostrados (siempre consistente)
+                    lblUUID.Content = $"Total: {r1 + r2 + r3} lb";
 
                     // A partir de aquí se habilita el formulario (MidCol / RightCol)
                     _formUnlocked = true;
