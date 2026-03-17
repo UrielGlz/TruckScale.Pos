@@ -1731,7 +1731,8 @@ namespace TruckScale.Pos
             }
 
 
-            if (string.IsNullOrEmpty(first) || string.IsNullOrEmpty(last))
+            //if (string.IsNullOrEmpty(first) || string.IsNullOrEmpty(last))
+            if (string.IsNullOrEmpty(first))
             {
                 await ShowAlertAsync("Required field",
                     "Please enter the driver's first and last name.",
@@ -1739,6 +1740,7 @@ namespace TruckScale.Pos
                 ChoferNombreText.Focus();
                 return false;
             }
+            /*
             if (string.IsNullOrEmpty(lic))
             {
                 await ShowAlertAsync("Required field",
@@ -1746,7 +1748,8 @@ namespace TruckScale.Pos
                     PackIconKind.InformationOutline);
                 LicenciaNumeroText.Focus();
                 return false;
-            }
+            }*/
+
             if (string.IsNullOrEmpty(plates))
             {
                 await ShowAlertAsync("Required field",
