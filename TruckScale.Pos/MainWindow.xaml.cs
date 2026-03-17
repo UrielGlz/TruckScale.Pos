@@ -7198,6 +7198,9 @@ namespace TruckScale.Pos
             cmd.Parameters.AddWithValue("@op", operatorId);
 
             await using var rd = await cmd.ExecuteReaderAsync();
+            // ORDER BY printed_at DESC => first row is the most recent (last) transaction.
+            // Only that row is eligible for VOID; all older rows are blocked regardless.
+            bool isLatestRow = true;
             while (await rd.ReadAsync())
             {
                 var row = new TodayTxRow
@@ -7225,7 +7228,8 @@ namespace TruckScale.Pos
                 var isCompleted = row.SaleStatusId == SALE_COMPLETED;
 
                 row.CanEditPayment = isCashOrCard && isReceived && isCompleted;
-                row.CanVoid = isCashOrCard && isReceived && isCompleted;
+                row.CanVoid = isLatestRow && isCashOrCard && isReceived && isCompleted;
+                isLatestRow = false;
 
                 _todayTx.Add(row);
             }
