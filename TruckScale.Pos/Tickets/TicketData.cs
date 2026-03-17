@@ -15,11 +15,11 @@ namespace TruckScale.Pos.Tickets
         public string CompanyAddress { get; set; } =
             "6401 S. 33rd Street · McAllen, Texas 78503";
         public string CompanyPhone { get; set; } =
-            "(956) 682-4306 · (956) 882-9111 Fax";
+            "(956) 682-4306";
         public string CertificateNumber { get; set; } =
             "Certificate No. 036231";
         public string WebSite { get; set; } =
-    "Website: http://www.mftz.org" + Environment.NewLine +
+    "Website: www.mcallenftz.org" + Environment.NewLine +
     "Email: fizinfo@mftz.org";
 
         public string ReweighWarning { get; set; } =
