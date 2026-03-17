@@ -61,7 +61,7 @@
     <sys:String x:Key="FirstName">First name</sys:String>
     <sys:String x:Key="LastName">Last name</sys:String>
     <sys:String x:Key="Phone">Phone</sys:String>
-    <sys:String x:Key="LicenseNo">License no.</sys:String>
+    <sys:String x:Key="LicenseNo">Driver's License</sys:String>
     <sys:String x:Key="LicenseExpiry">License expiry</sys:String>
     <sys:String x:Key="Unit.Section">Vehicle</sys:String>
     <sys:String x:Key="Plates">Plates</sys:String>
