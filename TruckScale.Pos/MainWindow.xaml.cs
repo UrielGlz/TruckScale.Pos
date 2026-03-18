@@ -1674,11 +1674,10 @@ namespace TruckScale.Pos
             if (desiredDp != null)
                 ProductoRegText.SelectedItem = desiredDp;
 
-            // Bloqueos en reweigh: NO cambiar producto / “caja” (Company/Account)
-            
+            // En reweigh: el producto de driver_products es editable; solo se bloquea el cliente
             try
             {
-                ProductoRegText.IsEnabled = !isReweighPrefill;
+                ProductoRegText.IsEnabled = true;
                 ClienteRegCombo.IsEnabled = !isReweighPrefill;
             }
             catch { }
@@ -3974,6 +3973,21 @@ namespace TruckScale.Pos
             
             }
 
+            // Al cambiar de método (ej. Cash → Card): si el total en _pagos ya cubre
+            // la deuda, el operador está reemplazando el método (no haciendo split).
+            // En ese caso limpiar los pagos anteriores para respetar el cambio.
+            // Si el total es parcial, conservar (split Cash+Card en curso).
+            bool isChangingMethod =
+                !string.IsNullOrWhiteSpace(_selectedPaymentId) &&
+                !string.Equals(_selectedPaymentId, sel.Code, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(sel.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase);
+
+            if (isChangingMethod && _pagos.Count > 0 && GetTotalDue() > 0m && GetTotalPaid() >= GetTotalDue())
+            {
+                _pagos.Clear();
+                PagosList.Items.Refresh();
+            }
+
             _selectedPaymentId = sel.Code;
 
             // Denoms: CASH y CARD (porque ahí vive el "Pay Remaining")
@@ -4537,6 +4551,7 @@ namespace TruckScale.Pos
         private TaskCompletionSource<bool>? _saleDialogTcs;
         private TaskCompletionSource<bool>? _drvDialogTcs;
         private TaskCompletionSource<bool>? _alertDialogTcs;
+        private RoutedEventHandler? _dlgReprintHandler;
 
         // === Modal: Sale completed ===
         private async Task ShowSaleCompletedDialogAsync(decimal total, decimal recibido, decimal change, string saleUid)
@@ -4548,7 +4563,12 @@ namespace TruckScale.Pos
 
             _saleDialogTcs = new TaskCompletionSource<bool>();
             DlgCloseBtn.Click += CloseSaleDlg_Click;
-            DlgReprintBtn.Click += (s, e) => { _ = ReprintTicketAsync(saleUid); };
+            // Eliminar handler anterior antes de agregar el nuevo, para evitar
+            // acumulación entre ventas (bug: imprimía todos los tickets del día)
+            if (_dlgReprintHandler != null)
+                DlgReprintBtn.Click -= _dlgReprintHandler;
+            _dlgReprintHandler = (s, e) => { _ = ReprintTicketAsync(saleUid); };
+            DlgReprintBtn.Click += _dlgReprintHandler;
 
             DlgTicketProgress.IsIndeterminate = true;
             _ = Task.Run(async () =>
@@ -4569,6 +4589,11 @@ namespace TruckScale.Pos
         {
             SaleCompletedHost.IsOpen = false;
             DlgCloseBtn.Click -= CloseSaleDlg_Click;
+            if (_dlgReprintHandler != null)
+            {
+                DlgReprintBtn.Click -= _dlgReprintHandler;
+                _dlgReprintHandler = null;
+            }
             _saleDialogTcs?.TrySetResult(true);
         }
 
@@ -5257,8 +5282,8 @@ namespace TruckScale.Pos
         private void SetReweighEditable(bool enabled)
         {
             PlacasRegText.IsEnabled = enabled;
-            ProductoRegText.IsEnabled = enabled;
-
+            // ProductoRegText (driver_products) siempre editable en reweigh;
+            // solo las placas quedan bloqueadas
         }
 
         private void FillDriverFormFromInfoNew(DriverInfo d)
@@ -5505,6 +5530,7 @@ namespace TruckScale.Pos
                 sdi.tractor_number,
                 sdi.trailer_number,
                 sdi.license_state,
+                sdi.account_name AS client_company_name,
 
                 ax.eje1,
                 ax.eje2,
@@ -5588,6 +5614,7 @@ namespace TruckScale.Pos
                 data.LicState = SafeGetString(rd, "license_state");
                 data.TractorNumber = SafeGetString(rd, "tractor_number");
                 data.TrailerNumber = SafeGetString(rd, "trailer_number");
+                data.ClientCompanyName = SafeGetString(rd, "client_company_name");
 
                 // Pesos
                 data.Scale1 = rd.IsDBNull("eje1") ? 0 : rd.GetDouble("eje1");
@@ -7271,7 +7298,7 @@ namespace TruckScale.Pos
                 JOIN sales s ON s.sale_uid = t.sale_uid
                 LEFT JOIN sale_lines sl ON sl.sale_uid = s.sale_uid AND sl.seq = 1
                 JOIN (
-                  SELECT sale_uid, MIN(payment_id) AS payment_id
+                  SELECT sale_uid, MAX(payment_id) AS payment_id
                   FROM payments
                   GROUP BY sale_uid
                 ) px ON px.sale_uid = s.sale_uid

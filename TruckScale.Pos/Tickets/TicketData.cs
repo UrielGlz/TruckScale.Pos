@@ -31,6 +31,10 @@ namespace TruckScale.Pos.Tickets
 
         public string Weigher { get; set; } = "";
 
+        // Nombre de compañía del cliente (de sale_driver_info.account_name).
+        // Funciona para BA seleccionado del catálogo y para captura manual del operador.
+        public string ClientCompanyName { get; set; } = "";
+
         public string DriverName { get; set; } = "";
         public string DriverLicense { get; set; } = "";
         public string Plates { get; set; } = "";
