@@ -5729,6 +5729,7 @@ namespace TruckScale.Pos
             public int SaleId { get; init; }
             public string SaleUid { get; init; } = "";
             public int SaleStatusId { get; init; }
+            public int CustomerId { get; init; }
             public int TicketId { get; init; }
             public string TicketUid { get; init; } = "";
             public string TicketNumber { get; init; } = "";
@@ -5844,7 +5845,8 @@ namespace TruckScale.Pos
                     s.sale_id,
                     s.sale_uid,
                     s.sale_status_id,
-                    s.reweigh_of_sale_id,                    
+                    s.customer_id,
+                    s.reweigh_of_sale_id,
                     COALESCE(
                       IF(s.occurred_at = 0, NULL, s.occurred_at),
                       IF(s.created_at  = 0, NULL, s.created_at)
@@ -5903,6 +5905,7 @@ namespace TruckScale.Pos
                                         ? ""
                                         : rd.GetValue(rd.GetOrdinal("sale_uid")).ToString(),
                     SaleStatusId = rd.GetInt32("sale_status_id"),
+                    CustomerId = rd.IsDBNull("customer_id") ? 0 : rd.GetInt32("customer_id"),
                     TicketId = rd.GetInt32("ticket_id"),
                     TicketUid = rd.IsDBNull("ticket_uid")
                                         ? ""
@@ -6152,6 +6155,17 @@ namespace TruckScale.Pos
             _reweighSourceSaleId = cand.SaleId;
             _reweighSourceSaleUid = cand.SaleUid;
             _reweighSourceTicketNumber = cand.TicketNumber;
+
+            // Sincronizar ClienteRegCombo con el cliente de la venta original.
+            // Es necesario para que ReevaluateBusinessAccountAsync evalúe
+            // correctamente el Business Account sin duplicar lógica.
+            if (cand.CustomerId > 0)
+            {
+                var matchingAccount = _accounts.FirstOrDefault(a => a.IdCustomer == cand.CustomerId);
+                if (matchingAccount != null)
+                    ClienteRegCombo.SelectedItem = matchingAccount;
+            }
+
             // === Auto-cargar chofer del sale original ===
             var drv = await GetDriverBySaleUidAsync(cand.SaleUid);
 
@@ -6235,6 +6249,12 @@ namespace TruckScale.Pos
 
             // Activar visualmente REWEIGH como producto seleccionado
             ApplySelected("REWEIGH");
+
+            // Evaluar Business Account con cliente y producto ya configurados.
+            // ReevaluateBusinessAccountAsync es el evaluador canónico: consulta BD,
+            // aplica reglas PREPAID/POSTPAID y llama UpdatePaymentMethodsVisibility.
+            // Debe ejecutarse DESPUÉS de ApplySelected para que _selectedProductId sea válido.
+            await ReevaluateBusinessAccountAsync(silent: true);
         }
 
         private void ReweighTicketInputTextBox_KeyDown(object sender, KeyEventArgs e)
