@@ -1093,10 +1093,23 @@ namespace TruckScale.Pos
             if (WeightText != null) WeightText.Text = $"{value:0,0.0} {suffix}";
         }
 
-        private void NewTransaction_Click(object sender, RoutedEventArgs e)
+        private async void NewTransaction_Click(object sender, RoutedEventArgs e)
         {
             try
             {
+                // Si hay un peso aceptado (uuid en memoria), pedir razón de missed transaction
+                // antes de resetear. Si no hay peso aceptado, resetear directamente.
+                if (!string.IsNullOrEmpty(_currentWeightUuid))
+                {
+                    if (_voidReasons.Count == 0)
+                        await LoadVoidReasonsAsync();
+
+                    MissedReasonCombo.ItemsSource = _voidReasons;
+                    MissedReasonCombo.SelectedIndex = -1;
+                    MissedReasonHost.IsOpen = true;
+                    return; // el reset lo dispara MissedReasonConfirm_Click
+                }
+
                 try { RootDialog.IsOpen = false; } catch { }
                 try { SaleCompletedHost.IsOpen = false; } catch { }
                 try { ReweighHost.IsOpen = false; } catch { }
@@ -1104,6 +1117,63 @@ namespace TruckScale.Pos
                 ResetDriverContext();
             }
             catch { ResetDriverContext(); }
+        }
+
+        private void MissedReasonCancel_Click(object sender, RoutedEventArgs e)
+        {
+            MissedReasonHost.IsOpen = false;
+        }
+
+        private async void MissedReasonConfirm_Click(object sender, RoutedEventArgs e)
+        {
+            if (MissedReasonCombo.SelectedItem is not VoidReasonItem vr || vr.VoidReasonId <= 0)
+            {
+                await ShowAlertAsync("Missed transaction",
+                    "Please select a reason.",
+                    PackIconKind.InformationOutline);
+                return;
+            }
+
+            var uuid = _currentWeightUuid;
+
+            try
+            {
+                if (!string.IsNullOrEmpty(uuid))
+                {
+                    bool usedLocal = false;
+                    await using var conn = await OpenMainThenLocalAsync("MissedReason", ul => usedLocal = ul);
+
+                    const string SQL = @"
+                        UPDATE scale_session_axles
+                           SET missed_reason_id = @rid
+                         WHERE uuid_weight = @uuid;";
+
+                    await using var cmd = new MySqlCommand(SQL, conn);
+                    cmd.Parameters.AddWithValue("@rid", vr.VoidReasonId);
+                    cmd.Parameters.AddWithValue("@uuid", uuid);
+                    await cmd.ExecuteNonQueryAsync();
+
+                    AppendLog($"[MissedTx] uuid={uuid} reason={vr.VoidReasonId} ({vr.Label}) saved in {(usedLocal ? "LOCAL" : "MAIN")}.");
+                }
+            }
+            catch (Exception ex)
+            {
+                // Informar pero no bloquear: el operador debe poder seguir trabajando
+                AppendLog($"[MissedTx] ERROR saving reason: {ex.Message}");
+                await ShowAlertAsync("Missed transaction",
+                    $"Reason could not be saved: {ex.Message}\nThe transaction will be reset anyway.",
+                    PackIconKind.AlertCircleOutline);
+            }
+            finally
+            {
+                MissedReasonHost.IsOpen = false;
+
+                try { RootDialog.IsOpen = false; } catch { }
+                try { SaleCompletedHost.IsOpen = false; } catch { }
+                try { ReweighHost.IsOpen = false; } catch { }
+
+                ResetDriverContext();
+            }
         }
 
 

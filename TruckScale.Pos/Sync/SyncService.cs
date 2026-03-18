@@ -430,10 +430,10 @@ namespace TruckScale.Pos.Sync
 
 
 
-                // ⚠ Opcional: settings lleva llaves compuestas y claves 'sync.*'.
-                // Si los tienes iguales en MAIN/LOCAL, puedes activar esta línea.
-                // Si prefieres no tocarlos aún, déjala comentada.
-                // total += await PullTableUpsertAsync(mainConn, localConn, "settings",        "setting_id",     lastTs);
+                // settings: MAIN es la fuente de verdad.
+                // Se excluyen las keys 'sync.*' (estado interno del sincronizador LOCAL).
+                // Upsert por (site_id, key) — nunca por setting_id (auto-increment, no comparable cross-DB).
+                total += await PullSettingsAsync(mainConn, localConn);
 
                 // 2) Tablas transaccionales (usamos UIDs)
                 total += await PullTableUpsertAsync(mainConn, localConn, "sales", "sale_uid", lastTs);
@@ -875,6 +875,83 @@ namespace TruckScale.Pos.Sync
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// PULL de settings desde MAIN → LOCAL.
+        /// Reglas:
+        ///   - MAIN es la fuente de verdad; LOCAL nunca sube settings a MAIN.
+        ///   - Se excluyen keys 'sync.*' (estado interno del sincronizador LOCAL).
+        ///   - Upsert por la constraint única real (site_id, key), NO por setting_id.
+        ///   - setting_id se omite del SELECT para evitar colisiones de auto-increment cross-DB.
+        ///   - Full pull (sin filtro de fecha): settings es pequeña y no tiene updated_at garantizado.
+        /// </summary>
+        private async Task<int> PullSettingsAsync(
+            MySqlConnection mainConn,
+            MySqlConnection localConn)
+        {
+            var rows = new List<Dictionary<string, object?>>();
+
+            // Leer de MAIN, excluyendo siempre las keys de sync interno
+            const string SQL_SELECT = @"
+                SELECT *
+                FROM settings
+                WHERE `key` NOT LIKE 'sync.%';";
+
+            await using (var cmd = new MySqlCommand(SQL_SELECT, mainConn))
+            await using (var rd = await cmd.ExecuteReaderAsync())
+            {
+                while (await rd.ReadAsync())
+                {
+                    var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                    for (int i = 0; i < rd.FieldCount; i++)
+                    {
+                        var colName = rd.GetName(i);
+
+                        // setting_id es auto-increment; no es comparable cross-DB
+                        if (colName.Equals("setting_id", StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        row[colName] = rd.IsDBNull(i) ? null : rd.GetValue(i);
+                    }
+                    rows.Add(row);
+                }
+            }
+
+            if (rows.Count == 0)
+                return 0;
+
+            // Upsert en LOCAL por (site_id, key)
+            // No actualizar site_id ni key (forman la constraint única).
+            var skipOnUpdate = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "site_id", "key" };
+
+            foreach (var row in rows)
+            {
+                var columns = string.Join(", ", row.Keys.Select(k => $"`{k}`"));
+                var values  = string.Join(", ", row.Keys.Select(k => $"@{k}"));
+
+                var updateSet = string.Join(", ",
+                    row.Keys
+                       .Where(k => !skipOnUpdate.Contains(k))
+                       .Select(k => $"`{k}` = VALUES(`{k}`)"));
+
+                // Protección: si todos los campos son parte de la llave, usar no-op
+                if (string.IsNullOrWhiteSpace(updateSet))
+                    updateSet = "`site_id` = `site_id`";
+
+                var sqlUpsert = $@"
+                    INSERT INTO settings ({columns})
+                    VALUES ({values})
+                    ON DUPLICATE KEY UPDATE {updateSet};";
+
+                await using var cmd = new MySqlCommand(sqlUpsert, localConn);
+                foreach (var kvp in row)
+                    cmd.Parameters.AddWithValue($"@{kvp.Key}", kvp.Value ?? DBNull.Value);
+
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            return rows.Count;
         }
 
     }
