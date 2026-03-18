@@ -1,12 +1,12 @@
 using System;
-using System.Globalization;
 using System.IO;
 
 namespace TruckScale.Pos;
 
 /// <summary>
-/// Lightweight file logger. Writes to C:\TruckScaleLogs\, one file per ISO week.
-/// File name format: log_YYYY-Www.txt  (e.g. log_2026-W11.txt)
+/// Lightweight file logger. Writes to C:\TruckScaleLogs\, one file per day.
+/// File name format: log_YYYY-MM-DD.txt  (e.g. log_2026-03-17.txt)
+/// Files older than 2 days are deleted automatically on each write.
 /// Thread-safe, never throws — logging failures are silently swallowed.
 /// </summary>
 internal static class AppLogger
@@ -21,19 +21,36 @@ internal static class AppLogger
             Directory.CreateDirectory(_folder);
 
             var now = DateTime.Now;
-            int week = ISOWeek.GetWeekOfYear(now);
-            string fileName = $"log_{now.Year}-W{week:D2}.txt";
+            string fileName = $"log_{now:yyyy-MM-dd}.txt";
             string path = Path.Combine(_folder, fileName);
             string line = $"{now:yyyy-MM-dd HH:mm:ss.fff}  {message}";
 
             lock (_lock)
             {
                 File.AppendAllText(path, line + Environment.NewLine);
+                PurgeOldLogs();
             }
         }
         catch
         {
             // Never let logging crash the app.
+        }
+    }
+
+    private static void PurgeOldLogs()
+    {
+        try
+        {
+            var cutoff = DateTime.Now.AddDays(-2);
+            foreach (var file in Directory.GetFiles(_folder, "log_*.txt"))
+            {
+                if (File.GetLastWriteTime(file) < cutoff)
+                    File.Delete(file);
+            }
+        }
+        catch
+        {
+            // Ignore purge errors.
         }
     }
 }

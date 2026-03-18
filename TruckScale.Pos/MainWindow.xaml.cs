@@ -1709,7 +1709,7 @@ namespace TruckScale.Pos
             string trailer = TrailerNumberText.Text.Trim();
             string tractor = TractorNumberText.Text.Trim();
 
-            if (string.IsNullOrEmpty(product))
+            if (selectedProduct == null || selectedProduct.Id == 0 || string.IsNullOrEmpty(product))
             {
                 await ShowAlertAsync("Required field",
                     "Please select the product for this load.",
