@@ -6,11 +6,15 @@
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>logo_ico2.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <None Remove="Resources\logo.jpeg" />
     <None Remove="Resources\logo.png" />
     <None Remove="Resources\TexasSeal.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="logo_ico2.ico" />
   </ItemGroup>
 
 

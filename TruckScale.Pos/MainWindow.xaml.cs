@@ -8155,8 +8155,8 @@ namespace TruckScale.Pos
                     expected = Convert.ToDecimal(await cmd.ExecuteScalarAsync() ?? 0m);
                 }
 
-                var diff = closingCash - expected;
-
+                //var diff = closingCash - expected;
+                var diff = (_openingCash + expected) - closingCash;
                 const string SQL_CLOSE = @"
                     UPDATE cash_sessions
                     SET is_open = 0,
@@ -8277,10 +8277,10 @@ namespace TruckScale.Pos
                     -- CANCELLED: negative of VOIDED(7); if none, fall back to -sales.total
                     CASE s.sale_status_id
                         WHEN 2 THEN COALESCE(
-                            NULLIF(SUM(CASE WHEN pay.payment_status_id = 6 THEN pay.amount ELSE 0 END), 0),
+                            NULLIF(SUM(CASE WHEN pay.payment_status_id = 6 THEN s.total ELSE 0 END), 0),
                             s.total)
                         WHEN 3 THEN -COALESCE(
-                            NULLIF(SUM(CASE WHEN pay.payment_status_id = 7 THEN pay.amount ELSE 0 END), 0),
+                            NULLIF(SUM(CASE WHEN pay.payment_status_id = 7 THEN s.total ELSE 0 END), 0),
                             s.total)
                         ELSE s.total
                     END                                                             AS net_amount,
@@ -8304,7 +8304,7 @@ namespace TruckScale.Pos
                     sdi.tractor_number, sdi.trailer_number,
                     dp.name, p.name, sl.description,
                     u.full_name, u.username, s.operator_id
-                ORDER BY IF(s.occurred_at = 0, s.created_at, s.occurred_at) ASC;";
+                ORDER BY IF(s.occurred_at = 0, s.created_at, s.occurred_at) ASC";
 
             // ── SQL: totales por método (neto con signo) ──────────────────────
             // SQL_TOTALS: net totals grouped by payment method.
