@@ -5818,7 +5818,19 @@ namespace TruckScale.Pos
                 }
                 catch
                 {
-                    // Si el JSON viene roto, caemos a la lógica de texto plano
+                    // JSON is malformed — try to salvage only ticket_number with a regex.
+                    // We don't trust any UID from a broken payload.
+                    var m = System.Text.RegularExpressions.Regex.Match(
+                        raw,
+                        @"ticket_number[^0-9]{1,15}(\d+)",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (m.Success)
+                    {
+                        var recovered = NormalizeTicketNumber(m.Groups[1].Value);
+                        if (recovered != null)
+                            return (null, null, recovered);
+                    }
+                    // Nothing recoverable — fall through to plain-text path
                 }
             }
 
@@ -6100,6 +6112,17 @@ namespace TruckScale.Pos
                 return false;
             }
 
+            // Manual input path: if it doesn't look like a QR payload it must be digits only.
+            bool looksLikeQr = rawKey.StartsWith("{");
+            if (!looksLikeQr && !rawKey.All(char.IsDigit))
+            {
+                await ShowAlertAsync(
+                    "Invalid input",
+                    "Type the ticket number using digits only, or scan the QR code on the original ticket.",
+                    PackIconKind.AlertCircleOutline);
+                return false;
+            }
+
             var cand = await GetReweighCandidateAsync(rawKey);
             if (cand == null)
             {
@@ -6290,6 +6313,22 @@ namespace TruckScale.Pos
             {
                 ReweighAcceptButton_Click(sender, e);
             }
+        }
+
+        /// <summary>
+        /// Blocks non-digit characters during manual typing.
+        /// QR scan payloads always start with '{', so anything after that first brace
+        /// is allowed through — the scanner populates the whole JSON in one burst.
+        /// </summary>
+        private void ReweighTicketInputTextBox_PreviewTextInput(object sender, TextCompositionEventArgs e)
+        {
+            var tb = (TextBox)sender;
+            // If the box already holds a QR payload, or this is the opening '{', let it through.
+            if (tb.Text.StartsWith("{") || e.Text == "{")
+                return;
+            // Manual mode: allow only digit characters.
+            if (!e.Text.All(char.IsDigit))
+                e.Handled = true;
         }
         private async Task<DriverInfo?> GetDriverBySaleUidAsync(string saleUid)
         {

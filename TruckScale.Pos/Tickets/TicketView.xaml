@@ -9,7 +9,7 @@
         <tickets:QrCodeConverter x:Key="QrCodeConverter" />
     </UserControl.Resources>
 
-    <Border Margin="12"
+    <Border Margin="12,12,12,6"
             BorderBrush="Black"
             BorderThickness="1"
             Padding="16">
@@ -26,176 +26,8 @@
 
             <!-- CONTENT: todo el ticket por encima de la marca de agua -->
             <Grid Panel.ZIndex="1">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-            </Grid.RowDefinitions>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="3*"/>
-                <ColumnDefinition Width="2*"/>
-            </Grid.ColumnDefinitions>
-
-            <!-- HEADER LEFT: logo + company -->
-            <!-- HEADER LEFT: logo + company -->
-            <Grid Grid.Row="0" Grid.Column="0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="190"/>
-                    <!-- MÁS espacio para logo -->
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-
-                <!-- LOGO más grande -->
-                <Image Grid.Column="0"
-           Source="/Resources/logo.png"
-           Height="105"
-           Margin="0,0,12,0"
-           Stretch="Uniform"
-           HorizontalAlignment="Left"
-           VerticalAlignment="Center"/>
-
-                <!-- Texto más centrado -->
-                <StackPanel Grid.Column="1"
-                VerticalAlignment="Center"
-                Margin="0,0,0,0">
-                    <!--<TextBlock Text="{Binding CompanyName}" FontWeight="Bold" FontSize="14" TextWrapping="Wrap"/>-->
-                    <TextBlock Text="{Binding CompanyName_2}" FontWeight="Bold" FontSize="14" TextWrapping="Wrap"/>
-                    <TextBlock Text="{Binding CompanyAddress}" FontSize="11" TextWrapping="Wrap"/>
-
-                    <TextBlock Text="{Binding CompanyPhone}"   FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                    <TextBlock Text="{Binding CertificateNumber}" FontSize="11" TextWrapping="Wrap"/>
-                    <TextBlock Text="{Binding WebSite}" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                </StackPanel>
-            </Grid>
-            <!-- HEADER RIGHT: ticket number + QR (slightly bigger) -->
-            <StackPanel Grid.Row="0" Grid.Column="1"
-                        HorizontalAlignment="Right">
-                <TextBlock Text="TICKET" FontWeight="Bold" HorizontalAlignment="Right"/>
-                <TextBlock Text="{Binding TicketNumber}"
-                           FontSize="20"
-                           FontWeight="Bold"
-                           HorizontalAlignment="Right"/>
-
-                <!-- QR below ticket number (slightly bigger, without moving it) -->
-                <Border Width="80"
-                        Height="80"
-                        Margin="0,4,0,0"
-                        BorderBrush="Black"
-                        BorderThickness="1"
-                        HorizontalAlignment="Right">
-                    <Image Source="{Binding QrPayload, Converter={StaticResource QrCodeConverter}}"
-                           Stretch="Uniform"
-                           SnapsToDevicePixels="True"
-                           RenderOptions.BitmapScalingMode="NearestNeighbor"/>
-                </Border>
-            </StackPanel>
-
-            <!-- ROW: driver / tractor -->
-            <Grid Grid.Row="1" Grid.ColumnSpan="2" Margin="0,2,0,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-
-                <StackPanel Grid.Column="0">
-                    <TextBlock>
-                        <Run Text="Company: " FontWeight="Bold"/>
-                        <Run Text="{Binding ClientCompanyName}"/>
-                    </TextBlock>
-                    <TextBlock>
-                        <Run Text="Driver: " FontWeight="Bold"/>
-                        <Run Text="{Binding DriverName}"/>
-                    </TextBlock>
-
-                    <!--<TextBlock Text="Driver License:" FontWeight="Bold" FontSize="11"/>
-                    <TextBlock Text="{Binding DriverLicense}" FontSize="11" Margin="0,0,0,4"/>-->
-                    <TextBlock Text="Lic. Plates:" FontWeight="Bold" FontSize="11"/>
-                    <TextBlock Text="{Binding Plates}" FontSize="11"/>
-                    <TextBlock Text="Lic. State:" FontWeight="Bold" FontSize="11"/>
-                    <TextBlock Text="{Binding LicState}" FontSize="11"/>
-                </StackPanel>
-
-                <Grid Grid.Column="1">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-
-                    <!-- Tractor/Trailer/Time -->
-                    <StackPanel Grid.Column="0">
-                        <TextBlock Text="Tractor#:" FontWeight="Bold" FontSize="11"/>
-                        <TextBlock Text="{Binding TractorNumber}" FontSize="11" Margin="0,0,0,4"/>
-                        <TextBlock Text="Trailer#:" FontWeight="Bold" FontSize="11"/>
-                        <TextBlock Text="{Binding TrailerNumber}" FontSize="11" />
-
-                        <TextBlock>
-                            <Run Text="Time: " FontWeight="Bold"/>
-                            <Run Text="{Binding Date, StringFormat='{}{0:h:mm tt}'}" FontWeight="Bold"/>
-                        </TextBlock>
-                    </StackPanel>
-
-                    <!-- QR (más pequeño) -->
-                    <!--
-                    <Border Grid.Column="1" Width="75" Height="75" Margin="12,0,0,0" BorderBrush="Black" BorderThickness="1" VerticalAlignment="Top" HorizontalAlignment="Right">
-                        <Image Source="{Binding QrPayload, Converter={StaticResource QrCodeConverter}}" Stretch="Uniform" />
-                    </Border>-->
-                </Grid>
-            </Grid>
-
-            <!-- ROW: Date / Weigher (tightened margin a bit to compensate QR growth) -->
-            <Grid Grid.Row="2" Grid.ColumnSpan="2" Margin="0,8,0,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="1*"/>
-                    <ColumnDefinition Width="1*"/>
-                </Grid.ColumnDefinitions>
-
-                <!-- Date -->
-                <Grid Grid.Column="0" Margin="0,0,10,0">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-
-                    <TextBlock Grid.Row="0"
-                               Text="Date"
-                               FontWeight="Bold"
-                               FontSize="11"/>
-
-                    <Border Grid.Row="1"
-                            BorderBrush="Black"
-                            BorderThickness="1"
-                            Padding="4,2">
-                        <TextBlock Text="{Binding Date, StringFormat='{}{0:MM/dd/yyyy}'}"
-                                   FontSize="11"/>
-                    </Border>
-                </Grid>
-
-                <!-- Weigher -->
-                <Grid Grid.Column="1">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-
-                    <TextBlock Grid.Row="0"
-                               Text="Weigher"
-                               FontWeight="Bold"
-                               FontSize="11"/>
-
-                    <Border Grid.Row="1"
-                            BorderBrush="Black"
-                            BorderThickness="1"
-                            Padding="4,2">
-                        <TextBlock Text="{Binding Weigher}"
-                                   FontSize="11"/>
-                    </Border>
-                </Grid>
-            </Grid>
-
-            <!-- MAIN BLOCK (tightened margin a bit to compensate QR growth) -->
-            <Grid Grid.Row="3" Grid.ColumnSpan="2" Margin="0,8,0,0">
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
@@ -205,167 +37,337 @@
                     <ColumnDefinition Width="2*"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Product -->
-                <StackPanel Grid.Row="0" Grid.Column="0">
-                    <TextBlock Text="Product" FontWeight="Bold" FontSize="11"/>
-                    <Border BorderBrush="Black" BorderThickness="1" Padding="4,2">
-                        <TextBlock Text="{Binding Product}" FontSize="11"/>
+                <!-- HEADER LEFT: logo + company -->
+                <!-- HEADER LEFT: logo + company -->
+                <Grid Grid.Row="0" Grid.Column="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="190"/>
+                        <!-- MÁS espacio para logo -->
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- LOGO más grande -->
+                    <Image Grid.Column="0"
+           Source="/Resources/logo.png"
+           Height="105"
+           Margin="0,0,12,0"
+           Stretch="Uniform"
+           HorizontalAlignment="Left"
+           VerticalAlignment="Center"/>
+
+                    <!-- Texto más centrado -->
+                    <StackPanel Grid.Column="1"
+                VerticalAlignment="Center"
+                Margin="0,0,0,0">
+                        <!--<TextBlock Text="{Binding CompanyName}" FontWeight="Bold" FontSize="14" TextWrapping="Wrap"/>-->
+                        <TextBlock Text="{Binding CompanyName_2}" FontWeight="Bold" FontSize="14" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding CompanyAddress}" FontSize="11" TextWrapping="Wrap"/>
+
+                        <TextBlock Text="{Binding CompanyPhone}"   FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                        <TextBlock Text="{Binding CertificateNumber}" FontSize="11" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding WebSite}" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                    </StackPanel>
+                </Grid>
+                <!-- HEADER RIGHT: ticket number + QR (slightly bigger) -->
+                <StackPanel Grid.Row="0" Grid.Column="1"
+                        HorizontalAlignment="Right">
+                    <TextBlock Text="TICKET" FontWeight="Bold" HorizontalAlignment="Right"/>
+                    <TextBlock Text="{Binding TicketNumber}"
+                           FontSize="20"
+                           FontWeight="Bold"
+                           HorizontalAlignment="Right"/>
+
+                    <!-- QR below ticket number (slightly bigger, without moving it) -->
+                    <Border Width="80"
+                        Height="80"
+                        Margin="0,4,0,0"
+                        BorderBrush="Black"
+                        BorderThickness="1"
+                        HorizontalAlignment="Right">
+                        <Image Source="{Binding QrPayload, Converter={StaticResource QrCodeConverter}}"
+                           Stretch="Uniform"
+                           SnapsToDevicePixels="True"
+                           RenderOptions.BitmapScalingMode="NearestNeighbor"/>
                     </Border>
                 </StackPanel>
 
-                <!-- Weigh fee -->
-                <StackPanel Grid.Row="0" Grid.Column="1" HorizontalAlignment="Right">
-                    <TextBlock Text="Weigh Fee" FontWeight="Bold" FontSize="11"/>
-                    <Border BorderBrush="Black" BorderThickness="1" Padding="4,2">
-                        <TextBlock Text="{Binding WeighFee, StringFormat=C}" FontSize="11"/>
-                    </Border>
-                </StackPanel>
+                <!-- ROW: driver / tractor -->
+                <Grid Grid.Row="1" Grid.ColumnSpan="2" Margin="0,2,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
 
-                <!-- Right column: scales + reweigh form -->
-                <!-- Right column: scales + reweigh form -->
-                <Grid Grid.Row="1" Grid.Column="1" Margin="0,9,0,1">
+                    <StackPanel Grid.Column="0">
+                        <TextBlock>
+                        <Run Text="Company: " FontWeight="Bold"/>
+                        <Run Text="{Binding ClientCompanyName}"/>
+                        </TextBlock>
+                        <TextBlock>
+                        <Run Text="Driver: " FontWeight="Bold"/>
+                        <Run Text="{Binding DriverName}"/>
+                        </TextBlock>
+
+                        <!--<TextBlock Text="Driver License:" FontWeight="Bold" FontSize="11"/>
+                    <TextBlock Text="{Binding DriverLicense}" FontSize="11" Margin="0,0,0,4"/>-->
+                        <TextBlock Text="Lic. Plates:" FontWeight="Bold" FontSize="11"/>
+                        <TextBlock Text="{Binding Plates}" FontSize="11"/>
+                        <TextBlock Text="Lic. State:" FontWeight="Bold" FontSize="11"/>
+                        <TextBlock Text="{Binding LicState}" FontSize="11"/>
+                    </StackPanel>
+
+                    <Grid Grid.Column="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Tractor/Trailer/Time -->
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Tractor#:" FontWeight="Bold" FontSize="11"/>
+                            <TextBlock Text="{Binding TractorNumber}" FontSize="11" Margin="0,0,0,4"/>
+                            <TextBlock Text="Trailer#:" FontWeight="Bold" FontSize="11"/>
+                            <TextBlock Text="{Binding TrailerNumber}" FontSize="11" />
+
+                            <TextBlock>
+                            <Run Text="Time: " FontWeight="Bold"/>
+                            <Run Text="{Binding Date, StringFormat='{}{0:h:mm tt}'}" FontWeight="Bold"/>
+                            </TextBlock>
+                        </StackPanel>
+
+                        <!-- QR (más pequeño) -->
+                        <!--
+                    <Border Grid.Column="1" Width="75" Height="75" Margin="12,0,0,0" BorderBrush="Black" BorderThickness="1" VerticalAlignment="Top" HorizontalAlignment="Right">
+                        <Image Source="{Binding QrPayload, Converter={StaticResource QrCodeConverter}}" Stretch="Uniform" />
+                    </Border>-->
+                    </Grid>
+                </Grid>
+
+                <!-- ROW: Date / Weigher (tightened margin a bit to compensate QR growth) -->
+                <Grid Grid.Row="2" Grid.ColumnSpan="2" Margin="0,8,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="1*"/>
+                        <ColumnDefinition Width="1*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Date -->
+                    <Grid Grid.Column="0" Margin="0,0,10,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0"
+                               Text="Date"
+                               FontWeight="Bold"
+                               FontSize="11"/>
+
+                        <Border Grid.Row="1"
+                            BorderBrush="Black"
+                            BorderThickness="1"
+                            Padding="4,2">
+                            <TextBlock Text="{Binding Date, StringFormat='{}{0:MM/dd/yyyy}'}"
+                                   FontSize="11"/>
+                        </Border>
+                    </Grid>
+
+                    <!-- Weigher -->
+                    <Grid Grid.Column="1">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0"
+                               Text="Weigher"
+                               FontWeight="Bold"
+                               FontSize="11"/>
+
+                        <Border Grid.Row="1"
+                            BorderBrush="Black"
+                            BorderThickness="1"
+                            Padding="4,2">
+                            <TextBlock Text="{Binding Weigher}"
+                                   FontSize="11"/>
+                        </Border>
+                    </Grid>
+                </Grid>
+
+                <!-- MAIN BLOCK (tightened margin a bit to compensate QR growth) -->
+                <Grid Grid.Row="3" Grid.ColumnSpan="2" Margin="0,8,0,0">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="3*"/>
+                        <ColumnDefinition Width="2*"/>
+                    </Grid.ColumnDefinitions>
 
-                    <!-- Scales table -->
-                    <Grid Grid.Row="0">
+                    <!-- Product -->
+                    <StackPanel Grid.Row="0" Grid.Column="0">
+                        <TextBlock Text="Product" FontWeight="Bold" FontSize="11"/>
+                        <Border BorderBrush="Black" BorderThickness="1" Padding="4,2">
+                            <TextBlock Text="{Binding Product}" FontSize="11"/>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- Weigh fee -->
+                    <StackPanel Grid.Row="0" Grid.Column="1" HorizontalAlignment="Right">
+                        <TextBlock Text="Weigh Fee" FontWeight="Bold" FontSize="11"/>
+                        <Border BorderBrush="Black" BorderThickness="1" Padding="4,2">
+                            <TextBlock Text="{Binding WeighFee, StringFormat=C}" FontSize="11"/>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- Right column: scales + reweigh form -->
+                    <!-- Right column: scales + reweigh form -->
+                    <Grid Grid.Row="1" Grid.Column="1" Margin="0,9,0,1">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="2*"/>
-                            <ColumnDefinition Width="3*"/>
-                        </Grid.ColumnDefinitions>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="SCALE 1:" FontWeight="Bold" FontSize="11"/>
-                        <Border Grid.Row="0" Grid.Column="1" BorderBrush="Black" BorderThickness="1" Padding="4,2">
-                            <TextBlock Text="{Binding Scale1, StringFormat=0}" FontSize="11"/>
-                        </Border>
+                        <!-- Scales table -->
+                        <Grid Grid.Row="0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="2*"/>
+                                <ColumnDefinition Width="3*"/>
+                            </Grid.ColumnDefinitions>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="SCALE 2:" FontWeight="Bold" FontSize="11"/>
-                        <Border Grid.Row="1" Grid.Column="1" BorderBrush="Black" BorderThickness="1" Padding="4,2">
-                            <TextBlock Text="{Binding Scale2, StringFormat=0}" FontSize="11"/>
-                        </Border>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="SCALE 1:" FontWeight="Bold" FontSize="11"/>
+                            <Border Grid.Row="0" Grid.Column="1" BorderBrush="Black" BorderThickness="1" Padding="4,2">
+                                <TextBlock Text="{Binding Scale1, StringFormat=0}" FontSize="11"/>
+                            </Border>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="SCALE 3:" FontWeight="Bold" FontSize="11"/>
-                        <Border Grid.Row="2" Grid.Column="1" BorderBrush="Black" BorderThickness="1" Padding="4,2">
-                            <TextBlock Text="{Binding Scale3, StringFormat=0}" FontSize="11"/>
-                        </Border>
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="SCALE 2:" FontWeight="Bold" FontSize="11"/>
+                            <Border Grid.Row="1" Grid.Column="1" BorderBrush="Black" BorderThickness="1" Padding="4,2">
+                                <TextBlock Text="{Binding Scale2, StringFormat=0}" FontSize="11"/>
+                            </Border>
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Total Gross:" FontWeight="Bold" FontSize="11"/>
-                        <Border Grid.Row="3" Grid.Column="1" BorderBrush="Black" BorderThickness="1" Padding="4,2">
-                            <TextBlock Text="{Binding TotalGross, StringFormat=0}" FontSize="11"/>
-                        </Border>
-                    </Grid>
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="SCALE 3:" FontWeight="Bold" FontSize="11"/>
+                            <Border Grid.Row="2" Grid.Column="1" BorderBrush="Black" BorderThickness="1" Padding="4,2">
+                                <TextBlock Text="{Binding Scale3, StringFormat=0}" FontSize="11"/>
+                            </Border>
 
-                    <!-- Reweigh form -->
-                    <Border x:Name="ReweighPanel"
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Total Gross:" FontWeight="Bold" FontSize="11"/>
+                            <Border Grid.Row="3" Grid.Column="1" BorderBrush="Black" BorderThickness="1" Padding="4,2">
+                                <TextBlock Text="{Binding TotalGross, StringFormat=0}" FontSize="11"/>
+                            </Border>
+                        </Grid>
+
+                        <!-- Reweigh form -->
+                        <Border x:Name="ReweighPanel"
                         Grid.Row="1"
-                        Margin="0,6,0,4"
+                        Margin="0,1,0,-3"
                         BorderBrush="Black"
-                        BorderThickness="1">
-                        <StackPanel Margin="6">
-                            <TextBlock Text="Reweigh Form"
+                        BorderThickness="1" Grid.RowSpan="2">
+                            <StackPanel Margin="6">
+                                <TextBlock Text="Reweigh Form"
                                FontWeight="Bold"
                                FontSize="11"
                                Margin="0,0,0,2"/>
-                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
-                                <TextBlock Text="Ticket No:" Width="90" FontSize="11" FontWeight="Bold"/>
-                                <TextBlock Text="{Binding OriginalTicketNumber}" FontSize="11"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                    <TextBlock Text="Ticket No:" Width="90" FontSize="11" FontWeight="Bold"/>
+                                    <TextBlock Text="{Binding OriginalTicketNumber}" FontSize="11"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                    <TextBlock Text="Date and Time:" Width="90" FontSize="11"/>
+                                    <TextBlock Text="{Binding ReweighDateTimeText}" FontSize="11"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                    <TextBlock Text="Initials:" Width="80" FontSize="10"/>
+                                    <TextBlock Text="____________________" FontSize="10"/>
+                                </StackPanel>
                             </StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
-                                <TextBlock Text="Date and Time:" Width="90" FontSize="11"/>
-                                <TextBlock Text="{Binding ReweighDateTimeText}" FontSize="11"/>
-                            </StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
-                                <TextBlock Text="Initials:" Width="80" FontSize="10"/>
-                                <TextBlock Text="____________________" FontSize="10"/>
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-                    
-                </Grid>
+                        </Border>
 
-                <!-- Left column: Signature + warning + TexasSeal
+                    </Grid>
+
+                    <!-- Left column: Signature + warning + TexasSeal
                      RowSpan="2" abarca la fila Auto (Row 1) y la fila * (Row 2),
                      dándole todo el espacio vertical disponible sin salirse del Border. -->
-                <Grid Grid.Row="1"
+                    <Grid Grid.Row="1"
                       Grid.Column="0"
                       Grid.RowSpan="2"
                       Margin="0,10,0,0">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>  <!-- Signature + Warning -->
-                        <RowDefinition Height="*"/>     <!-- Texas Seal -->
-                    </Grid.RowDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <!-- Signature + Warning -->
+                            <RowDefinition Height="*"/>
+                            <!-- Texas Seal -->
+                        </Grid.RowDefinitions>
 
-                    <!-- Row 0: Signature / warning -->
-                    <StackPanel Grid.Row="0" Margin="0,10,0,0">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
+                        <!-- Row 0: Signature / warning -->
+                        <StackPanel Grid.Row="0" Margin="0,10,0,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
 
-                            <TextBlock Grid.Column="0"
+                                <TextBlock Grid.Column="0"
                                        Text="Signature:"
                                        VerticalAlignment="Center"
                                        Margin="0,0,5,0"/>
 
-                            <!-- Firma digital cuando está disponible -->
-                            <Image Grid.Column="1"
+                                <!-- Firma digital cuando está disponible -->
+                                <Image Grid.Column="1"
                                    Source="{Binding SignatureImage}"
                                    Height="50"
                                    Stretch="Uniform"
                                    HorizontalAlignment="Left"
                                    Margin="0,2,0,0">
-                                <Image.Style>
-                                    <Style TargetType="Image">
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding HasSignature}" Value="False">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Image.Style>
-                            </Image>
+                                    <Image.Style>
+                                        <Style TargetType="Image">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HasSignature}" Value="False">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Image.Style>
+                                </Image>
 
-                            <!-- Línea de firma manual cuando no hay firma digital -->
-                            <TextBlock Grid.Column="1"
+                                <!-- Línea de firma manual cuando no hay firma digital -->
+                                <TextBlock Grid.Column="1"
                                        Text="___________________________"
                                        VerticalAlignment="Center">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding HasSignature}" Value="True">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                        </Grid>
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HasSignature}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
 
-                        <TextBlock Text="{Binding ReweighWarning}"
+                            <TextBlock Text="{Binding ReweighWarning}"
                                    FontSize="9"
                                    FontWeight="Bold"
                                    Margin="0,4,0,0"/>
-                    </StackPanel>
+                        </StackPanel>
 
-                    <!-- Row 1 (*): Texas Seal — anclado a la esquina inferior izquierda -->
-                    <Image Grid.Row="1"
+                        <!-- Row 1 (*): Texas Seal — anclado a la esquina inferior izquierda -->
+                        <Image
                            Source="/Resources/TexasSeal.png"
                            Width="140"
                            Stretch="Uniform"
                            HorizontalAlignment="Left"
-                           VerticalAlignment="Bottom" Height="89" Margin="0,0,0,5"/>
+                           VerticalAlignment="Bottom" Height="89" Margin="0,0,0,7" Grid.RowSpan="2"/>
+                    </Grid>
                 </Grid>
-            </Grid>
             </Grid>
         </Grid>
     </Border>

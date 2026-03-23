@@ -1434,6 +1434,7 @@
                              HorizontalAlignment="Stretch"
                              VerticalContentAlignment="Center"
                              TextWrapping="NoWrap"
+                             PreviewTextInput="ReweighTicketInputTextBox_PreviewTextInput"
                              KeyDown="ReweighTicketInputTextBox_KeyDown"/>
 
                                     <!-- Buttons -->
