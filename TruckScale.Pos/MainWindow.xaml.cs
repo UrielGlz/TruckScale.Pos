@@ -150,6 +150,21 @@ namespace TruckScale.Pos
         public string Label { get; set; } = "";
     }
 
+    public sealed class CashClosingHistoryRow
+    {
+        public string  SessionUid    { get; init; } = "";
+        public DateTime OpenedAt     { get; init; }
+        public DateTime ClosedAt     { get; init; }
+        public string  OpenedByName  { get; init; } = "";
+        public string  ClosedByName  { get; init; } = "";
+        public decimal OpeningCash   { get; init; }
+        public decimal ClosingCash   { get; init; }
+        public decimal ExpectedCash  { get; init; }
+        public decimal DiffCash      { get; init; }
+        public int     TerminalId    { get; init; }
+        public int     SiteId        { get; init; }
+    }
+
     public class DenomButtonVm
     {
         public decimal Amount { get; set; }
@@ -262,6 +277,8 @@ namespace TruckScale.Pos
 
         private readonly ObservableCollection<TodayTxRow> _todayTx = new();
         private readonly ObservableCollection<VoidReasonItem> _voidReasons = new();
+        private readonly ObservableCollection<CashClosingHistoryRow> _cashClosingHistory = new();
+        private bool _cashClosingHistoryFromLocal;
 
         private TodayTxRow? _voidTargetRow;
 
@@ -2802,6 +2819,7 @@ namespace TruckScale.Pos
             AppendLog($"[Config] scale.com='{_scaleComPort}'");
 
             TodayTxGrid.ItemsSource = _todayTx;
+            CashClosingHistoryGrid.ItemsSource = _cashClosingHistory;
             await EnsureCashSessionAsync();
 
             // === Config general (incluye impresora) ===         
@@ -7305,6 +7323,99 @@ namespace TruckScale.Pos
         {
             TodayTxHost.IsOpen = false;
         }
+
+        // =========================
+        // Cash Closing History
+        // =========================
+        private async void OpenCashClosingHistory_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                await LoadCashClosingHistoryAsync();
+                CashClosingHistorySubtitle.Text =
+                    $"{DateTime.Now:yyyy-MM-dd}   |   {_cashClosingHistory.Count} closing(s)" +
+                    (_cashClosingHistoryFromLocal ? "   [LOCAL DB]" : "");
+                CashClosingHistoryHost.IsOpen = true;
+                RootDrawerHost.IsLeftDrawerOpen = false;
+            }
+            catch (Exception ex)
+            {
+                await ShowAlertAsync("Cash Closing History", ex.Message, PackIconKind.AlertCircleOutline);
+            }
+        }
+
+        private void CloseCashClosingHistory_Click(object sender, RoutedEventArgs e)
+        {
+            CashClosingHistoryHost.IsOpen = false;
+        }
+
+        private async void ReprintCashClose_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button btn || btn.DataContext is not CashClosingHistoryRow row)
+                return;
+
+            try
+            {
+                await PrintCashierCloseoutAsync(row.SessionUid, !_cashClosingHistoryFromLocal);
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[CashClosingHistory] Reprint error: {ex.Message}");
+            }
+        }
+
+        private async Task LoadCashClosingHistoryAsync()
+        {
+            _cashClosingHistory.Clear();
+
+            bool usedLocal = false;
+            await using var conn = await OpenMainThenLocalAsync("CashClosingHistory", ul => usedLocal = ul);
+            _cashClosingHistoryFromLocal = usedLocal;
+
+            const string SQL = @"
+                SELECT
+                    cs.session_uid,
+                    cs.opened_at,
+                    cs.closed_at,
+                    cs.opening_cash,
+                    cs.closing_cash,
+                    cs.expected_cash,
+                    cs.diff_cash,
+                    cs.terminal_id,
+                    cs.site_id,
+                    COALESCE(uo.full_name, uo.username, CAST(cs.opened_by_user_id AS CHAR)) AS opened_by_name,
+                    COALESCE(uc.full_name, uc.username, CAST(cs.closed_by_user_id AS CHAR), '') AS closed_by_name
+                FROM cash_sessions cs
+                LEFT JOIN users uo ON uo.user_id = cs.opened_by_user_id
+                LEFT JOIN users uc ON uc.user_id = cs.closed_by_user_id
+                WHERE cs.is_open = 0
+                  AND DATE(cs.closed_at) = CURDATE()
+                ORDER BY cs.closed_at DESC;";
+
+            await using var cmd = new MySqlCommand(SQL, conn);
+            await using var rd  = await cmd.ExecuteReaderAsync();
+
+            while (await rd.ReadAsync())
+            {
+                _cashClosingHistory.Add(new CashClosingHistoryRow
+                {
+                    SessionUid   = rd.GetValue(rd.GetOrdinal("session_uid")).ToString() ?? "",
+                    OpenedAt     = rd.IsDBNull(rd.GetOrdinal("opened_at"))      ? default : rd.GetDateTime("opened_at"),
+                    ClosedAt     = rd.IsDBNull(rd.GetOrdinal("closed_at"))      ? default : rd.GetDateTime("closed_at"),
+                    OpeningCash  = rd.IsDBNull(rd.GetOrdinal("opening_cash"))   ? 0m : rd.GetDecimal("opening_cash"),
+                    ClosingCash  = rd.IsDBNull(rd.GetOrdinal("closing_cash"))   ? 0m : rd.GetDecimal("closing_cash"),
+                    ExpectedCash = rd.IsDBNull(rd.GetOrdinal("expected_cash"))  ? 0m : rd.GetDecimal("expected_cash"),
+                    DiffCash     = rd.IsDBNull(rd.GetOrdinal("diff_cash"))      ? 0m : rd.GetDecimal("diff_cash"),
+                    TerminalId   = rd.IsDBNull(rd.GetOrdinal("terminal_id"))    ? 0  : rd.GetInt32("terminal_id"),
+                    SiteId       = rd.IsDBNull(rd.GetOrdinal("site_id"))        ? 0  : rd.GetInt32("site_id"),
+                    OpenedByName = rd.IsDBNull(rd.GetOrdinal("opened_by_name")) ? "" : rd.GetString("opened_by_name"),
+                    ClosedByName = rd.IsDBNull(rd.GetOrdinal("closed_by_name")) ? "" : rd.GetString("closed_by_name"),
+                });
+            }
+
+            AppendLog($"[CashClosingHistory] Loaded {_cashClosingHistory.Count} record(s) from {(usedLocal ? "LOCAL" : "MAIN")}_DB.");
+        }
+
         private async Task LoadTodayTransactionsAsync()
         {
             _todayTx.Clear();

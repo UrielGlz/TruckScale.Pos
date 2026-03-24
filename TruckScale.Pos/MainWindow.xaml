@@ -373,6 +373,7 @@
                     <TextBlock Text="{DynamicResource Menu.Title}" FontWeight="Bold" Margin="0,0,0,12"/>
                     <!--<Button Style="{StaticResource MaterialDesignOutlinedButton}" Content="{DynamicResource Menu.NewTicket}" Margin="0,0,0,8"/>-->
                     <Button Style="{StaticResource MaterialDesignOutlinedButton}" Content="Today's transactions" Margin="0,0,0,8" Click="OpenTodayTransactions_Click"/>
+                    <Button Style="{StaticResource MaterialDesignOutlinedButton}" Content="Cash Closing History" Margin="0,0,0,8" Click="OpenCashClosingHistory_Click"/>
                     <!--<Button Style="{StaticResource MaterialDesignOutlinedButton}" Content="{DynamicResource Menu.ScaleMonitor}" Margin="0,0,0,8"/>
                     <Button Style="{StaticResource MaterialDesignOutlinedButton}" Content="{DynamicResource Menu.Tickets}"/>-->
                 </StackPanel>
@@ -1918,6 +1919,109 @@
 
                             </Grid>
                         </md:Card>
+                    </md:DialogHost.DialogContent>
+                </md:DialogHost>
+
+                <!-- ===== CASH CLOSING HISTORY DialogHost ===== -->
+                <md:DialogHost x:Name="CashClosingHistoryHost"
+                               CloseOnClickAway="True"
+                               Grid.Row="0" Grid.Column="0"
+                               Grid.RowSpan="99" Grid.ColumnSpan="99"
+                               Panel.ZIndex="125">
+                    <md:DialogHost.DialogContent>
+                        <Grid Width="1100" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <md:Card Padding="18" md:ElevationAssist.Elevation="Dp3" UniformCornerRadius="16">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Header -->
+                                    <DockPanel Grid.Row="0" LastChildFill="True" Margin="0,0,0,10">
+                                        <Button DockPanel.Dock="Right"
+                                                Click="CloseCashClosingHistory_Click"
+                                                Style="{StaticResource MaterialDesignOutlinedButton}"
+                                                Height="34" MinWidth="88"
+                                                Padding="14,0" Margin="12,0,0,0"
+                                                VerticalAlignment="Center"
+                                                Content="Close"/>
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <md:PackIcon Kind="CashRegister" Width="22" Height="22" Margin="0,0,10,0"/>
+                                            <StackPanel>
+                                                <TextBlock Text="Cash Closing History" FontSize="18" FontWeight="SemiBold"/>
+                                                <TextBlock x:Name="CashClosingHistorySubtitle" Opacity=".65" FontSize="12" Margin="0,2,0,0"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </DockPanel>
+
+                                    <Border Grid.Row="0" BorderBrush="{DynamicResource MaterialDesignDivider}"
+                                            BorderThickness="0,0,0,1" Margin="0,0,0,10"/>
+
+                                    <!-- DataGrid -->
+                                    <DataGrid x:Name="CashClosingHistoryGrid"
+                                              Grid.Row="1"
+                                              AutoGenerateColumns="False"
+                                              CanUserAddRows="False"
+                                              IsReadOnly="True"
+                                              HeadersVisibility="Column"
+                                              RowHeaderWidth="0"
+                                              GridLinesVisibility="None"
+                                              MaxHeight="520"
+                                              SelectionMode="Single"
+                                              SelectionUnit="FullRow">
+                                        <DataGrid.Columns>
+
+                                            <DataGridTextColumn Header="Opened At"
+                                                Binding="{Binding OpenedAt, StringFormat={}{0:MM/dd HH:mm}}"
+                                                Width="130"/>
+
+                                            <DataGridTextColumn Header="Closed At"
+                                                Binding="{Binding ClosedAt, StringFormat={}{0:HH:mm}}"
+                                                Width="90"/>
+
+                                            <DataGridTextColumn Header="Opened By"
+                                                Binding="{Binding OpenedByName}"
+                                                Width="*"/>
+
+                                            <DataGridTextColumn Header="Closed By"
+                                                Binding="{Binding ClosedByName}"
+                                                Width="*"/>
+
+                                            <DataGridTextColumn Header="Opening $"
+                                                Binding="{Binding OpeningCash, StringFormat={}{0:N2}}"
+                                                Width="100"/>
+
+                                            <DataGridTextColumn Header="Closing $"
+                                                Binding="{Binding ClosingCash, StringFormat={}{0:N2}}"
+                                                Width="100"/>
+
+                                            <DataGridTextColumn Header="Expected $"
+                                                Binding="{Binding ExpectedCash, StringFormat={}{0:N2}}"
+                                                Width="100"/>
+
+                                            <DataGridTextColumn Header="Diff $"
+                                                Binding="{Binding DiffCash, StringFormat={}{0:N2}}"
+                                                Width="90"/>
+
+                                            <DataGridTemplateColumn Header="" Width="100">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <Button Click="ReprintCashClose_Click"
+                                                                ToolTip="Reprint closing report"
+                                                                Content="Reprint"
+                                                                Padding="8,4"
+                                                                Style="{StaticResource MaterialDesignOutlinedButton}"
+                                                                Height="32"/>
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Grid>
+                            </md:Card>
+                        </Grid>
                     </md:DialogHost.DialogContent>
                 </md:DialogHost>
 
