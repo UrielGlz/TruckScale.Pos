@@ -5519,7 +5519,7 @@ namespace TruckScale.Pos
                 s.sale_uid,
                 s.total,
                 s.currency,
-                COALESCE(s.occurred_at, s.created_at) AS sale_date,
+                COALESCE(s.created_at) AS sale_date,
                 dp.name AS product_description,
                 p.code AS product_code,
 
