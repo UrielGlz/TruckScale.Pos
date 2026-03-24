@@ -7829,6 +7829,13 @@ namespace TruckScale.Pos
         // Helper: operador actual
         private int CurrentUserId => PosSession.UserId;
 
+        /// <summary>Lanzada cuando ya existe is_open=1 para la misma (site, terminal). Caso recuperable.</summary>
+        private sealed class CashSessionAlreadyOpenException : InvalidOperationException
+        {
+            public CashSessionAlreadyOpenException()
+                : base("A cash session is already open for this terminal.") { }
+        }
+
         private sealed class CashSessionRow
         {
             public string SessionUid { get; init; } = "";
@@ -8037,6 +8044,31 @@ namespace TruckScale.Pos
                 CashSessionBlocker.Visibility = Visibility.Collapsed;
                 SetPosEnabled(true);
             }
+            catch (CashSessionAlreadyOpenException)
+            {
+                // La protección de idempotencia detectó que ya hay una sesión abierta.
+                // En lugar de bloquear, la adoptamos como sesión activa (mismo camino que EnsureCashSessionAsync).
+                AppendLog("[CashSession] Session already open for this terminal — attempting to adopt existing session.");
+                var existing = await GetOpenCashSessionAsync(_siteId, _terminalId);
+                if (existing != null)
+                {
+                    _currentCashSessionUid       = existing.SessionUid;
+                    _cashSessionOpenedByUserId   = existing.OpenedByUserId;
+                    _cashSessionOpenedAt         = existing.OpenedAt;
+                    _openingCash                 = existing.OpeningCash;
+
+                    CashOpenHost.IsOpen = false;
+                    CashSessionBlocker.Visibility = Visibility.Collapsed;
+                    SetPosEnabled(true);
+                    AppendLog($"[CashSession] Adopted existing session uid={TruncateUid(existing.SessionUid)} openedBy={existing.OpenedByUserId}");
+                }
+                else
+                {
+                    // Muy improbable: el check detectó sesión abierta pero ya no existe (race extremo).
+                    await ShowAlertAsync("Session error",
+                        "A session conflict was detected but no open session could be found. Please try again.");
+                }
+            }
             catch (Exception ex)
             {
                 await ShowAlertAsync("Open cash session failed", ex.Message);
@@ -8082,9 +8114,7 @@ namespace TruckScale.Pos
                     chk.Parameters.AddWithValue("@term", terminalId);
                     var openCount = Convert.ToInt32(await chk.ExecuteScalarAsync());
                     if (openCount > 0)
-                        throw new InvalidOperationException(
-                            "There is already an open cash session for this terminal. " +
-                            "Close the existing session before opening a new one.");
+                        throw new CashSessionAlreadyOpenException();
                 }
 
                 // 2. Insertar sólo si la verificación pasó
