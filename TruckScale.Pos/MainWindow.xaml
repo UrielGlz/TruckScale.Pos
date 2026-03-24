@@ -1848,7 +1848,8 @@
                                 MinWidth="120"
                                 Margin="0,0,10,0"
                                 Click="OpenCashSessionCancel_Click"/>
-                                        <Button Content="Open"
+                                        <Button x:Name="OpenCashSessionConfirmBtn"
+                                Content="Open"
                                 Style="{StaticResource MaterialDesignRaisedButton}"
                                 Height="44"
                                 MinWidth="120"

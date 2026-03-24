@@ -669,7 +669,7 @@ namespace TruckScale.Pos
             _last[ch] = w;
             _lastTail[ch] = tail;
 
-            // 2) UI en “tiempo real”
+            // 2) UI en "tiempo real"
             Dispatcher.InvokeAsync(() =>
             {
                 if (ch == 0) txtLiveAx1.Text = $"{_last[0]:0} lb";
@@ -1303,7 +1303,7 @@ namespace TruckScale.Pos
             catch { }
             UpdateWeightText(0);
 
-            // 6) UI “Waiting”
+            // 6) UI "Waiting"
             try
             {
                 if (_isConnected)
@@ -4138,7 +4138,7 @@ namespace TruckScale.Pos
                     await conn.OpenAsync();
                     usedLocal = true;
 
-                    // Marcamos la cola local como “sucia” para que el sincronizador sepa que hay ventas que subir
+                    // Marcamos la cola local como "sucia" para que el sincronizador sepa que hay ventas que subir
                     await DatabaseHelper.UpdateQueueStatusAsync(localConn, QueueStatus.DIRTY);
                     UpdateSyncStatusUI("⚠ Offline mode – sale stored locally");
                     AppendLog("[SaveSale] Using LOCAL_DB (offline mode).");
@@ -6643,7 +6643,7 @@ namespace TruckScale.Pos
                 return false;
             }
 
-            // “sin crédito” aunque el monto sea 0: en práctica NO sirve
+            // "sin crédito" aunque el monto sea 0: en práctica NO sirve
             if (acc.AvailableCredit <= 0m)
             {
                 reason = "No available credit.";
@@ -7099,7 +7099,7 @@ namespace TruckScale.Pos
                         {
                             allowed = false;
 
-                            // Mensaje especial: “solo reweigh” (asumiendo 12 y 2 fijos)
+                            // Mensaje especial: "solo reweigh" (asumiendo 12 y 2 fijos)
                             const decimal WEIGH = 12m;
                             const decimal REWEIGH = 2m;
 
@@ -7711,6 +7711,7 @@ namespace TruckScale.Pos
         private int _cashSessionOpenedByUserId;
         private DateTime _cashSessionOpenedAt;
         private decimal _openingCash;
+        private bool _openingCashInFlight; // guard contra doble click / doble submit
 
         private bool HasOpenSession => !string.IsNullOrWhiteSpace(_currentCashSessionUid);
 
@@ -7771,7 +7772,7 @@ namespace TruckScale.Pos
             // Si ya están, no hacemos nada
             if (_siteId > 0 && _terminalId > 0) return;
 
-            // Abrimos conexión “mejor posible” (MAIN si puede, sino LOCAL)
+            // Abrimos conexión "mejor posible" (MAIN si puede, sino LOCAL)
             var (conn, tx) = await OpenConnAndTxForReadAsync();
             await using (conn)
             await using (tx)
@@ -7887,6 +7888,9 @@ namespace TruckScale.Pos
 
         private async void OpenCashSessionConfirm_Click(object sender, RoutedEventArgs e)
         {
+            // Guard: evitar doble submit mientras la operación está en vuelo
+            if (_openingCashInFlight) return;
+
             if (!TryParseMoney(OpeningCashTextBox.Text, out var opening) || opening < 0m)
             {
                 await ShowAlertAsync("Invalid amount", "Please enter a valid opening cash amount (e.g. 50.00).");
@@ -7897,6 +7901,9 @@ namespace TruckScale.Pos
 
             var comment = (OpeningCommentTextBox.Text ?? "").Trim();
             var newUid = Guid.NewGuid().ToString();
+
+            _openingCashInFlight = true;
+            OpenCashSessionConfirmBtn.IsEnabled = false;
 
             try
             {
@@ -7923,6 +7930,11 @@ namespace TruckScale.Pos
             {
                 await ShowAlertAsync("Open cash session failed", ex.Message);
             }
+            finally
+            {
+                _openingCashInFlight = false;
+                OpenCashSessionConfirmBtn.IsEnabled = true;
+            }
         }
 
         private async Task CreateCashSessionAsync(
@@ -7933,29 +7945,50 @@ namespace TruckScale.Pos
             decimal openingCash,
             string? comment)
         {
-            const string SQL = @"
-                    INSERT INTO cash_sessions
-                    (session_uid, site_id, terminal_id, opened_by_user_id, opened_at,
-                     opening_cash, open_comment, is_open)
-                    VALUES
-                    (@uid, @site, @term, @by, NOW(),
-                     @cash, @cmt, 1);";
+            // Verificación atómica: SELECT FOR UPDATE bloquea el rango (gap lock en InnoDB)
+            // impidiendo que una transacción concurrente inserte otra sesión abierta antes del commit.
+            const string SQL_CHECK = @"
+                SELECT COUNT(*) FROM cash_sessions
+                WHERE site_id = @site AND terminal_id = @term AND is_open = 1
+                FOR UPDATE;";
 
-            // Aquí “simple”: inserta donde esté disponible (MAIN o LOCAL)
-            // Si tú ya decidiste “dual write MAIN + LOCAL”, lo cambiamos en el siguiente paso.
+            const string SQL_INSERT = @"
+                INSERT INTO cash_sessions
+                (session_uid, site_id, terminal_id, opened_by_user_id, opened_at,
+                 opening_cash, open_comment, is_open)
+                VALUES
+                (@uid, @site, @term, @by, NOW(),
+                 @cash, @cmt, 1);";
+
             var (conn, tx) = await OpenConnAndTxForWriteAsync();
             await using (conn)
             await using (tx)
             {
-                await using var cmd = new MySqlCommand(SQL, conn, tx);
-                cmd.Parameters.AddWithValue("@uid", cashSessionUid);
-                cmd.Parameters.AddWithValue("@site", siteId);
-                cmd.Parameters.AddWithValue("@term", terminalId);
-                cmd.Parameters.AddWithValue("@by", openedBy);
-                cmd.Parameters.AddWithValue("@cash", openingCash);
-                cmd.Parameters.AddWithValue("@cmt", string.IsNullOrWhiteSpace(comment) ? (object)DBNull.Value : comment);
+                // 1. Verificar dentro de la transacción (atomic check-then-insert)
+                await using (var chk = new MySqlCommand(SQL_CHECK, conn, tx))
+                {
+                    chk.Parameters.AddWithValue("@site", siteId);
+                    chk.Parameters.AddWithValue("@term", terminalId);
+                    var openCount = Convert.ToInt32(await chk.ExecuteScalarAsync());
+                    if (openCount > 0)
+                        throw new InvalidOperationException(
+                            "There is already an open cash session for this terminal. " +
+                            "Close the existing session before opening a new one.");
+                }
 
-                await cmd.ExecuteNonQueryAsync();
+                // 2. Insertar sólo si la verificación pasó
+                await using (var cmd = new MySqlCommand(SQL_INSERT, conn, tx))
+                {
+                    cmd.Parameters.AddWithValue("@uid", cashSessionUid);
+                    cmd.Parameters.AddWithValue("@site", siteId);
+                    cmd.Parameters.AddWithValue("@term", terminalId);
+                    cmd.Parameters.AddWithValue("@by", openedBy);
+                    cmd.Parameters.AddWithValue("@cash", openingCash);
+                    cmd.Parameters.AddWithValue("@cmt", string.IsNullOrWhiteSpace(comment) ? (object)DBNull.Value : comment);
+
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
                 await tx.CommitAsync();
             }
         }
@@ -7965,7 +7998,7 @@ namespace TruckScale.Pos
         // =========================
         private void SetPosEnabled(bool enabled)
         {
-            // Deshabilita lo “operable” del POS
+            // Deshabilita lo "operable" del POS
             MidCol.IsEnabled = enabled;
             RightCol.IsEnabled = enabled;
 
@@ -8002,7 +8035,7 @@ namespace TruckScale.Pos
         private async Task<(MySqlConnection conn, MySqlTransaction tx)> OpenConnAndTxForWriteAsync()
         {
             // Igual que read por ahora.
-            // (Luego aquí metemos tu “dual insert MAIN+LOCAL”)
+            // (Luego aquí metemos tu "dual insert MAIN+LOCAL")
             return await OpenConnAndTxForReadAsync();
         }
 
