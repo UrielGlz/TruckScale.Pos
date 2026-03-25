@@ -1929,7 +1929,7 @@
                                Grid.RowSpan="99" Grid.ColumnSpan="99"
                                Panel.ZIndex="125">
                     <md:DialogHost.DialogContent>
-                        <Grid Width="1100" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Grid Width="880" HorizontalAlignment="Center" VerticalAlignment="Center">
                             <md:Card Padding="18" md:ElevationAssist.Elevation="Dp3" UniformCornerRadius="16">
                                 <Grid>
                                     <Grid.RowDefinitions>
@@ -1967,18 +1967,18 @@
                                               HeadersVisibility="Column"
                                               RowHeaderWidth="0"
                                               GridLinesVisibility="None"
-                                              MaxHeight="520"
+                                              MaxHeight="500"
                                               SelectionMode="Single"
                                               SelectionUnit="FullRow">
                                         <DataGrid.Columns>
 
                                             <DataGridTextColumn Header="Opened At"
                                                 Binding="{Binding OpenedAt, StringFormat={}{0:MM/dd HH:mm}}"
-                                                Width="130"/>
+                                                Width="115"/>
 
                                             <DataGridTextColumn Header="Closed At"
                                                 Binding="{Binding ClosedAt, StringFormat={}{0:HH:mm}}"
-                                                Width="90"/>
+                                                Width="75"/>
 
                                             <DataGridTextColumn Header="Opened By"
                                                 Binding="{Binding OpenedByName}"
@@ -1990,27 +1990,27 @@
 
                                             <DataGridTextColumn Header="Opening $"
                                                 Binding="{Binding OpeningCash, StringFormat={}{0:N2}}"
-                                                Width="100"/>
+                                                Width="90"/>
 
                                             <DataGridTextColumn Header="Closing $"
                                                 Binding="{Binding ClosingCash, StringFormat={}{0:N2}}"
-                                                Width="100"/>
+                                                Width="90"/>
 
                                             <DataGridTextColumn Header="Expected $"
                                                 Binding="{Binding ExpectedCash, StringFormat={}{0:N2}}"
-                                                Width="100"/>
+                                                Width="90"/>
 
                                             <DataGridTextColumn Header="Diff $"
                                                 Binding="{Binding DiffCash, StringFormat={}{0:N2}}"
-                                                Width="90"/>
+                                                Width="80"/>
 
-                                            <DataGridTemplateColumn Header="" Width="100">
+                                            <DataGridTemplateColumn Header="" Width="105">
                                                 <DataGridTemplateColumn.CellTemplate>
                                                     <DataTemplate>
                                                         <Button Click="ReprintCashClose_Click"
                                                                 ToolTip="Reprint closing report"
                                                                 Content="Reprint"
-                                                                Padding="8,4"
+                                                                Padding="12,4"
                                                                 Style="{StaticResource MaterialDesignOutlinedButton}"
                                                                 Height="32"/>
                                                     </DataTemplate>

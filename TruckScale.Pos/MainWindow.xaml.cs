@@ -7389,10 +7389,17 @@ namespace TruckScale.Pos
                 LEFT JOIN users uo ON uo.user_id = cs.opened_by_user_id
                 LEFT JOIN users uc ON uc.user_id = cs.closed_by_user_id
                 WHERE cs.is_open = 0
-                  AND DATE(cs.closed_at) = CURDATE()
+                  AND cs.closed_at >= @dayStart
+                  AND cs.closed_at <  @dayEnd
                 ORDER BY cs.closed_at DESC;";
 
+            // Usar fecha LOCAL del POS para no depender del timezone del servidor MySQL
+            var dayStart = DateTime.Today;
+            var dayEnd   = dayStart.AddDays(1);
+
             await using var cmd = new MySqlCommand(SQL, conn);
+            cmd.Parameters.AddWithValue("@dayStart", dayStart);
+            cmd.Parameters.AddWithValue("@dayEnd",   dayEnd);
             await using var rd  = await cmd.ExecuteReaderAsync();
 
             while (await rd.ReadAsync())
