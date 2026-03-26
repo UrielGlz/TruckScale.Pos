@@ -1,28 +1,19 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
 namespace TruckScale.Pos.Tickets
 {
-    public class QrPayload
+    /// <summary>
+    /// Minimal QR payload. Built and parsed exclusively via <see cref="QrBuilder"/>.
+    /// </summary>
+    internal sealed class QrPayload
     {
-        [JsonPropertyName("v")]
-        public int Version { get; set; }
-
         [JsonPropertyName("ticket_uid")]
         public string TicketUid { get; set; } = "";
-
-        [JsonPropertyName("sale_uid")]
-        public string SaleUid { get; set; } = "";
 
         [JsonPropertyName("ticket_number")]
         public string TicketNumber { get; set; } = "";
 
-        [JsonPropertyName("total")]
-        public decimal Total { get; set; }
-
-        [JsonPropertyName("currency")]
-        public string Currency { get; set; } = "USD";
-
-        [JsonPropertyName("dt")]
-        public string DateTimeIso { get; set; } = "";
+        [JsonPropertyName("created_at")]
+        public string CreatedAt { get; set; } = "";
     }
 }

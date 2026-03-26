@@ -4442,11 +4442,10 @@ namespace TruckScale.Pos
                     _lastTicketUid = ticketUid;
                     _lastTicketNumber = ticketNumber;
 
-                    var currency = _selectedCurrency ?? "USD";
-                    _lastTicketQrJson = BuildTicketQrPayload(
-                        saleUid: saleUid,
+                    _lastTicketQrJson = QrBuilder.Build(
                         ticketUid: ticketUid,
-                        ticketNumber: ticketNumber);
+                        ticketNumber: ticketNumber,
+                        createdAt: DateTime.UtcNow);
 
                     if (usedLocal)
                         AppendLog($"[SaveSale] Sale {saleUid} saved in LOCAL_DB (offline).");
@@ -5659,11 +5658,10 @@ namespace TruckScale.Pos
 
                 data.TicketUid = ticketUid ?? "";
 
-                data.QrPayload = BuildTicketQrPayload(
-                    saleUid: saleUid,
-                    ticketUid: ticketUid,
-                    ticketNumber: data.TicketNumber                    
-                );
+                data.QrPayload = QrBuilder.Build(
+                    ticketUid: data.TicketUid,
+                    ticketNumber: data.TicketNumber,
+                    createdAt: data.Date);
 
                 // Weigher = operador actual
                 var opName = string.IsNullOrWhiteSpace(PosSession.FullName)
@@ -5732,28 +5730,6 @@ namespace TruckScale.Pos
             return next.ToString();
         }
 
-        private static string BuildTicketQrPayload(
-            string saleUid,
-            string? ticketUid,
-            string ticketNumber)
-        {
-            var payload = new QrPayload
-            {
-                Version = 1,
-                TicketUid = string.IsNullOrWhiteSpace(ticketUid) ? saleUid : ticketUid,
-                SaleUid = saleUid,
-                TicketNumber = ticketNumber
-            }; 
-
-            var options = new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                WriteIndented = false
-            };
-
-            return JsonSerializer.Serialize(payload, options);
-        }
-
         private static string SafeGetString(IDataRecord r, string column)
         {
             int ordinal = r.GetOrdinal(column);
@@ -5790,9 +5766,9 @@ namespace TruckScale.Pos
         private string? _reweighSourceTicketNumber;
 
         /// <summary>
-        /// Parsea el texto que viene del QR / captura manual y devuelve
-        /// posibles claves: ticketUid, saleUid, ticketNumber.
-        /// Soporta JSON (payload del QR) y texto plano (ticket_number).
+        /// Wraps <see cref="QrBuilder.Parse"/> adding backward-compat extraction of
+        /// <c>sale_uid</c> from legacy QR payloads and plain-GUID input support.
+        /// The date field is intentionally ignored — dates are always read from DB.
         /// </summary>
         private static (string? ticketUid, string? saleUid, string? ticketNumber) ParseTicketKey(string raw)
         {
@@ -5801,89 +5777,38 @@ namespace TruckScale.Pos
 
             raw = raw.Trim();
 
-            // 1) Intentar JSON (payload del QR)
-            if (raw.StartsWith("{") && raw.EndsWith("}"))
+            // Legacy QR compat: pull sale_uid if the JSON still carries it
+            string? legacySaleUid = null;
+            if (raw.StartsWith("{", StringComparison.Ordinal))
             {
                 try
                 {
                     using var doc = JsonDocument.Parse(raw);
                     var root = doc.RootElement;
-
-                    string? GetProp(params string[] names)
+                    foreach (var name in new[] { "sale_uid", "saleUid" })
                     {
-                        foreach (var n in names)
+                        if (root.TryGetProperty(name, out var p) &&
+                            p.ValueKind == JsonValueKind.String)
                         {
-                            if (root.TryGetProperty(n, out var p) &&
-                                p.ValueKind == JsonValueKind.String)
-                            {
-                                var val = p.GetString();
-                                if (!string.IsNullOrWhiteSpace(val))
-                                    return val!.Trim();
-                            }
+                            var v = p.GetString();
+                            if (!string.IsNullOrWhiteSpace(v)) { legacySaleUid = v; break; }
                         }
-                        return null;
                     }
-
-                    var ticketUid = GetProp("ticketUid", "ticket_uid");
-                    var saleUid = GetProp("saleUid", "sale_uid");
-                    var ticketNumber = GetProp("ticketNumber", "ticket_number", "ticket");
-
-                    // Normaliza ticketNumber si vino como dígitos (raro en QR, pero por si acaso)
-                    ticketNumber = NormalizeTicketNumber(ticketNumber);
-
-                    // OJO: aquí NO usamos ningún "dt" del QR; la fecha la leemos siempre de BD.
-                    return (ticketUid, saleUid, ticketNumber);
                 }
-                catch
-                {
-                    // JSON is malformed — try to salvage only ticket_number with a regex.
-                    // We don't trust any UID from a broken payload.
-                    var m = System.Text.RegularExpressions.Regex.Match(
-                        raw,
-                        @"ticket_number[^0-9]{1,15}(\d+)",
-                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                    if (m.Success)
-                    {
-                        var recovered = NormalizeTicketNumber(m.Groups[1].Value);
-                        if (recovered != null)
-                            return (null, null, recovered);
-                    }
-                    // Nothing recoverable — fall through to plain-text path
-                }
+                catch { }
             }
 
-            // 2) Texto plano
-            // Limpieza básica: quitar espacios internos, mayúsculas
-            var s = System.Text.RegularExpressions.Regex.Replace(raw, @"\s+", "");
-            s = s.ToUpperInvariant();
+            var (ticketUid, ticketNumber) = QrBuilder.Parse(raw);
 
-            // Si parece GUID, lo usamos también como posible uid
-            string? guidLike = null;
-            if (Guid.TryParse(s, out _))
-                guidLike = s;
+            // Plain-text GUID (scanner sent just the UID without JSON wrapper)
+            if (ticketUid == null && !raw.StartsWith("{", StringComparison.Ordinal))
+            {
+                var s = Regex.Replace(raw, @"\s+", "").ToUpperInvariant();
+                if (Guid.TryParse(s, out _))
+                    return (s, s, null);
+            }
 
-           
-            var tNum = NormalizeTicketNumber(s);
-
-            return (guidLike, guidLike, tNum);
-        }
-
-        private static string? NormalizeTicketNumber(string? input)
-        {
-            if (string.IsNullOrWhiteSpace(input))
-                return null;
-
-            var s = input.Trim().ToUpperInvariant();
-
-            // Quitar prefijo TS- si viene
-            if (s.StartsWith("TS-")) s = s.Substring(3);
-            else if (s.StartsWith("TS")) s = s.Substring(2);
-
-            // Si es numérico, quitar ceros a la izquierda
-            if (long.TryParse(s, out var n))
-                return n.ToString(); // <-- "35"
-
-            return s;
+            return (ticketUid, legacySaleUid, ticketNumber);
         }
 
 
