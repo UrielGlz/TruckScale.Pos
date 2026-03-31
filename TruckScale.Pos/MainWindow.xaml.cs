@@ -3685,9 +3685,11 @@ namespace TruckScale.Pos
                 DriverAccountAddressText.Text = "Address: —";
             }
 
-            // Mostrar banner de sin crédito cuando la cuenta es business y el crédito está agotado
+            // Mostrar banner de sin crédito cuando la cuenta es business, el crédito YA fue cargado
+            // (_uiHasCredit=true) y el saldo está agotado. Excluir el estado default (_uiHasCredit=false)
+            // para evitar falsos positivos cuando LoadCreditSnapshotAsync aún no ha terminado.
             bool isBusinessAccount = !string.IsNullOrWhiteSpace(d.AccountName);
-            NoCreditBanner.Visibility = (isBusinessAccount && _uiAvailableCredit <= 0m)
+            NoCreditBanner.Visibility = (isBusinessAccount && _uiHasCredit && _uiAvailableCredit <= 0m)
                 ? Visibility.Visible
                 : Visibility.Collapsed;
 
