@@ -8301,7 +8301,7 @@ namespace TruckScale.Pos
                 }
 
                 //var diff = closingCash - expected;
-                var diff = (_openingCash + expected) - closingCash;
+                var diff = expected - closingCash;
                 const string SQL_CLOSE = @"
                     UPDATE cash_sessions
                     SET is_open = 0,
