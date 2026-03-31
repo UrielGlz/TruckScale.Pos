@@ -20,7 +20,7 @@ namespace TruckScale.Pos.Tickets
             "Certificate No. 036231";
         public string WebSite { get; set; } =
     "Website: www.mcallenftz.org" + Environment.NewLine +
-    "Email: fizinfo@mftz.org";
+    "Email: info@mmcallenftz.org";
 
         public string ReweighWarning { get; set; } =
             "ALL RE-WEIGHS MUST BE DONE WITHIN 12 HOURS OF ORIGINAL WEIGH TIME.";
