@@ -1239,6 +1239,7 @@ namespace TruckScale.Pos
             try { ChoferApellidosText.Text = ""; } catch { }
             try { LicenciaNumeroText.Text = ""; } catch { }
             try { PlacasRegText.Text = ""; } catch { }
+            try { SetReweighEditable(true); } catch { }   // reset reweigh lock between transactions
 
             // Unidad
             try { TrailerNumberText.Text = ""; } catch { }
