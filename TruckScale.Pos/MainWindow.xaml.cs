@@ -222,7 +222,7 @@ namespace TruckScale.Pos
         private bool _hasAcceptedWeight;
         private bool _isSaving = false;   // guard de re-entrada para RegisterSave_Click
         // ==== Estado WAIT/OK y snapshot de peso estable ====
-        private volatile bool _canAccept = false;          // true cuando hay snapshot estable listo para guardar
+        private bool _canAccept = false;          // true cuando hay snapshot estable listo para guardar
         private double _snapAx1, _snapAx2, _snapAx3, _snapTotal;
         private string _snapRaw = "";
         private DateTime _snapUtc;
@@ -641,10 +641,7 @@ namespace TruckScale.Pos
         // ----- Estado de estabilidad -----
         private readonly Stopwatch _sw = Stopwatch.StartNew();
         private long _lastUnstableMs = 0;
-        private volatile bool _autoStable = false;
-        // _stateGen se incrementa cada vez que se hace reset de estabilidad para descartar
-        // callbacks InvokeAsync obsoletos que lleguen después del reset.
-        private volatile int _stateGen = 0;
+        private bool _autoStable = false;
         private double _lastPersistedTotal = double.NaN;
         // Prefill de chofer cuando viene de ticket reweigh (venta original)
         private DriverInfo? _reweighPrefillDriver;
@@ -667,10 +664,7 @@ namespace TruckScale.Pos
             return (map != null && map.TryGetValue(key, out v)) ? v : 0d;
         }
 
-        // Accedida desde hilo serial (EvaluateStabilityAndUpdateUi) y hilo UI (Clear).
-        // Toda operación sobre esta cola debe hacerse dentro de lock(_stabilityLock).
         private readonly Queue<(long ts, double total)> _winTotals = new();
-        private readonly object _stabilityLock = new();
 
         private void ProcessLine2(string line)
         {
@@ -692,24 +686,7 @@ namespace TruckScale.Pos
             _last[ch] = w;
             _lastTail[ch] = tail;
 
-            // 2) GR = báscula reporta inestabilidad de hardware → resetear estabilidad inmediatamente.
-            //    Esto debe hacerse antes de evaluar la ventana de estabilidad por software.
-            if (tail == "GR")
-            {
-                _canAccept = false;
-                _autoStable = false;
-                int grGen = ++_stateGen;
-                lock (_stabilityLock) { _winTotals.Clear(); }
-                Dispatcher.InvokeAsync(() =>
-                {
-                    if (_stateGen != grGen) return;
-                    lblTemp.Content = "Weight in progress";
-                    SetOkButtonWaitState();
-                });
-                return;
-            }
-
-            // 3) UI en "tiempo real"
+            // 2) UI en "tiempo real"
             Dispatcher.InvokeAsync(() =>
             {
                 if (ch == 0) txtLiveAx1.Text = $"{_last[0]:0} lb";
@@ -729,9 +706,6 @@ namespace TruckScale.Pos
         /// Evalúa estabilidad en ventana, actualiza UI y genera un snapshot
         /// listo para guardar cuando el operador presione OK.
         /// NO guarda en BD aquí.
-        /// Llamada desde el hilo del puerto serial; toda escritura en _winTotals
-        /// se protege con _stabilityLock para evitar corrupción con las llamadas
-        /// Clear() del hilo UI.  _stateGen descarta callbacks InvokeAsync obsoletos.
         /// </summary>
         private void EvaluateStabilityAndUpdateUi(IDictionary<int, double> axles, string note)
         {
@@ -742,31 +716,11 @@ namespace TruckScale.Pos
 
             long now = _sw.ElapsedMilliseconds;
 
-            // ── Ventana deslizante: enqueue + dequeue dentro del mismo lock ──────
-            int count;
-            double span;
-            lock (_stabilityLock)
-            {
-                _winTotals.Enqueue((now, total));
-                while (_winTotals.Count > 0 && (now - _winTotals.Peek().ts) > WINDOW_MS)
-                    _winTotals.Dequeue();
+            _winTotals.Enqueue((now, total));
+            while (_winTotals.Count > 0 && (now - _winTotals.Peek().ts) > WINDOW_MS)
+                _winTotals.Dequeue();
 
-                count = _winTotals.Count;
-                double min = double.PositiveInfinity;
-                double max = double.NegativeInfinity;
-                foreach (var s in _winTotals)
-                {
-                    if (s.total < min) min = s.total;
-                    if (s.total > max) max = s.total;
-                }
-                span = (count > 0) ? (max - min) : double.PositiveInfinity;
-            }
-
-            // Capturamos la generación DESPUÉS del lock para que sea coherente con
-            // el estado que leemos a continuación.
-            int gen = _stateGen;
-
-            if (count < MIN_SAMPLES || total < MIN_TOTAL_LB)
+            if (_winTotals.Count < MIN_SAMPLES || total < MIN_TOTAL_LB)
             {
                 _autoStable = false;
                 _canAccept = false;
@@ -774,13 +728,21 @@ namespace TruckScale.Pos
 
                 Dispatcher.InvokeAsync(() =>
                 {
-                    if (_stateGen != gen) return;
                     lblTemp.Content = total < MIN_TOTAL_LB ? "Waiting for truck…" : "Weight in progress";
                     SetOkButtonWaitState();
                 });
 
                 return;
             }
+
+            double min = double.PositiveInfinity;
+            double max = double.NegativeInfinity;
+            foreach (var s in _winTotals)
+            {
+                if (s.total < min) min = s.total;
+                if (s.total > max) max = s.total;
+            }
+            double span = max - min;
 
             if (span > EPSILON_LB)
             {
@@ -791,7 +753,6 @@ namespace TruckScale.Pos
 
                 Dispatcher.InvokeAsync(() =>
                 {
-                    if (_stateGen != gen) return;
                     lblTemp.Content = "Weight in progress";
                     SetOkButtonWaitState();
                 });
@@ -818,7 +779,6 @@ namespace TruckScale.Pos
 
                 Dispatcher.InvokeAsync(() =>
                 {
-                    if (_stateGen != gen) return;
                     lblTemp.Content = "Check axles / total";
                     SetOkButtonWaitState();
                 });
@@ -835,7 +795,6 @@ namespace TruckScale.Pos
 
                 Dispatcher.InvokeAsync(() =>
                 {
-                    if (_stateGen != gen) return;
                     lblTemp.Content = "Waiting for next truck…";
                     SetOkButtonWaitState();
                 });
@@ -855,7 +814,6 @@ namespace TruckScale.Pos
 
             Dispatcher.InvokeAsync(() =>
             {
-                if (_stateGen != gen) return;   // descartar si hubo reset posterior
                 lblTemp.Content = "STABLE — press OK";
                 SetOkButtonReadyState();
             });
@@ -1268,8 +1226,7 @@ namespace TruckScale.Pos
 
             _simSavedOnce = false;
             _autoStable = false;
-            _stateGen++;                                    // invalidar callbacks InvokeAsync anteriores
-            lock (_stabilityLock) { _winTotals.Clear(); }
+            _winTotals.Clear();
             _canAccept = false;
 
             HideDriverCard();
@@ -1801,13 +1758,12 @@ namespace TruckScale.Pos
                 _lastPersistedTotal = total;
                 _canAccept = false;
                 _autoStable = false;
-                _stateGen++;                                    // invalidar callbacks InvokeAsync anteriores
-                lock (_stabilityLock) { _winTotals.Clear(); }
+                _winTotals.Clear();
                 if (_isSimulated) _simSavedOnce = true;
 
                 Dispatcher.Invoke(() =>
                 {
-
+                  
 
                     lblUUID.Content = uuid;
                     lblTemp.Content = "Waiting for next truck…";
@@ -1817,13 +1773,7 @@ namespace TruckScale.Pos
             catch (Exception ex)
             {
                 AppendLog("[DB] ERROR al guardar desde OK: " + ex);
-                _hasAcceptedWeight = false;
-                Dispatcher.Invoke(() =>
-                {
-                    UpdateOkNewButtonsEnabled();
-                    lblTemp.Content = "DB ERROR – reintente";
-                    SetOkButtonWaitState();
-                });
+                Dispatcher.Invoke(() => lblTemp.Content = "DB ERROR");
                 _ = _logger?.LogEventAsync("ACCEPT_EX", rawLine: raw, note: ex.ToString());
             }
         }
@@ -4861,16 +4811,16 @@ namespace TruckScale.Pos
                 var id = await saveScaleData(ax1, ax2, ax3, total, raw, uuid);
                 AppendLog($"[DB] Insertado id={id} (uuid={uuid})");
 
-                // A partir de aquí ya hay un peso aceptado
+                // New [ A partir de aquí ya hay un peso aceptado
                 _hasAcceptedWeight = true;
+
 
                 UpdateProductButtonsEnabled();
                 // Reglas para siguiente camión
                 _lastPersistedTotal = total;
                 _canAccept = false;
                 _autoStable = false;
-                _stateGen++;                                    // invalidar callbacks InvokeAsync anteriores
-                lock (_stabilityLock) { _winTotals.Clear(); }
+                _winTotals.Clear();
                 //if (_isSimulated) _simSavedOnce = true;
 
                 Dispatcher.Invoke(() =>
@@ -4896,12 +4846,9 @@ namespace TruckScale.Pos
             catch (Exception ex)
             {
                 AppendLog("[DB] ERROR al guardar desde OK: " + ex);
-                // Restaurar estado para que el operador pueda reintentar o iniciar nueva transacción
-                _hasAcceptedWeight = false;
                 Dispatcher.Invoke(() =>
                 {
-                    UpdateOkNewButtonsEnabled();
-                    lblTemp.Content = "DB ERROR – reintente";
+                    lblTemp.Content = "DB ERROR";
                     SetOkButtonWaitState();
                 });
                 _ = _logger?.LogEventAsync("ACCEPT_EX", rawLine: raw, note: ex.ToString());
