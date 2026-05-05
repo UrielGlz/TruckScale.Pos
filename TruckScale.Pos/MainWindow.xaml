@@ -13,7 +13,7 @@
         WindowState="Maximized"
         PreviewKeyDown="Window_PreviewKeyDown">
 
-    <!-- ====== ResizeMode="NoResize" WindowStyle="None" RECURSOS DE ESTILO ====== -->
+    <!-- ====== ResizeMode="NoResize" WindowStyle="None" RECURSOS DE ESTILO TEST ====== -->
     <Window.Resources>
 
         <!-- ===== COLORES PERSONALIZADOS ===== -->
@@ -364,6 +364,7 @@
 
     </Window.Resources>
 
+    
     <md:DialogHost x:Name="RootDialog">
         <md:DrawerHost x:Name="RootDrawerHost">
 
