@@ -39,14 +39,27 @@ namespace TruckScale.Pos
     public class KeypadConfig
     {
         public int Columns { get; set; } = 3;
-        public string[] Keys { get; set; } = new[] { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "00", "←" };
-        public decimal[] Denominations { get; set; } = new decimal[] { 1,2, 5, 10, 20, 50, 100};
+
+        public string[] Keys { get; set; } = new[]
+        {
+            "1", "2", "3",
+            "4", "5", "6",
+            "7", "8", "9",
+            ".", "0", "00",
+            "←"
+        };
+
+        public decimal[] Denominations { get; set; } = new decimal[]
+        {
+            1, 2, 5, 10, 20, 50, 100, '.'
+        };
     }
 
     public enum UnitSystem { Metric, Imperial }
 
     public sealed class PaymentMethod : INotifyPropertyChanged
     {
+
 
         public int Id { get; init; }
         public string Code { get; init; } = "";
@@ -152,17 +165,17 @@ namespace TruckScale.Pos
 
     public sealed class CashClosingHistoryRow
     {
-        public string  SessionUid    { get; init; } = "";
-        public DateTime OpenedAt     { get; init; }
-        public DateTime ClosedAt     { get; init; }
-        public string  OpenedByName  { get; init; } = "";
-        public string  ClosedByName  { get; init; } = "";
-        public decimal OpeningCash   { get; init; }
-        public decimal ClosingCash   { get; init; }
-        public decimal ExpectedCash  { get; init; }
-        public decimal DiffCash      { get; init; }
-        public int     TerminalId    { get; init; }
-        public int     SiteId        { get; init; }
+        public string SessionUid { get; init; } = "";
+        public DateTime OpenedAt { get; init; }
+        public DateTime ClosedAt { get; init; }
+        public string OpenedByName { get; init; } = "";
+        public string ClosedByName { get; init; } = "";
+        public decimal OpeningCash { get; init; }
+        public decimal ClosingCash { get; init; }
+        public decimal ExpectedCash { get; init; }
+        public decimal DiffCash { get; init; }
+        public int TerminalId { get; init; }
+        public int SiteId { get; init; }
     }
 
     public class DenomButtonVm
@@ -193,6 +206,7 @@ namespace TruckScale.Pos
         // ===== UI: keypad / pagos =====
         private KeypadConfig _kp = new();
         private string _keypadBuffer = "";
+        private bool _nextDenomAsCents = false;
         public string KeypadText => string.IsNullOrEmpty(_keypadBuffer) ? "0" : _keypadBuffer;
         private string _selectedPaymentId = "";
 
@@ -351,8 +365,27 @@ namespace TruckScale.Pos
                 _suggestedBtn = new DenomButtonVm { IsSuggested = true };
                 _denomButtons.Add(_suggestedBtn);
 
+                //foreach (var d in _kp.Denominations)
+                //{
+                //    _denomButtons.Add(new DenomButtonVm
+                //    {
+                //        Amount = d,
+                //        Text = d.ToString("0.##", CultureInfo.InvariantCulture)
+                //    });
+                //}
                 foreach (var d in _kp.Denominations)
                 {
+                    if (d == (decimal)'.')
+                    {
+                        _denomButtons.Add(new DenomButtonVm
+                        {
+                            Amount = -1m,
+                            Text = "."
+                        });
+
+                        continue;
+                    }
+
                     _denomButtons.Add(new DenomButtonVm
                     {
                         Amount = d,
@@ -499,7 +532,7 @@ namespace TruckScale.Pos
             {
                 AppendLog($"[Boot] Trying to open scale on {_scaleComPort}…");
                 StartReader(); // ya no recibe parámetro
-               //StartSimulatedReader(); //TODO UG | IMPORTANTE QUITAR ESTO
+                               //StartSimulatedReader(); //TODO UG | IMPORTANTE QUITAR ESTO
 
             }
             catch (Exception ex)
@@ -902,7 +935,7 @@ namespace TruckScale.Pos
             TruckScale.Pos.Config.ConfigManager.Load();
 
             Exception? lastConnEx = null;
-           
+
             // 1) Intentar BD PRIMARY (online)
             if (!string.IsNullOrWhiteSpace(ConfigManager.Current.MainDbStrCon))
             {
@@ -911,7 +944,7 @@ namespace TruckScale.Pos
                     AppendLog("[DB] Trying PRIMARY DB for scale_session_axles...");
                     return await SaveScaleDataOnConnection(
                         ConfigManager.Current.MainDbStrCon,
-                         GetCurrentOperatorId(),eje1, eje2, eje3, total, rawLine, uuid_weight,
+                         GetCurrentOperatorId(), eje1, eje2, eje3, total, rawLine, uuid_weight,
                         isPrimary: true);
                 }
                 catch (Exception ex)
@@ -929,7 +962,7 @@ namespace TruckScale.Pos
                     AppendLog("[DB] Trying LOCAL DB for scale_session_axles...");
                     return await SaveScaleDataOnConnection(
                         ConfigManager.Current.LocalDbStrCon,
-                         GetCurrentOperatorId(),eje1, eje2, eje3, total, rawLine, uuid_weight,
+                         GetCurrentOperatorId(), eje1, eje2, eje3, total, rawLine, uuid_weight,
                         isPrimary: false);
                 }
                 catch (Exception ex)
@@ -980,10 +1013,10 @@ namespace TruckScale.Pos
 
             return (long)cmd.LastInsertedId;
         }
-        
-        private static async Task<long> SaveScaleDataOnConnection(string connStr, int operator_id,double eje1, double eje2, double eje3, double total, string rawLine, string uuid_weight, bool isPrimary)
+
+        private static async Task<long> SaveScaleDataOnConnection(string connStr, int operator_id, double eje1, double eje2, double eje3, double total, string rawLine, string uuid_weight, bool isPrimary)
         {
-         
+
 
             const string SQL = @"INSERT INTO scale_session_axles (
                                  uuid_weight,axle_index,weight_lb,captured_utc, captured_local,
@@ -1028,7 +1061,7 @@ namespace TruckScale.Pos
                 string.IsNullOrEmpty(rawLine)
                     ? (object)DBNull.Value
                     : (rawLine.Length > 128 ? rawLine[..128] : rawLine));
-            
+
             cmd.Parameters.AddWithValue("@operator_id", operator_id);
 
             cmd.Parameters.AddWithValue("@e1", (int)Math.Round(eje1));
@@ -1209,7 +1242,7 @@ namespace TruckScale.Pos
 
 
             _reweighServiceReady = false;
-     
+
             lblModalName.Text = "Search driver";
 
 
@@ -1295,7 +1328,7 @@ namespace TruckScale.Pos
 
             // Ningún método de pago seleccionado hasta que el operador elija uno
             _selectedPaymentId = "";
-           
+
 
             _keypadBuffer = "";
 
@@ -1394,7 +1427,13 @@ namespace TruckScale.Pos
         //    catch { }
         //}
 
+        private void CustomAmountText_PreviewTextInput(object sender, TextCompositionEventArgs e)
+        {
+            e.Handled = !Regex.IsMatch(e.Text, @"^[0-9.]$");
 
+            if (e.Text == "." && ((TextBox)sender).Text.Contains("."))
+                e.Handled = true;
+        }
         private void PayButton_Click(object sender, RoutedEventArgs e)
         {
             SetPayment(((Button)sender).Tag?.ToString() ?? "cash");
@@ -1589,6 +1628,19 @@ namespace TruckScale.Pos
             if (btn.Tag is decimal d) add = d;
             else if (!decimal.TryParse(btn.Tag?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out add)) return;
 
+            if (add == -1m)
+            {
+                _nextDenomAsCents = true;
+                return;
+            }
+
+            if (_nextDenomAsCents)
+            {
+                add = add / 100m;
+                _nextDenomAsCents = false;
+            }
+
+
             if (string.IsNullOrWhiteSpace(_selectedPaymentId))
             {
                 await ShowAlertAsync("Payment method required",
@@ -1646,14 +1698,14 @@ namespace TruckScale.Pos
         /// Si ya existe un chofer vinculado al peso actual (_driverLinked = true),
         /// carga sus datos en el formulario para permitir edición.
         /// </summary>
-    
+
         private async void RegisterDriver_Click(object sender, RoutedEventArgs e)
         {
             // Abrir modal
             RootDialog.IsOpen = true;
 
             // Si no hay productos cargados en el modal, evitamos nulls
-            
+
             var desiredProductCode = _selectedProductCode ?? "";
             var desiredDp = _driverProducts.FirstOrDefault(x =>
                 string.Equals(x.Code, desiredProductCode, StringComparison.OrdinalIgnoreCase));
@@ -1672,7 +1724,7 @@ namespace TruckScale.Pos
                 if (existing != null)
                 {
 
-                    FillDriverFormFromInfo(existing,"temp");
+                    FillDriverFormFromInfo(existing, "temp");
                 }
                 else if (isReweighPrefill)
                 {
@@ -1763,7 +1815,7 @@ namespace TruckScale.Pos
 
                 Dispatcher.Invoke(() =>
                 {
-                  
+
 
                     lblUUID.Content = uuid;
                     lblTemp.Content = "Waiting for next truck…";
@@ -2774,7 +2826,7 @@ namespace TruckScale.Pos
                 if (PagosEmpty != null)
                     PagosEmpty.Visibility = _pagos.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-                
+
                 UpdateDoneButtonState();
                 UpdateSuggestedPayButton();
 
@@ -2805,7 +2857,7 @@ namespace TruckScale.Pos
             }
             catch
             {
-                
+
             }
         }
 
@@ -2825,7 +2877,7 @@ namespace TruckScale.Pos
             // === Config general (incluye impresora) ===         
             UpdateOkNewButtonsEnabled(); // _hasAcceptedWeight inicia false => OK enabled, New disabled
 
-          
+
 
             var dbCfg = new DatabaseConfig();
             var factory = new MySqlConnectionFactory(dbCfg);
@@ -3050,7 +3102,7 @@ namespace TruckScale.Pos
             }
             catch
             {
-                
+
             }
         }
         private void WarnAndLog(string kind, string userMessage, string? detail = null, string? raw = null)
@@ -3988,7 +4040,7 @@ namespace TruckScale.Pos
                 _selectedPaymentId = "";
                 SetDenominationsEnabled(false);
                 UpdateSuggestedPayButton(); // por si acaso
-            
+
             }
 
             // Al cambiar de método (ej. Cash → Card): si el total en _pagos ya cubre
@@ -4048,7 +4100,7 @@ namespace TruckScale.Pos
 
 
 
-        private async  void PaymentMethod_Click(object sender, RoutedEventArgs e)
+        private async void PaymentMethod_Click(object sender, RoutedEventArgs e)
         {
             if ((sender as FrameworkElement)?.DataContext is PaymentMethod pm)
                 SelectPaymentByCode(pm.Code);
@@ -4081,7 +4133,7 @@ namespace TruckScale.Pos
         private int _siteId = 0;       // setéalo al arrancar (ej. 1)
         private int _terminalId = 0;   // setéalo al arrancar (ej. 1)       
 
-       
+
         private async Task<int> GetDefaultSiteIdAsync(MySqlConnection conn, MySqlTransaction tx)
         {
             const string Q = "SELECT site_id FROM sites ORDER BY site_id LIMIT 1;";
@@ -4189,7 +4241,7 @@ namespace TruckScale.Pos
                         : await GetDefaultTerminalIdAsync(conn, (MySqlTransaction)tx);
 
                     int operatorId = GetCurrentOperatorId();
-                    
+
                     // Fix relevo: usar el opener original de la sesión, no el operador activo,
                     // para que LOCAL_DB quede consistente con MAIN_DB en auditoría.
                     await EnsureCashSessionExistsOnThisDbAsync(conn, (MySqlTransaction)tx, siteId, terminalId, _cashSessionOpenedByUserId);
@@ -4282,7 +4334,7 @@ namespace TruckScale.Pos
 
 
                     //UG logica para clinetes type PREPAID business account
-                  
+
 
                     var creditType = (acc?.CreditType ?? "POSTPAID").Trim().ToUpperInvariant();
                     //var creditType = string.IsNullOrWhiteSpace(acc.CreditType) ? "POSTPAID" : acc.CreditType!;
@@ -4362,7 +4414,7 @@ namespace TruckScale.Pos
                     var businessAmount = _pagos
                         .Where(p => string.Equals(p.Code, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
                         .Sum(p => p.Monto);
-                   
+
                     if (businessAmount > 0m)
                     {
                         if (acc == null || acc.IdCustomer <= 0)
@@ -4482,7 +4534,7 @@ namespace TruckScale.Pos
                 await using var cmd = new MySqlCommand(SQL, conn);
                 cmd.Parameters.AddWithValue("@tuid", ticketUid);
                 cmd.Parameters.AddWithValue("@suid", saleUid);
-                cmd.Parameters.AddWithValue("@img",  sigBytes);
+                cmd.Parameters.AddWithValue("@img", sigBytes);
                 cmd.Parameters.AddWithValue("@user", GetCurrentOperatorId());
                 await cmd.ExecuteNonQueryAsync();
             }
@@ -4517,7 +4569,7 @@ namespace TruckScale.Pos
             }
         }
 
-        private async Task EnsureCashSessionExistsOnThisDbAsync( MySqlConnection conn, MySqlTransaction tx,int siteId, int terminalId, int userId)
+        private async Task EnsureCashSessionExistsOnThisDbAsync(MySqlConnection conn, MySqlTransaction tx, int siteId, int terminalId, int userId)
         {
             if (string.IsNullOrWhiteSpace(_currentCashSessionUid))
                 throw new InvalidOperationException("No open cash session in memory.");
@@ -5199,7 +5251,7 @@ namespace TruckScale.Pos
         /// Actualizado: ahora también carga el teléfono del chofer.
         /// </summary>
 
-        private void FillDriverFormFromInfo(DriverInfo d,string from)
+        private void FillDriverFormFromInfo(DriverInfo d, string from)
         {
             // Driver phone - cargar teléfono para edición
             if (!string.IsNullOrWhiteSpace(d.PhoneDigits))
@@ -5219,7 +5271,7 @@ namespace TruckScale.Pos
 
 
             }
-            else if(from == "reweigh") 
+            else if (from == "reweigh")
             {
                 DriverPhoneText.Text = "";
 
@@ -5229,8 +5281,8 @@ namespace TruckScale.Pos
                 LicenciaNumeroText.Text = "";
                 SetReweighEditable(false);
             }
-              
-            
+
+
             PlacasRegText.Text = d.Plates;
             TrailerNumberText.Text = d.TrailerNumber;
             TractorNumberText.Text = d.TractorNumber;
@@ -5521,11 +5573,11 @@ namespace TruckScale.Pos
 
             var csb = new MySqlConnector.MySqlConnectionStringBuilder(raw)
             {
-                AllowZeroDateTime   = true,
+                AllowZeroDateTime = true,
                 ConvertZeroDateTime = true,
                 // GuidFormat=None: devuelve CHAR(36) como string, no como System.Guid.
                 // Sin esto, MySqlConnector 2.x convierte CHAR(36) a Guid y GetString() explota.
-                GuidFormat          = MySqlConnector.MySqlGuidFormat.None,
+                GuidFormat = MySqlConnector.MySqlGuidFormat.None,
             };
             return csb.ConnectionString;
         }
@@ -5742,7 +5794,7 @@ namespace TruckScale.Pos
             return value?.ToString() ?? "";
         }
         // ===== Reweigh settings (por ahora fijos; luego se TENEMOS q leer de settings) =====
-        
+
         private const int REWEIGH_WINDOW_MINUTES = 120; // fallback si DB no responde
         private const int REWEIGH_MAX_TIMES = 1;   // solo un REWEIGH por venta original
         private sealed class ReweighCandidate
@@ -6167,7 +6219,7 @@ namespace TruckScale.Pos
                 _reweighPrefillDriver = drv;
 
 
-       
+
                 _driverLinked = true;
                 _formUnlocked = true;
                 ShowDriverCard(drv);      // ya la tienes en RegisterSave_Click
@@ -6232,13 +6284,15 @@ namespace TruckScale.Pos
             // Si es válido:
             // - Aquí YA tienes _reweighSourceSaleId / _reweighSourceSaleUid / _reweighSourceTicketNumber
             // - Cierra el modal y deja que el operador capture chofer / pagos como siempre
-            try { 
+            try
+            {
                 ReweighHost.IsOpen = false;
                 _reweighServiceReady = true;
                 try { WeighToggle.IsChecked = false; } catch { }
-                
 
-            } catch { }
+
+            }
+            catch { }
 
             // Activar visualmente REWEIGH como producto seleccionado
             ApplySelected("REWEIGH");
@@ -6601,7 +6655,7 @@ namespace TruckScale.Pos
 
             return true;
         }
-       
+
         private const string BUSINESS_CODE = "business";
         private const string CARD_CODE = "card";
 
@@ -6735,7 +6789,7 @@ namespace TruckScale.Pos
             }
         }
 
-        private async Task UpdateCustomerCreditAsync(MySqlConnection conn,MySqlTransaction tx, int customerId,decimal amount,string creditType)
+        private async Task UpdateCustomerCreditAsync(MySqlConnection conn, MySqlTransaction tx, int customerId, decimal amount, string creditType)
         {
             if (customerId <= 0)
                 throw new ArgumentException("Invalid customerId.", nameof(customerId));
@@ -6793,13 +6847,13 @@ namespace TruckScale.Pos
                 throw new InvalidOperationException($"Unknown creditType '{creditType}'. Expected POSTPAID or PREPAID.");
             }
         }
-        
+
         private void DisableAllPaymentMethods()
         {
             foreach (var m in PaymentMethods)
                 m.IsEnabled = false;
 
-             SelectPaymentByCode(null);
+            SelectPaymentByCode(null);
         }
         private void EnablePaymentMethodsForService()
         {
@@ -7320,26 +7374,26 @@ namespace TruckScale.Pos
 
             // Usar fecha LOCAL del POS para no depender del timezone del servidor MySQL
             var dayStart = DateTime.Today;
-            var dayEnd   = dayStart.AddDays(1);
+            var dayEnd = dayStart.AddDays(1);
 
             await using var cmd = new MySqlCommand(SQL, conn);
             cmd.Parameters.AddWithValue("@dayStart", dayStart);
-            cmd.Parameters.AddWithValue("@dayEnd",   dayEnd);
-            await using var rd  = await cmd.ExecuteReaderAsync();
+            cmd.Parameters.AddWithValue("@dayEnd", dayEnd);
+            await using var rd = await cmd.ExecuteReaderAsync();
 
             while (await rd.ReadAsync())
             {
                 _cashClosingHistory.Add(new CashClosingHistoryRow
                 {
-                    SessionUid   = rd.GetValue(rd.GetOrdinal("session_uid")).ToString() ?? "",
-                    OpenedAt     = rd.IsDBNull(rd.GetOrdinal("opened_at"))      ? default : rd.GetDateTime("opened_at"),
-                    ClosedAt     = rd.IsDBNull(rd.GetOrdinal("closed_at"))      ? default : rd.GetDateTime("closed_at"),
-                    OpeningCash  = rd.IsDBNull(rd.GetOrdinal("opening_cash"))   ? 0m : rd.GetDecimal("opening_cash"),
-                    ClosingCash  = rd.IsDBNull(rd.GetOrdinal("closing_cash"))   ? 0m : rd.GetDecimal("closing_cash"),
-                    ExpectedCash = rd.IsDBNull(rd.GetOrdinal("expected_cash"))  ? 0m : rd.GetDecimal("expected_cash"),
-                    DiffCash     = rd.IsDBNull(rd.GetOrdinal("diff_cash"))      ? 0m : rd.GetDecimal("diff_cash"),
-                    TerminalId   = rd.IsDBNull(rd.GetOrdinal("terminal_id"))    ? 0  : rd.GetInt32("terminal_id"),
-                    SiteId       = rd.IsDBNull(rd.GetOrdinal("site_id"))        ? 0  : rd.GetInt32("site_id"),
+                    SessionUid = rd.GetValue(rd.GetOrdinal("session_uid")).ToString() ?? "",
+                    OpenedAt = rd.IsDBNull(rd.GetOrdinal("opened_at")) ? default : rd.GetDateTime("opened_at"),
+                    ClosedAt = rd.IsDBNull(rd.GetOrdinal("closed_at")) ? default : rd.GetDateTime("closed_at"),
+                    OpeningCash = rd.IsDBNull(rd.GetOrdinal("opening_cash")) ? 0m : rd.GetDecimal("opening_cash"),
+                    ClosingCash = rd.IsDBNull(rd.GetOrdinal("closing_cash")) ? 0m : rd.GetDecimal("closing_cash"),
+                    ExpectedCash = rd.IsDBNull(rd.GetOrdinal("expected_cash")) ? 0m : rd.GetDecimal("expected_cash"),
+                    DiffCash = rd.IsDBNull(rd.GetOrdinal("diff_cash")) ? 0m : rd.GetDecimal("diff_cash"),
+                    TerminalId = rd.IsDBNull(rd.GetOrdinal("terminal_id")) ? 0 : rd.GetInt32("terminal_id"),
+                    SiteId = rd.IsDBNull(rd.GetOrdinal("site_id")) ? 0 : rd.GetInt32("site_id"),
                     OpenedByName = rd.IsDBNull(rd.GetOrdinal("opened_by_name")) ? "" : rd.GetString("opened_by_name"),
                     ClosedByName = rd.IsDBNull(rd.GetOrdinal("closed_by_name")) ? "" : rd.GetString("closed_by_name"),
                 });
@@ -7984,10 +8038,10 @@ namespace TruckScale.Pos
                 var existing = await GetOpenCashSessionAsync(_siteId, _terminalId);
                 if (existing != null)
                 {
-                    _currentCashSessionUid       = existing.SessionUid;
-                    _cashSessionOpenedByUserId   = existing.OpenedByUserId;
-                    _cashSessionOpenedAt         = existing.OpenedAt;
-                    _openingCash                 = existing.OpeningCash;
+                    _currentCashSessionUid = existing.SessionUid;
+                    _cashSessionOpenedByUserId = existing.OpenedByUserId;
+                    _cashSessionOpenedAt = existing.OpenedAt;
+                    _openingCash = existing.OpeningCash;
 
                     CashOpenHost.IsOpen = false;
                     CashSessionBlocker.Visibility = Visibility.Collapsed;
@@ -8213,7 +8267,7 @@ namespace TruckScale.Pos
 
             // Capturar UID ahora — se limpia durante Logout()
             var sessionUid = _currentCashSessionUid;
-            var comment    = string.IsNullOrWhiteSpace(ClosingCashText.Text)
+            var comment = string.IsNullOrWhiteSpace(ClosingCashText.Text)
                                  ? null
                                  : ClosingCashText.Text.Trim();
 
@@ -8479,10 +8533,10 @@ namespace TruckScale.Pos
                 GROUP BY pm.method_id, pm.code, pm.name
                 ORDER BY pm.name;";
 
-            var rawConn  = useMain
+            var rawConn = useMain
                 ? GetPrimaryConn()
                 : ConfigManager.Current.LocalDbStrCon;
-            var dbLabel  = useMain ? "MAIN_DB" : "LOCAL_DB";
+            var dbLabel = useMain ? "MAIN_DB" : "LOCAL_DB";
 
             if (string.IsNullOrWhiteSpace(rawConn))
             {
@@ -8518,10 +8572,10 @@ namespace TruckScale.Pos
 
             var data = new Reports.CashierCloseoutData
             {
-                GeneratedAt    = DateTime.Now,
-                SessionUid     = sessionUid,
-                TerminalId     = _terminalId,
-                OperatorName   = string.IsNullOrWhiteSpace(PosSession.FullName)
+                GeneratedAt = DateTime.Now,
+                SessionUid = sessionUid,
+                TerminalId = _terminalId,
+                OperatorName = string.IsNullOrWhiteSpace(PosSession.FullName)
                                     ? PosSession.Username
                                     : PosSession.FullName,
             };
@@ -8533,13 +8587,13 @@ namespace TruckScale.Pos
                 await using var rd = await cmd.ExecuteReaderAsync();
                 if (await rd.ReadAsync())
                 {
-                    data.TerminalId   = rd.IsDBNull(rd.GetOrdinal("terminal_id"))   ? _terminalId : rd.GetInt32("terminal_id");
-                    data.OpeningCash  = rd.IsDBNull(rd.GetOrdinal("opening_cash"))  ? 0m : rd.GetDecimal("opening_cash");
-                    data.ClosingCash  = rd.IsDBNull(rd.GetOrdinal("closing_cash"))  ? 0m : rd.GetDecimal("closing_cash");
+                    data.TerminalId = rd.IsDBNull(rd.GetOrdinal("terminal_id")) ? _terminalId : rd.GetInt32("terminal_id");
+                    data.OpeningCash = rd.IsDBNull(rd.GetOrdinal("opening_cash")) ? 0m : rd.GetDecimal("opening_cash");
+                    data.ClosingCash = rd.IsDBNull(rd.GetOrdinal("closing_cash")) ? 0m : rd.GetDecimal("closing_cash");
                     data.ExpectedCash = rd.IsDBNull(rd.GetOrdinal("expected_cash")) ? 0m : rd.GetDecimal("expected_cash");
-                    data.DiffCash     = rd.IsDBNull(rd.GetOrdinal("diff_cash"))     ? 0m : rd.GetDecimal("diff_cash");
-                    data.OpenedAt     = rd.IsDBNull(rd.GetOrdinal("opened_at"))     ? null : rd.GetDateTime("opened_at");
-                    data.ClosedAt     = rd.IsDBNull(rd.GetOrdinal("closed_at"))     ? null : rd.GetDateTime("closed_at");
+                    data.DiffCash = rd.IsDBNull(rd.GetOrdinal("diff_cash")) ? 0m : rd.GetDecimal("diff_cash");
+                    data.OpenedAt = rd.IsDBNull(rd.GetOrdinal("opened_at")) ? null : rd.GetDateTime("opened_at");
+                    data.ClosedAt = rd.IsDBNull(rd.GetOrdinal("closed_at")) ? null : rd.GetDateTime("closed_at");
                 }
             }
 
@@ -8551,7 +8605,7 @@ namespace TruckScale.Pos
                 while (await rd.ReadAsync())
                 {
                     var cancelled = rd.GetInt32("sale_status_id") == 3;
-                    var rawDate   = rd.IsDBNull(rd.GetOrdinal("sale_datetime"))
+                    var rawDate = rd.IsDBNull(rd.GetOrdinal("sale_datetime"))
                                         ? DateTime.Now
                                         : rd.GetDateTime("sale_datetime");
                     if (rawDate.Year < 2000) rawDate = DateTime.Now;
@@ -8559,19 +8613,19 @@ namespace TruckScale.Pos
                     data.Rows.Add(new Reports.CashierCloseoutRow
                     {
                         // SafeGetString usa GetValue().ToString() — safe con CHAR(36)→Guid de MySqlConnector
-                        SaleUid      = SafeGetString(rd, "sale_uid"),
+                        SaleUid = SafeGetString(rd, "sale_uid"),
                         SaleDateTime = rawDate,
                         TicketNumber = SafeGetString(rd, "ticket_number"),
-                        DriverName   = SafeGetString(rd, "driver_name").Trim(),
-                        Plates       = SafeGetString(rd, "plates"),
-                        LicState     = SafeGetString(rd, "lic_state"),
-                        Tractor      = SafeGetString(rd, "tractor"),
-                        Trailer      = SafeGetString(rd, "trailer"),
-                        ServiceName  = SafeGetString(rd, "service_name"),
-                        IsCancelled  = cancelled,
-                        StatusLabel  = cancelled ? "CANCELLED" : "COMPLETED",
-                        MethodNames  = SafeGetString(rd, "method_names"),
-                        NetAmount    = rd.IsDBNull(rd.GetOrdinal("net_amount"))     ? 0m : rd.GetDecimal("net_amount"),
+                        DriverName = SafeGetString(rd, "driver_name").Trim(),
+                        Plates = SafeGetString(rd, "plates"),
+                        LicState = SafeGetString(rd, "lic_state"),
+                        Tractor = SafeGetString(rd, "tractor"),
+                        Trailer = SafeGetString(rd, "trailer"),
+                        ServiceName = SafeGetString(rd, "service_name"),
+                        IsCancelled = cancelled,
+                        StatusLabel = cancelled ? "CANCELLED" : "COMPLETED",
+                        MethodNames = SafeGetString(rd, "method_names"),
+                        NetAmount = rd.IsDBNull(rd.GetOrdinal("net_amount")) ? 0m : rd.GetDecimal("net_amount"),
                         OperatorName = SafeGetString(rd, "operator_name"),
                     });
                 }
@@ -8586,11 +8640,11 @@ namespace TruckScale.Pos
                 {
                     data.TotalsByMethod.Add(new Reports.PaymentTotalRow
                     {
-                        MethodCode     = SafeGetString(rd, "method_code"),
-                        MethodName     = SafeGetString(rd, "method_name"),
-                        NetTotal       = rd.IsDBNull(rd.GetOrdinal("net_total"))       ? 0m : rd.GetDecimal("net_total"),
-                        CompletedCount = rd.IsDBNull(rd.GetOrdinal("completed_count")) ? 0  : rd.GetInt32("completed_count"),
-                        CancelledCount = rd.IsDBNull(rd.GetOrdinal("cancelled_count")) ? 0  : rd.GetInt32("cancelled_count"),
+                        MethodCode = SafeGetString(rd, "method_code"),
+                        MethodName = SafeGetString(rd, "method_name"),
+                        NetTotal = rd.IsDBNull(rd.GetOrdinal("net_total")) ? 0m : rd.GetDecimal("net_total"),
+                        CompletedCount = rd.IsDBNull(rd.GetOrdinal("completed_count")) ? 0 : rd.GetInt32("completed_count"),
+                        CancelledCount = rd.IsDBNull(rd.GetOrdinal("cancelled_count")) ? 0 : rd.GetInt32("cancelled_count"),
                     });
                 }
             }
@@ -8604,8 +8658,8 @@ namespace TruckScale.Pos
                     data.ReportBrand = val.ToString()!;
             }
 
-            data.CompletedCount    = data.Rows.Count(r => !r.IsCancelled);
-            data.CancelledCount    = data.Rows.Count(r =>  r.IsCancelled);
+            data.CompletedCount = data.Rows.Count(r => !r.IsCancelled);
+            data.CancelledCount = data.Rows.Count(r => r.IsCancelled);
             data.TotalTransactions = data.Rows.Count;
 
             AppendLog($"[Closeout] {dbLabel}: {data.CompletedCount} completadas, " +
@@ -8639,10 +8693,10 @@ namespace TruckScale.Pos
 
             if (data == null)
             {
-                var errMsg = $"Corte de caja sin datos (DB={( useMain ? "MAIN" : "LOCAL")}).\n\n" +
+                var errMsg = $"Corte de caja sin datos (DB={(useMain ? "MAIN" : "LOCAL")}).\n\n" +
                               "Posible causa: connection string inválido o sesión no encontrada.\n" +
                               "Revisa el log de actividad para más detalles.";
-                AppendLog($"[Closeout] LoadCashierCloseoutDataAsync devolvió null — DB={( useMain ? "MAIN" : "LOCAL")}");
+                AppendLog($"[Closeout] LoadCashierCloseoutDataAsync devolvió null — DB={(useMain ? "MAIN" : "LOCAL")}");
                 MessageBox.Show(errMsg, "Error — Corte de Caja", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
@@ -8652,7 +8706,7 @@ namespace TruckScale.Pos
             // 2) Construir FlowDocument e imprimir garantizando hilo STA
             await Dispatcher.InvokeAsync(() =>
             {
-                var doc       = Reports.CashierCloseoutBuilder.Build(data);
+                var doc = Reports.CashierCloseoutBuilder.Build(data);
                 var paginator = ((IDocumentPaginatorSource)doc).DocumentPaginator;
                 paginator.PageSize = new Size(8.5 * 96, 11.0 * 96);
 
