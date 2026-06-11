@@ -79,7 +79,8 @@ namespace TruckScale.Pos.Sync
         /// </summary>
         public int TotalPending =>
             PendingSales + PendingPayments + PendingAxles +
-            PendingDrivers + PendingTickets + PendingLogs + PendingSqcuences + PendingSignatures;
+            PendingDrivers + PendingTickets + PendingSqcuences + PendingSignatures;
+        // PendingLogs se excluye: sync_logs es LOCAL-only y nunca se pushea.
     }
 
     /// <summary>
@@ -101,8 +102,10 @@ namespace TruckScale.Pos.Sync
         public int LogsSynced { get; set; }
         public int WhateverSynced { get; set; }
         public int SecuencesSynced { get; set; }
+        public int customerSynced { get; set; }
 
         
+
 
 
         public int TotalSynced =>
@@ -114,14 +117,4 @@ namespace TruckScale.Pos.Sync
         public bool HasErrors => Errors.Count > 0;
     }
 
-    /// <summary>
-    /// Registro individual de tabla pendiente de sincronizar.
-    /// Usado internamente por SyncService para trackear qué tablas procesar.
-    /// </summary>
-    internal sealed class SyncBatch
-    {
-        public string TableName { get; init; } = "";
-        public List<string> Uids { get; } = new();
-        public int Count => Uids.Count;
-    }
 }

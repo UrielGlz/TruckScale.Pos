@@ -12,7 +12,11 @@
       "WebSearch",
       "Bash(/tmp/inspect_cleartablet.ps1:*)",
       "Bash(dotnet:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(grep -E \"Sync\\\\\\\\\\\\\\\\SyncService|Error\\\\\\(\")",
+      "Bash(grep -E \"Sync\\\\\\\\\\\\\\\\SyncService|^\\\\s+[0-9]+ Error\")",
+      "Bash(Select-String -Pattern \"error|warning CS\")",
+      "Bash(Select-String -Pattern \"SyncService\")"
     ]
   }
 }
