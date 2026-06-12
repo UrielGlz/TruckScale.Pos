@@ -467,12 +467,13 @@ namespace TruckScale.Pos.Sync
             tableName = tableName?.ToLowerInvariant() ?? "";
             colName   = colName?.ToLowerInvariant()   ?? "";
 
-            return (tableName == "sales"            && colName == "sale_id")
-                || (tableName == "payments"          && colName == "payment_id")
-                || (tableName == "sale_lines"        && colName == "line_id")
-                || (tableName == "sale_driver_info"  && colName == "id_driver_info")
-                || (tableName == "ticket_signatures" && colName == "sig_id")
-                || (tableName == "tickets"           && colName == "ticket_id");
+            return (tableName == "sales"               && colName == "sale_id")
+                || (tableName == "payments"             && colName == "payment_id")
+                || (tableName == "sale_lines"           && colName == "line_id")
+                || (tableName == "sale_driver_info"     && colName == "id_driver_info")
+                || (tableName == "ticket_signatures"    && colName == "sig_id")
+                || (tableName == "tickets"              && colName == "ticket_id")
+                || (tableName == "scale_session_axles"  && colName == "id");
         }
 
         private async Task<int> CountPendingAsync(MySqlConnection conn, string tableName)
