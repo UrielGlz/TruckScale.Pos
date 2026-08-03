@@ -10,6 +10,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.IO.Ports;
+using System.Linq;
 using System.Numerics;
 using System.Printing;
 using System.Runtime.CompilerServices;
@@ -638,6 +639,24 @@ namespace TruckScale.Pos
         const double SUM_TOL_LB = 100;            // |(e0+e1+e2) - total| tolerado
         const double SNAP_DELTA_LB = 200;         // diferencia mínima contra último total guardado
 
+        // ----- Histéresis / periodo de gracia (NUEVO) -----
+        const int GRACE_MS = 1200;                       // tolerancia antes de apagar el verde tras una violación puntual
+        const double STRONG_VARIATION_LB = EPSILON_LB * 3; // 60 lb - salto grande, rompe sin esperar gracia
+        const int GR_BREAK_COUNT = 3;                    // GR consecutivos (canal total) para considerarlo movimiento real
+
+        private enum StabilityState { Wait, Ready, Grace }
+        private StabilityState _state = StabilityState.Wait;
+        private long? _graceStartMs = null;      // cuándo empezó la gracia actual
+        private long _snapCapturedMs = 0;        // timestamp de cuándo se congeló el snapshot vigente
+        private int _consecutiveGr = 0;          // GR consecutivos en el canal total (ch==3)
+        private bool _hardBreakLatched = false;  // true si hubo hard break desde el último READY
+        private string _lastHardBreakReason = "";
+        private double _lastLiveTotal = 0;       // último total leído en vivo (real o sim), no el snapshot congelado
+
+        // --- Instrumentación temporal de cadencia serial (remover tras calibrar GR_BREAK_COUNT) ---
+        private long _lastSampleMs = -1;
+        private readonly Queue<long> _sampleIntervals = new();
+
         // ----- Estado de estabilidad -----
         private readonly Stopwatch _sw = Stopwatch.StartNew();
         private long _lastUnstableMs = 0;
@@ -666,6 +685,19 @@ namespace TruckScale.Pos
 
         private readonly Queue<(long ts, double total)> _winTotals = new();
 
+        private void TrackSampleInterval()
+        {
+            long now = _sw.ElapsedMilliseconds;
+            if (_lastSampleMs >= 0)
+            {
+                _sampleIntervals.Enqueue(now - _lastSampleMs);
+                if (_sampleIntervals.Count > 50) _sampleIntervals.Dequeue();
+                if (_sampleIntervals.Count % 10 == 0)
+                    AppendLog($"[Instrumentation] Intervalo promedio entre lecturas seriales: {_sampleIntervals.Average():0.0} ms (n={_sampleIntervals.Count})");
+            }
+            _lastSampleMs = now;
+        }
+
         private void ProcessLine2(string line)
         {
             // 1) Normaliza y parsea
@@ -685,6 +717,24 @@ namespace TruckScale.Pos
 
             _last[ch] = w;
             _lastTail[ch] = tail;
+
+            TrackSampleInterval();
+
+            if (ch == 3)
+            {
+                if (tail == "GR")
+                {
+                    _consecutiveGr++;
+                    AppendLog($"[Stability] GR consecutivos (total): {_consecutiveGr}");
+                }
+                else
+                {
+                    if (_consecutiveGr > 0)
+                        AppendLog($"[Stability] Racha de GR terminó en {_consecutiveGr}");
+                    _consecutiveGr = 0;
+                }
+                _lastLiveTotal = w;
+            }
 
             // 2) UI en "tiempo real"
             Dispatcher.InvokeAsync(() =>
@@ -720,21 +770,7 @@ namespace TruckScale.Pos
             while (_winTotals.Count > 0 && (now - _winTotals.Peek().ts) > WINDOW_MS)
                 _winTotals.Dequeue();
 
-            if (_winTotals.Count < MIN_SAMPLES || total < MIN_TOTAL_LB)
-            {
-                _autoStable = false;
-                _canAccept = false;
-                _lastUnstableMs = now;
-
-                Dispatcher.InvokeAsync(() =>
-                {
-                    lblTemp.Content = total < MIN_TOTAL_LB ? "Waiting for truck…" : "Weight in progress";
-                    SetOkButtonWaitState();
-                });
-
-                return;
-            }
-
+            int count = _winTotals.Count;
             double min = double.PositiveInfinity;
             double max = double.NegativeInfinity;
             foreach (var s in _winTotals)
@@ -742,80 +778,166 @@ namespace TruckScale.Pos
                 if (s.total < min) min = s.total;
                 if (s.total > max) max = s.total;
             }
-            double span = max - min;
+            double span = count > 0 ? max - min : double.PositiveInfinity;
+
+            // ---------- 1) HARD BREAKS: siempre primero, sin importar el estado actual ----------
+            if (count < MIN_SAMPLES || total < MIN_TOTAL_LB)
+            {
+                HardBreak(now,
+                    total < MIN_TOTAL_LB ? "TOTAL_BAJO_MIN" : "MUESTRAS_INSUFICIENTES",
+                    total < MIN_TOTAL_LB ? "Waiting for truck…" : "Weight in progress");
+                return;
+            }
+
+            if (span > STRONG_VARIATION_LB)
+            {
+                HardBreak(now, $"VARIACION_FUERTE(Δ={span:0.0})", "Weight in progress");
+                return;
+            }
+
+            if (_consecutiveGr >= GR_BREAK_COUNT)
+            {
+                HardBreak(now, $"GR_CONSECUTIVOS({_consecutiveGr})", "Weight in progress");
+                return;
+            }
+
+            // ---------- 2) Reglas "soft" (mismas validaciones y constantes de siempre) ----------
+            double suma = e0 + e1 + e2;
+            double sumDiff = Math.Abs(suma - total);
+            double snapDiff = double.IsNaN(_lastPersistedTotal) ? double.PositiveInfinity : Math.Abs(total - _lastPersistedTotal);
+
+            bool softFail = false;
+            string softReason = null;
 
             if (span > EPSILON_LB)
             {
-                if (_autoStable) AppendLog($"→ pierde estabilidad (Δ={span:0.0} lb)");
-                _autoStable = false;
-                _canAccept = false;
-                _lastUnstableMs = now;
-
-                Dispatcher.InvokeAsync(() =>
-                {
-                    lblTemp.Content = "Weight in progress";
-                    SetOkButtonWaitState();
-                });
-
-                return;
+                softFail = true;
+                softReason = $"SPREAD(Δ={span:0.0})";
             }
-
-            // Aún no se cumple el HOLD (tiempo mínimo estable)
-            if (!_autoStable && (now - _lastUnstableMs) < HOLD_MS)
-                return;
-
-            if (!_autoStable)
+            else if (sumDiff > SUM_TOL_LB)
             {
-                _autoStable = true;
-                AppendLog($"→ entra estable (Δ={span:0.0} lb en {WINDOW_MS} ms)");
+                softFail = true;
+                softReason = $"SUMA_VS_TOTAL(Δ={sumDiff:0.0})";
             }
-
-            // Reglas de suma de ejes vs total
-            double suma = e0 + e1 + e2;
-            if (Math.Abs(suma - total) > SUM_TOL_LB)
+            else if (snapDiff < SNAP_DELTA_LB)
             {
-                AppendLog($"(Descartado) ejes {suma:0} vs total {total:0} (Δ={Math.Abs(suma - total):0} lb)");
-                _canAccept = false;
-
-                Dispatcher.InvokeAsync(() =>
-                {
-                    lblTemp.Content = "Check axles / total";
-                    SetOkButtonWaitState();
-                });
-
-                return;
+                softFail = true;
+                softReason = $"MUY_CERCA_DEL_ULTIMO(Δ={snapDiff:0.0})";
             }
 
-            // Evitar aceptar dos veces casi el mismo peso
-            if (!double.IsNaN(_lastPersistedTotal) &&
-                Math.Abs(total - _lastPersistedTotal) < SNAP_DELTA_LB)
+            switch (_state)
             {
-                AppendLog($"(Descartado) total {total:0} lb demasiado cerca del último aceptado {_lastPersistedTotal:0} lb.");
-                _canAccept = false;
+                case StabilityState.Wait:
+                    if (!softFail && !_autoStable && (now - _lastUnstableMs) < HOLD_MS)
+                    {
+                        // Aún no se cumple el HOLD (tiempo mínimo estable)
+                        return;
+                    }
 
-                Dispatcher.InvokeAsync(() =>
-                {
-                    lblTemp.Content = "Waiting for next truck…";
-                    SetOkButtonWaitState();
-                });
+                    if (!softFail)
+                    {
+                        AppendLog($"→ entra estable (Δ={span:0.0} lb en {WINDOW_MS} ms)");
+                        EnterReady(now, e0, e1, e2, total, note);
+                    }
+                    else
+                    {
+                        if (_autoStable) AppendLog($"→ pierde estabilidad ({softReason})");
+                        _autoStable = false;
+                        _canAccept = false;
+                        _lastUnstableMs = now;
 
-                return;
+                        string waitMsg = softReason != null && softReason.StartsWith("SUMA_VS_TOTAL")
+                            ? "Check axles / total"
+                            : softReason != null && softReason.StartsWith("MUY_CERCA_DEL_ULTIMO")
+                                ? "Waiting for next truck…"
+                                : "Weight in progress";
+
+                        Dispatcher.InvokeAsync(() =>
+                        {
+                            lblTemp.Content = waitMsg;
+                            SetOkButtonWaitState();
+                        });
+                    }
+                    break;
+
+                case StabilityState.Ready:
+                    if (!softFail)
+                    {
+                        UpdateSnapshot(now, e0, e1, e2, total, note);
+                    }
+                    else
+                    {
+                        _graceStartMs = now;
+                        _state = StabilityState.Grace;
+                        AppendLog($"[Stability] READY -> GRACE (motivo={softReason})");
+                        // _canAccept permanece true; el botón se queda visualmente verde
+                        // y el snapshot NO se sobreescribe (se congela el último bueno).
+                    }
+                    break;
+
+                case StabilityState.Grace:
+                    if (!softFail)
+                    {
+                        _graceStartMs = null;
+                        _state = StabilityState.Ready;
+                        AppendLog("[Stability] GRACE -> READY (recuperado)");
+                        UpdateSnapshot(now, e0, e1, e2, total, note);
+                    }
+                    else if (now - _graceStartMs.Value >= GRACE_MS)
+                    {
+                        AppendLog($"[Stability] GRACE -> WAIT (expiró tras {now - _graceStartMs.Value} ms, motivo={softReason})");
+                        HardBreak(now, "GRACE_EXPIRADA", "Weight in progress");
+                        return;
+                    }
+                    // Sigue dentro del periodo de gracia: no se toca la UI.
+                    break;
             }
+        }
 
-            // Si llegamos aquí, hay snapshot estable listo para OK
-            _snapAx1 = e0;
-            _snapAx2 = e1;
-            _snapAx3 = e2;
-            _snapTotal = total;
-            _snapUtc = DateTime.UtcNow;
-            _snapRaw = note ?? $"e0={e0:0} e1={e1:0} e2={e2:0} tot={total:0}";
-
-            _canAccept = true;
+        private void EnterReady(long now, double e0, double e1, double e2, double total, string note)
+        {
+            _autoStable = true;
+            _state = StabilityState.Ready;
+            _hardBreakLatched = false;
+            UpdateSnapshot(now, e0, e1, e2, total, note);
+            AppendLog("[Stability] WAIT -> READY");
 
             Dispatcher.InvokeAsync(() =>
             {
                 lblTemp.Content = "STABLE — press OK";
                 SetOkButtonReadyState();
+            });
+        }
+
+        private void UpdateSnapshot(long now, double e0, double e1, double e2, double total, string note)
+        {
+            _snapAx1 = e0;
+            _snapAx2 = e1;
+            _snapAx3 = e2;
+            _snapTotal = total;
+            _snapUtc = DateTime.UtcNow;
+            _snapCapturedMs = now;
+            _snapRaw = note ?? $"e0={e0:0} e1={e1:0} e2={e2:0} tot={total:0}";
+
+            _canAccept = true;
+        }
+
+        private void HardBreak(long now, string reason, string uiMessage)
+        {
+            _autoStable = false;
+            _canAccept = false;
+            _state = StabilityState.Wait;
+            _graceStartMs = null;
+            _lastUnstableMs = now;
+            _hardBreakLatched = true;
+            _lastHardBreakReason = reason;
+
+            AppendLog($"[Stability] HARD BREAK: {reason}");
+
+            Dispatcher.InvokeAsync(() =>
+            {
+                lblTemp.Content = uiMessage;
+                SetOkButtonWaitState();
             });
         }
 
@@ -1228,6 +1350,10 @@ namespace TruckScale.Pos
             _autoStable = false;
             _winTotals.Clear();
             _canAccept = false;
+            _state = StabilityState.Wait;
+            _graceStartMs = null;
+            _consecutiveGr = 0;
+            _hardBreakLatched = false;
 
             HideDriverCard();
             UpdateProductButtonsEnabled();
@@ -2683,6 +2809,7 @@ namespace TruckScale.Pos
                 case 3:
                     _total = w; _tTotal = DateTime.UtcNow;
                     WeightText.Text = $"{w:0.0} lb";
+                    _lastLiveTotal = w;
                     break;
             }
 
@@ -2693,52 +2820,83 @@ namespace TruckScale.Pos
         /// <summary>
         /// Evaluación de set estable en modo simulado.
         /// Ahora solo prepara snapshot y habilita OK, NO guarda.
+        /// Comparte la misma máquina de estados (Wait/Ready/Grace) que el modo real.
+        /// Nota: el simulador nunca emite "GR", por eso no hay chequeo de GR_BREAK_COUNT aquí.
         /// </summary>
         private void TryAcceptStableSet()
         {
+            long now = _sw.ElapsedMilliseconds;
+
             bool inWindow =
                 (_tTotal - _tAx1).Duration().TotalMilliseconds <= SYNC_WINDOW_MS &&
                 (_tTotal - _tAx2).Duration().TotalMilliseconds <= SYNC_WINDOW_MS &&
                 (_tTotal - _tAx3).Duration().TotalMilliseconds <= SYNC_WINDOW_MS;
 
-            if (!inWindow)
-            {
-                _canAccept = false;
-                Dispatcher.Invoke(() =>
-                {
-                    lblTemp.Content = "Weight in progress";
-                    SetOkButtonWaitState();
-                });
-                return;
-            }
-
             double sum = _ax1 + _ax2 + _ax3;
-            if (Math.Abs(sum - _total) > 100)
+            double sumDiff = Math.Abs(sum - _total);
+
+            // ---------- Hard breaks (equivalentes al modo real) ----------
+            if (_total < MIN_TOTAL_LB)
             {
-                _canAccept = false;
-                Dispatcher.Invoke(() =>
-                {
-                    lblTemp.Content = "Check axles / total";
-                    SetOkButtonWaitState();
-                });
+                HardBreak(now, "TOTAL_BAJO_MIN_SIM", "Waiting for truck…");
                 return;
             }
 
-            // Snapshot listo para OK
-            _snapAx1 = _ax1;
-            _snapAx2 = _ax2;
-            _snapAx3 = _ax3;
-            _snapTotal = _total;
-            _snapUtc = DateTime.UtcNow;
-            _snapRaw = "%sim%";
-
-            _canAccept = true;
-
-            Dispatcher.Invoke(() =>
+            if (sumDiff > STRONG_VARIATION_LB)
             {
-                lblTemp.Content = "STABLE — press OK";
-                SetOkButtonReadyState();
-            });
+                HardBreak(now, $"VARIACION_FUERTE_SIM(Δ={sumDiff:0.0})", "Weight in progress");
+                return;
+            }
+
+            bool softFail = !inWindow || sumDiff > 100; // 100 = mismo valor que siempre (sin renombrar)
+            string softReason = !inWindow ? "FUERA_DE_VENTANA_SYNC" : $"SUMA_VS_TOTAL_SIM(Δ={sumDiff:0.0})";
+
+            switch (_state)
+            {
+                case StabilityState.Wait:
+                    if (!softFail)
+                    {
+                        EnterReady(now, _ax1, _ax2, _ax3, _total, "%sim%");
+                    }
+                    else
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            lblTemp.Content = !inWindow ? "Weight in progress" : "Check axles / total";
+                            SetOkButtonWaitState();
+                        });
+                    }
+                    break;
+
+                case StabilityState.Ready:
+                    if (!softFail)
+                    {
+                        UpdateSnapshot(now, _ax1, _ax2, _ax3, _total, "%sim%");
+                    }
+                    else
+                    {
+                        _graceStartMs = now;
+                        _state = StabilityState.Grace;
+                        AppendLog($"[Stability][SIM] READY -> GRACE (motivo={softReason})");
+                    }
+                    break;
+
+                case StabilityState.Grace:
+                    if (!softFail)
+                    {
+                        _graceStartMs = null;
+                        _state = StabilityState.Ready;
+                        AppendLog("[Stability][SIM] GRACE -> READY (recuperado)");
+                        UpdateSnapshot(now, _ax1, _ax2, _ax3, _total, "%sim%");
+                    }
+                    else if (now - _graceStartMs.Value >= GRACE_MS)
+                    {
+                        AppendLog($"[Stability][SIM] GRACE -> WAIT (expiró tras {now - _graceStartMs.Value} ms, motivo={softReason})");
+                        HardBreak(now, "GRACE_EXPIRADA_SIM", "Weight in progress");
+                        return;
+                    }
+                    break;
+            }
         }
 
 
@@ -4794,6 +4952,39 @@ namespace TruckScale.Pos
                 AppendLog("[OK] Click ignored (no stable weight to accept).");
                 return;
             }
+
+            // Si el clic llega durante el periodo de gracia, se exige una validación final
+            // antes de guardar: no basta con que el botón siga "visualmente" verde.
+            if (_state == StabilityState.Grace)
+            {
+                long nowGrace = _sw.ElapsedMilliseconds;
+                long snapAge = nowGrace - _snapCapturedMs;
+
+                bool ageOk = snapAge <= GRACE_MS;
+                bool noHardBreak = !_hardBreakLatched;
+                bool noStrongDiff = Math.Abs(_lastLiveTotal - _snapTotal) <= STRONG_VARIATION_LB;
+                bool grOk = _consecutiveGr < GR_BREAK_COUNT;
+                bool totalOk = _lastLiveTotal > MIN_TOTAL_LB;
+
+                AppendLog($"[OK][Grace] Edad del snapshot al presionar OK: {snapAge} ms " +
+                          $"(ageOk={ageOk} noHardBreak={noHardBreak} noStrongDiff={noStrongDiff} grOk={grOk} totalOk={totalOk})");
+
+                if (!(ageOk && noHardBreak && noStrongDiff && grOk && totalOk))
+                {
+                    AppendLog("[OK][Grace] RECHAZADO — snapshot no revalidado, no se guarda.");
+                    _canAccept = false;
+                    _state = StabilityState.Wait;
+                    _graceStartMs = null;
+
+                    Dispatcher.Invoke(() =>
+                    {
+                        lblTemp.Content = "Weight changed — re-stabilizing…";
+                        SetOkButtonWaitState();
+                    });
+                    return;
+                }
+            }
+
             _hasAcceptedWeight = true;
             UpdateOkNewButtonsEnabled();
             // Tomamos el snapshot estable preparado por EvaluateStabilityAndUpdateUi o TryAcceptStableSet
@@ -4822,6 +5013,10 @@ namespace TruckScale.Pos
                 _canAccept = false;
                 _autoStable = false;
                 _winTotals.Clear();
+                _state = StabilityState.Wait;
+                _graceStartMs = null;
+                _consecutiveGr = 0;
+                _hardBreakLatched = false;
                 //if (_isSimulated) _simSavedOnce = true;
 
                 Dispatcher.Invoke(() =>
@@ -4847,6 +5042,8 @@ namespace TruckScale.Pos
             catch (Exception ex)
             {
                 AppendLog("[DB] ERROR al guardar desde OK: " + ex);
+                _state = StabilityState.Wait;
+                _graceStartMs = null;
                 Dispatcher.Invoke(() =>
                 {
                     lblTemp.Content = "DB ERROR";
