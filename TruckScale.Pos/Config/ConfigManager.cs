@@ -40,7 +40,10 @@ namespace TruckScale.Pos.Config
                     // NEW – si en el JSON no vienen, tomamos defaults
                     TicketPrinterName = raw.ticket_printer_name ?? "",
                     TicketLandscape = raw.ticket_landscape ?? true,
-                    TicketMarginInches = raw.ticket_margin_inches ?? 0.25
+                    TicketMarginInches = raw.ticket_margin_inches ?? 0.25,
+                    LogRetentionDays = raw.log_retention_days is int d && d > 0
+                        ? d
+                        : AppConfig.DefaultLogRetentionDays
                 };
             }
             catch
@@ -65,11 +68,8 @@ namespace TruckScale.Pos.Config
                 // NEW: se guardan los valores que ya estén en Current
                 ticket_printer_name = Current.TicketPrinterName,
                 ticket_landscape = Current.TicketLandscape,
-                ticket_margin_inches = Current.TicketMarginInches
-
-
-            
-
+                ticket_margin_inches = Current.TicketMarginInches,
+                log_retention_days = Current.LogRetentionDays
             };
 
             var json = JsonSerializer.Serialize(raw, new JsonSerializerOptions { WriteIndented = true });

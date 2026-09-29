@@ -9,6 +9,10 @@
         public string TicketPrinterName { get; set; } = "";  // si está vacío usamos la impresora predeterminada
         public bool TicketLandscape { get; set; } = true;    // media carta horizontal
         public double TicketMarginInches { get; set; } = 0.25; // margen default
+
+        // Días que se conservan los logs de C:\TruckScaleLogs (config.json: "log_retention_days")
+        public const int DefaultLogRetentionDays = 30;
+        public int LogRetentionDays { get; set; } = DefaultLogRetentionDays;
     }
 
     // Para mapear directo el JSON (con nombres exactos)
@@ -22,5 +26,7 @@
         public double? ticket_margin_inches { get; set; } = null;
         // NUEVO: campos opcionales para no romper configs viejos
         public string? receipt_printer_name { get; set; }
+        // Opcional: retención de logs en días (default 30)
+        public int? log_retention_days { get; set; } = null;
     }
 }

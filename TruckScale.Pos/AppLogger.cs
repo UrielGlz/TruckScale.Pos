@@ -1,18 +1,21 @@
 using System;
 using System.IO;
+using TruckScale.Pos.Config;
 
 namespace TruckScale.Pos;
 
 /// <summary>
 /// Lightweight file logger. Writes to C:\TruckScaleLogs\, one file per day.
 /// File name format: log_YYYY-MM-DD.txt  (e.g. log_2026-03-17.txt)
-/// Files older than 2 days are deleted automatically on each write.
+/// Files older than N days are deleted (N = config.json "log_retention_days", default 30).
+/// The purge runs at most once per day per process, not on every write.
 /// Thread-safe, never throws — logging failures are silently swallowed.
 /// </summary>
 internal static class AppLogger
 {
     private static readonly string _folder = @"C:\TruckScaleLogs";
     private static readonly object _lock = new();
+    private static DateTime _lastPurgeDate = DateTime.MinValue;
 
     public static void Log(string message)
     {
@@ -28,7 +31,12 @@ internal static class AppLogger
             lock (_lock)
             {
                 File.AppendAllText(path, line + Environment.NewLine);
-                PurgeOldLogs();
+
+                if (_lastPurgeDate != now.Date)
+                {
+                    _lastPurgeDate = now.Date;
+                    PurgeOldLogs();
+                }
             }
         }
         catch
@@ -41,7 +49,10 @@ internal static class AppLogger
     {
         try
         {
-            var cutoff = DateTime.Now.AddDays(-2);
+            int days = ConfigManager.Current?.LogRetentionDays ?? AppConfig.DefaultLogRetentionDays;
+            if (days < 1) days = AppConfig.DefaultLogRetentionDays;
+
+            var cutoff = DateTime.Now.AddDays(-days);
             foreach (var file in Directory.GetFiles(_folder, "log_*.txt"))
             {
                 if (File.GetLastWriteTime(file) < cutoff)

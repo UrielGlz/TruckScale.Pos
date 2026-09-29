@@ -93,6 +93,10 @@ namespace TruckScale.Pos.Sync
         {
             var stats = new SyncStats { StartTime = DateTime.UtcNow };
 
+            // Diagnóstico: paso en curso y filas por tabla (van al mensaje de sync_logs)
+            string step = "queue-info";
+            var detail = new List<string>();
+
             try
             {
                 // 1. Verificar si hay algo que sincronizar
@@ -114,36 +118,48 @@ namespace TruckScale.Pos.Sync
                 await using var localConn = CreateLocalConnection();
                 await using var mainConn = CreateMainConnection();
 
+                step = "open-local";
                 await localConn.OpenAsync();
+                step = "open-main";
                 await mainConn.OpenAsync();
 
+                async Task<int> PushStep(string table, string pk)
+                {
+                    step = table;
+                    var n = await SyncTableAsync(localConn, mainConn, table, pk);
+                    detail.Add($"{table}:{n}");
+                    return n;
+                }
+
                 // 3. Sincronizar en orden (respetando FKs)
-                stats.AxlesSynced = await SyncTableAsync(localConn, mainConn, "scale_session_axles", "uuid_weight");
-                stats.SalesSynced = await SyncTableAsync(localConn, mainConn, "sales", "sale_uid");
-                stats.LinesSynced = await SyncTableAsync(localConn, mainConn, "sale_lines", "line_id");
-                stats.DriversSynced = await SyncTableAsync(localConn, mainConn, "sale_driver_info", "id_driver_info");
-               
-                stats.TicketsSynced = await SyncTableAsync(localConn, mainConn, "tickets", "ticket_uid");
-                stats.WhateverSynced += await SyncTableAsync(localConn, mainConn, "ticket_signatures", "sig_uid");
-                stats.LogsSynced = await SyncTableAsync(localConn, mainConn, "sync_logs", "log_uid");
-                stats.WhateverSynced += await SyncTableAsync(localConn, mainConn, "customer_credit", "credit_id");
-                
-                stats.SecuencesSynced += await SyncTableAsync(localConn, mainConn, "number_sequences", "sequence_id");
-                stats.PaymentsSynced = await SyncTableAsync(localConn, mainConn, "payments", "payment_uid");
+                stats.AxlesSynced = await PushStep("scale_session_axles", "uuid_weight");
+                stats.SalesSynced = await PushStep("sales", "sale_uid");
+                stats.LinesSynced = await PushStep("sale_lines", "line_id");
+                stats.DriversSynced = await PushStep("sale_driver_info", "id_driver_info");
+
+                stats.TicketsSynced = await PushStep("tickets", "ticket_uid");
+                stats.WhateverSynced += await PushStep("ticket_signatures", "sig_uid");
+                stats.LogsSynced = await PushStep("sync_logs", "log_uid");
+                stats.WhateverSynced += await PushStep("customer_credit", "credit_id");
+
+                stats.SecuencesSynced += await PushStep("number_sequences", "sequence_id");
+                stats.PaymentsSynced = await PushStep("payments", "payment_uid");
 
 
                 // 4. Actualizar queue_status a FREE
+                step = "queue-status";
                 await DatabaseHelper.UpdateQueueStatusAsync(_localConnStr, QueueStatus.FREE);
 
                 // 5. Registrar timestamp de éxito
+                step = "last_push_success";
                 await UpdateLastSyncTimestampAsync(localConn, "sync.last_push_success");
 
                 stats.EndTime = DateTime.UtcNow;
 
-                // 6. Log de éxito
+                // 6. Log de éxito (con filas por tabla)
                 await LogSyncEventAsync(
                     "PUSH_SUCCESS",
-                    $"Synced {stats.TotalSynced} records in {stats.Duration.TotalSeconds:0.0}s",
+                    $"Synced {stats.TotalSynced} records in {stats.Duration.TotalSeconds:0.0}s | {string.Join(" ", detail)}",
                     stats.TotalSynced);
 
                 return SyncResult.Ok(stats.TotalSynced,
@@ -154,10 +170,11 @@ namespace TruckScale.Pos.Sync
                 stats.Errors.Add(ex.Message);
                 stats.EndTime = DateTime.UtcNow;
 
-                // Log de error
-                await LogSyncEventAsync("PUSH_ERROR", ex.Message, 0);
+                // Log de error: paso que falló, lo que alcanzó a subir y el error completo
+                var msg = $"step={step} | done: {string.Join(" ", detail)} | {FormatError(ex)}";
+                await LogSyncEventAsync("PUSH_ERROR", msg, 0);
 
-                return SyncResult.Fail($"Sync failed: {ex.Message}");
+                return SyncResult.Fail($"Sync failed at '{step}': {ex.Message}");
             }
         }
 
@@ -383,16 +400,31 @@ namespace TruckScale.Pos.Sync
         /// </summary>
         public async Task<SyncResult> PullUpdatesAsync()
         {
+            // Diagnóstico (no cambia la lógica del pull): paso en curso y filas por tabla
+            string step = "open-main";
+            var detail = new List<string>();
+            DateTime? lastTs = null;
+
+            async Task<int> PullStep(string name, Func<Task<int>> run)
+            {
+                step = name;
+                var n = await run();
+                detail.Add($"{name}:{n}");
+                return n;
+            }
+
             try
             {
                 await using var mainConn = CreateMainConnection();
                 await using var localConn = CreateLocalConnection();
 
                 await mainConn.OpenAsync();
+                step = "open-local";
                 await localConn.OpenAsync();
 
                 // Último pull exitoso
-                var lastTs = await GetTimestampAsync(localConn, "sync.last_pull_ts");
+                step = "read last_pull_ts";
+                lastTs = await GetTimestampAsync(localConn, "sync.last_pull_ts");
                 
                 // Protección: si sales local está vacía pero tenemos lastTs,
                 // forzamos un FULL PULL (sales completa antes de payments).
@@ -412,62 +444,65 @@ namespace TruckScale.Pos.Sync
                 int total = 0;
 
                 // 1) Tablas padre / catálogos base
-                total += await PullTableUpsertAsync(mainConn, localConn, "sites", "site_id", lastTs);
-                total += await PullTableUpsertAsync(mainConn, localConn, "status_catalogo", "status_id", lastTs);
-                total += await PullTableUpsertAsync(mainConn, localConn, "tax_rates", "tax_rate_id", lastTs);
-                total += await PullTableUpsertAsync(mainConn, localConn, "products", "product_id", lastTs);
-                total += await PullTableUpsertAsync(mainConn, localConn, "customers", "id_customer", lastTs);
-                total += await PullTableUpsertAsync(mainConn, localConn, "vehicle_types", "vehicle_type_id", lastTs);
-                total += await PullTableUpsertAsync(mainConn, localConn, "driver_products", "product_id", lastTs);
-                total += await PullTableUpsertAsync(mainConn, localConn, "license_states", "id_state", lastTs);
-                total += await PullTableUpsertAsync(mainConn, localConn, "payment_methods", "method_id", lastTs);
-                total += await PullTableUpsertAsync(mainConn, localConn, "number_sequences", "sequence_id", lastTs);
-                total += await PullTableUpsertAsync(mainConn, localConn, "users", "user_id", lastTs);
+                total += await PullStep("sites", () => PullTableUpsertAsync(mainConn, localConn, "sites", "site_id", lastTs));
+                total += await PullStep("status_catalogo", () => PullTableUpsertAsync(mainConn, localConn, "status_catalogo", "status_id", lastTs));
+                total += await PullStep("tax_rates", () => PullTableUpsertAsync(mainConn, localConn, "tax_rates", "tax_rate_id", lastTs));
+                total += await PullStep("products", () => PullTableUpsertAsync(mainConn, localConn, "products", "product_id", lastTs));
+                total += await PullStep("customers", () => PullTableUpsertAsync(mainConn, localConn, "customers", "id_customer", lastTs));
+                total += await PullStep("vehicle_types", () => PullTableUpsertAsync(mainConn, localConn, "vehicle_types", "vehicle_type_id", lastTs));
+                total += await PullStep("driver_products", () => PullTableUpsertAsync(mainConn, localConn, "driver_products", "product_id", lastTs));
+                total += await PullStep("license_states", () => PullTableUpsertAsync(mainConn, localConn, "license_states", "id_state", lastTs));
+                total += await PullStep("payment_methods", () => PullTableUpsertAsync(mainConn, localConn, "payment_methods", "method_id", lastTs));
+                total += await PullStep("number_sequences", () => PullTableUpsertAsync(mainConn, localConn, "number_sequences", "sequence_id", lastTs));
+                total += await PullStep("users", () => PullTableUpsertAsync(mainConn, localConn, "users", "user_id", lastTs));
 
                 // NUEVO: customer_credit (depende de customers)
                 // Como es tabla chica y muy sensible, hacemos full upsert (sin filtro por fecha).
-                total += await PullTableUpsertAsync(mainConn, localConn, "customer_credit", "credit_id", null);
+                total += await PullStep("customer_credit", () => PullTableUpsertAsync(mainConn, localConn, "customer_credit", "credit_id", null));
 
 
 
                 // settings: MAIN es la fuente de verdad.
                 // Se excluyen las keys 'sync.*' (estado interno del sincronizador LOCAL).
                 // Upsert por (site_id, key) — nunca por setting_id (auto-increment, no comparable cross-DB).
-                total += await PullSettingsAsync(mainConn, localConn);
+                total += await PullStep("settings", () => PullSettingsAsync(mainConn, localConn));
 
                 // 2) Tablas transaccionales (usamos UIDs)
-                total += await PullTableUpsertAsync(mainConn, localConn, "sales", "sale_uid", lastTs);
-                total += await PullTableUpsertAsync(mainConn, localConn, "sale_driver_info", "sale_uid", lastTs);
+                total += await PullStep("sales", () => PullTableUpsertAsync(mainConn, localConn, "sales", "sale_uid", lastTs));
+                total += await PullStep("sale_driver_info", () => PullTableUpsertAsync(mainConn, localConn, "sale_driver_info", "sale_uid", lastTs));
 
-                total += await PullTableUpsertAsync(mainConn, localConn, "sale_lines", "sale_uid", lastTs);
+                total += await PullStep("sale_lines", () => PullTableUpsertAsync(mainConn, localConn, "sale_lines", "sale_uid", lastTs));
 
 
 
-                total += await PullTableUpsertAsync(mainConn, localConn, "tickets", "ticket_uid", lastTs);
+                total += await PullStep("tickets", () => PullTableUpsertAsync(mainConn, localConn, "tickets", "ticket_uid", lastTs));
                 // ticket_signatures no tiene updated_at (usa captured_at) → full pull con null
-                total += await PullTableUpsertAsync(mainConn, localConn, "ticket_signatures", "sig_uid", null);
-                total += await PullTableUpsertAsync(mainConn, localConn, "scale_session_axles", "uuid_weight", lastTs);
-                total += await PullTableUpsertAsync(mainConn, localConn, "sync_logs", "log_uid", lastTs);
+                total += await PullStep("ticket_signatures", () => PullTableUpsertAsync(mainConn, localConn, "ticket_signatures", "sig_uid", null));
+                total += await PullStep("scale_session_axles", () => PullTableUpsertAsync(mainConn, localConn, "scale_session_axles", "uuid_weight", lastTs));
+                total += await PullStep("sync_logs", () => PullTableUpsertAsync(mainConn, localConn, "sync_logs", "log_uid", lastTs));
                 // IMPORTANTE: payments → full upsert (sin depender de updated_at / last_pull_ts)
                 //total += await PullTableUpsertAsync(mainConn, localConn, "payments", "payment_uid", null);
-                total += await PullPaymentsWithParentsAsync(mainConn, localConn, lastTs);
-                total += await PullTableUpsertAsync(mainConn, localConn, "number_sequences", "sequence_id", lastTs);
+                total += await PullStep("payments", () => PullPaymentsWithParentsAsync(mainConn, localConn, lastTs));
+                total += await PullStep("number_sequences(2)", () => PullTableUpsertAsync(mainConn, localConn, "number_sequences", "sequence_id", lastTs));
 
 
 
                 // Nuevo timestamp de pull
+                step = "write last_pull_ts";
                 await UpdateLastSyncTimestampAsync(localConn, "sync.last_pull_ts");
 
                 await LogSyncEventAsync("PULL_SUCCESS",
-                    $"Pull completed. Records upserted: {total}.",
+                    $"Pull completed. Records upserted: {total}. last_pull_ts(prev)={FormatTs(lastTs)} | {string.Join(" ", detail)}",
                     total);
 
                 return SyncResult.Ok(total, $"Pull completed. Records upserted: {total}.");
             }
             catch (Exception ex)
             {
-                await LogSyncEventAsync("PULL_ERROR", ex.Message, 0);
-                return SyncResult.Fail($"Pull failed: {ex.Message}");
+                // Mensaje completo: paso/tabla que falló, lo que sí se aplicó y el error con inner exceptions
+                var msg = $"step={step} | last_pull_ts={FormatTs(lastTs)} | done: {string.Join(" ", detail)} | {FormatError(ex)}";
+                await LogSyncEventAsync("PULL_ERROR", msg, 0);
+                return SyncResult.Fail($"Pull failed at '{step}': {ex.Message}");
             }
         }
 
@@ -815,31 +850,80 @@ namespace TruckScale.Pos.Sync
             await cmd.ExecuteNonQueryAsync();
         }
 
+        /// <summary>
+        /// Registra un evento de sync.
+        /// 1) SIEMPRE lo escribe completo en el log de archivo (C:\TruckScaleLogs).
+        /// 2) Intenta insertarlo en LOCAL.sync_logs. Si el mensaje no cabe en la columna
+        ///    (MySQL 1406), reintenta truncado. Si el INSERT falla, el error se deja en el
+        ///    log de archivo (antes se tragaba en silencio). No relanza: un fallo al
+        ///    registrar no debe abortar el sync.
+        /// </summary>
         private async Task LogSyncEventAsync(string logType, string message, int recordsAffected)
         {
             const string SQL = @"
-                INSERT INTO sync_logs 
+                INSERT INTO sync_logs
                     (log_uid, log_type, severity, message, records_affected, created_at)
-                VALUES 
+                VALUES
                     (@uid, @type, @sev, @msg, @recs, NOW());";
+
+            const int TRUNCATED_LEN = 250;
+            var severity = logType.Contains("ERROR") ? "ERROR" : "INFO";
+
+            AppLogger.Log($"[SyncLog] {logType} ({severity}) records={recordsAffected} | {message}");
+
+            async Task InsertAsync(MySqlConnection conn, string msg)
+            {
+                await using var cmd = new MySqlCommand(SQL, conn);
+                cmd.Parameters.AddWithValue("@uid", Guid.NewGuid().ToString());
+                cmd.Parameters.AddWithValue("@type", logType);
+                cmd.Parameters.AddWithValue("@sev", severity);
+                cmd.Parameters.AddWithValue("@msg", msg);
+                cmd.Parameters.AddWithValue("@recs", recordsAffected);
+                await cmd.ExecuteNonQueryAsync();
+            }
 
             try
             {
                 await using var conn = CreateLocalConnection();
                 await conn.OpenAsync();
 
-                await using var cmd = new MySqlCommand(SQL, conn);
-                cmd.Parameters.AddWithValue("@uid", Guid.NewGuid().ToString());
-                cmd.Parameters.AddWithValue("@type", logType);
-                cmd.Parameters.AddWithValue("@sev", logType.Contains("ERROR") ? "ERROR" : "INFO");
-                cmd.Parameters.AddWithValue("@msg", message);
-                cmd.Parameters.AddWithValue("@recs", recordsAffected);
-                await cmd.ExecuteNonQueryAsync();
+                try
+                {
+                    await InsertAsync(conn, message);
+                }
+                catch (MySqlException ex) when (ex.Number == 1406 && message.Length > TRUNCATED_LEN) // Data too long
+                {
+                    AppLogger.Log($"[SyncLog] sync_logs.message too short for {message.Length} chars; inserting truncated copy.");
+                    await InsertAsync(conn, message[..TRUNCATED_LEN] + "…[full text in C:\\TruckScaleLogs]");
+                }
             }
-            catch
+            catch (Exception ex)
             {
-                // No bloqueamos si falla el log
+                AppLogger.Log($"[SyncLog] FAILED to write sync_logs ({logType}): {FormatError(ex)}");
             }
+        }
+
+        private static string FormatTs(DateTime? ts) =>
+            ts.HasValue ? ts.Value.ToString("yyyy-MM-dd HH:mm:ss") : "null(full)";
+
+        /// <summary>
+        /// Texto completo de una excepción: tipo, número de error MySQL, mensaje e inner exceptions.
+        /// </summary>
+        private static string FormatError(Exception ex)
+        {
+            var sb = new System.Text.StringBuilder();
+            var cur = (Exception?)ex;
+            int depth = 0;
+            while (cur != null && depth < 5)
+            {
+                if (depth > 0) sb.Append(" → ");
+                sb.Append($"[{cur.GetType().Name}");
+                if (cur is MySqlException mex) sb.Append($" #{mex.Number}");
+                sb.Append($"] {cur.Message}");
+                cur = cur.InnerException;
+                depth++;
+            }
+            return sb.ToString();
         }
         /// <summary>
         /// Devuelve qué columnas de sync existen en la tabla local
