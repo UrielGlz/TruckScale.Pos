@@ -75,11 +75,14 @@ namespace TruckScale.Pos.Sync
         public DateTime? LastPushSuccess { get; set; }
 
         /// <summary>
-        /// Total de registros pendientes en todas las tablas.
+        /// Total de registros pendientes que DISPARAN un push.
+        /// PendingLogs NO cuenta: cada push/pull escribe una fila en sync_logs, y si esa fila
+        /// disparara el siguiente push el sync correría en cada tick solo para subir sus propios
+        /// logs. Los logs pendientes viajan a MAIN junto con el siguiente push de datos reales.
         /// </summary>
         public int TotalPending =>
             PendingSales + PendingPayments + PendingAxles +
-            PendingDrivers + PendingTickets + PendingLogs + PendingSqcuences + PendingSignatures;
+            PendingDrivers + PendingTickets + PendingSqcuences + PendingSignatures;
     }
 
     /// <summary>
@@ -123,5 +126,30 @@ namespace TruckScale.Pos.Sync
         public string TableName { get; init; } = "";
         public List<string> Uids { get; } = new();
         public int Count => Uids.Count;
+    }
+
+    /// <summary>
+    /// Error al escribir UNA fila durante el push o el pull.
+    /// Lleva la tabla, la clave de la fila y su sale_uid (si la tiene) para que el
+    /// PUSH_ERROR/PULL_ERROR en sync_logs pueda llenar related_entity / related_uid.
+    /// </summary>
+    public sealed class SyncRowException : Exception
+    {
+        public string Table { get; }
+        public string? RowKey { get; }
+        public string? SaleUid { get; }
+
+        /// <summary>sale_uid si la fila pertenece a una venta; si no, la clave de la fila.</summary>
+        public string? RelatedUid => !string.IsNullOrWhiteSpace(SaleUid) ? SaleUid : RowKey;
+
+        public SyncRowException(string table, string? rowKey, string? saleUid, Exception inner)
+            : base($"{table} row {rowKey ?? "?"}" +
+                   (string.IsNullOrWhiteSpace(saleUid) ? "" : $" (sale_uid={saleUid})") +
+                   $": {inner.Message}", inner)
+        {
+            Table = table;
+            RowKey = rowKey;
+            SaleUid = saleUid;
+        }
     }
 }

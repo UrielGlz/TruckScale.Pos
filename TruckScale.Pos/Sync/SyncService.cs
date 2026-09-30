@@ -172,7 +172,7 @@ namespace TruckScale.Pos.Sync
 
                 // Log de error: paso que falló, lo que alcanzó a subir y el error completo
                 var msg = $"step={step} | done: {string.Join(" ", detail)} | {FormatError(ex)}";
-                await LogSyncEventAsync("PUSH_ERROR", msg, 0);
+                await LogSyncEventAsync("PUSH_ERROR", msg, 0, error: ex, step: step);
 
                 return SyncResult.Fail($"Sync failed at '{step}': {ex.Message}");
             }
@@ -344,7 +344,7 @@ namespace TruckScale.Pos.Sync
                 foreach (var kvp in row)
                     cmd.Parameters.AddWithValue($"@{kvp.Key}", kvp.Value ?? DBNull.Value);
 
-                await cmd.ExecuteNonQueryAsync();
+                await ExecuteRowAsync(cmd, tableName, pkColumn, row);
             }
 
             // === PASO 3: Marcar como sincronizado en LOCAL_DB ===
@@ -501,7 +501,7 @@ namespace TruckScale.Pos.Sync
             {
                 // Mensaje completo: paso/tabla que falló, lo que sí se aplicó y el error con inner exceptions
                 var msg = $"step={step} | last_pull_ts={FormatTs(lastTs)} | done: {string.Join(" ", detail)} | {FormatError(ex)}";
-                await LogSyncEventAsync("PULL_ERROR", msg, 0);
+                await LogSyncEventAsync("PULL_ERROR", msg, 0, error: ex, step: step, lastPullTs: lastTs);
                 return SyncResult.Fail($"Pull failed at '{step}': {ex.Message}");
             }
         }
@@ -680,7 +680,7 @@ namespace TruckScale.Pos.Sync
                 foreach (var kvp in row)
                     cmd.Parameters.AddWithValue($"@{kvp.Key}", kvp.Value ?? DBNull.Value);
 
-                await cmd.ExecuteNonQueryAsync();
+                await ExecuteRowAsync(cmd, tableName, pkColumn, row);
             }
         }
 
@@ -796,7 +796,7 @@ namespace TruckScale.Pos.Sync
                 foreach (var kvp in row)
                     cmd.Parameters.AddWithValue($"@{kvp.Key}", kvp.Value ?? DBNull.Value);
 
-                await cmd.ExecuteNonQueryAsync();
+                await ExecuteRowAsync(cmd, tableName, pkColumn, row);
             }
 
             return rows.Count;
@@ -850,35 +850,74 @@ namespace TruckScale.Pos.Sync
             await cmd.ExecuteNonQueryAsync();
         }
 
+        // Límites de columnas de sync_logs (SHOW CREATE TABLE, 2026-09-29)
+        private const int SYNC_LOGS_LOG_TYPE_MAX = 20;       // varchar(20)
+        private const int SYNC_LOGS_SEVERITY_MAX = 10;       // varchar(10)
+        private const int SYNC_LOGS_RELATED_ENTITY_MAX = 50; // varchar(50)
+        private const int SYNC_LOGS_RELATED_UID_MAX = 36;    // char(36)
+
+        // MySQL 1054 = columna desconocida; 3819 (MySQL) / 4025 (MariaDB) = CHECK violado
+        private static bool IsSchemaMismatch(MySqlException ex) =>
+            ex.Number is 1054 or 3819 or 4025;
+
         /// <summary>
         /// Registra un evento de sync.
         /// 1) SIEMPRE lo escribe completo en el log de archivo (C:\TruckScaleLogs).
-        /// 2) Intenta insertarlo en LOCAL.sync_logs. Si el mensaje no cabe en la columna
-        ///    (MySQL 1406), reintenta truncado. Si el INSERT falla, el error se deja en el
-        ///    log de archivo (antes se tragaba en silencio). No relanza: un fallo al
-        ///    registrar no debe abortar el sync.
+        /// 2) Lo inserta en LOCAL.sync_logs:
+        ///    - message: texto completo (columna TEXT, sin truncar);
+        ///    - error_details: JSON válido generado con JsonSerializer (la columna tiene
+        ///      CHECK json_valid), o NULL si no hay error o no se pudo serializar. Nunca texto crudo;
+        ///    - related_entity / related_uid: tabla y sale_uid (o uid de la fila) cuando el
+        ///      error se produjo en una fila concreta;
+        ///    - log_type / severity / related_entity recortados a su tamaño de columna.
+        ///    last_sync_error NO se escribe: es el error de subir ESA fila a MAIN (lo usa el push).
+        /// 3) Si la columna extendida no existe o el CHECK la rechaza, reintenta con el INSERT básico.
+        /// No relanza: un fallo al registrar no debe abortar el sync. El fallo queda en el archivo.
         /// </summary>
-        private async Task LogSyncEventAsync(string logType, string message, int recordsAffected)
+        private async Task LogSyncEventAsync(
+            string logType,
+            string message,
+            int recordsAffected,
+            Exception? error = null,
+            string? step = null,
+            DateTime? lastPullTs = null)
         {
-            const string SQL = @"
+            const string SQL_EXTENDED = @"
+                INSERT INTO sync_logs
+                    (log_uid, log_type, severity, message, records_affected,
+                     related_entity, related_uid, error_details, created_at)
+                VALUES
+                    (@uid, @type, @sev, @msg, @recs, @rent, @ruid, @err, NOW());";
+
+            const string SQL_BASIC = @"
                 INSERT INTO sync_logs
                     (log_uid, log_type, severity, message, records_affected, created_at)
                 VALUES
                     (@uid, @type, @sev, @msg, @recs, NOW());";
 
-            const int TRUNCATED_LEN = 250;
-            var severity = logType.Contains("ERROR") ? "ERROR" : "INFO";
+            var type = Fit(logType, SYNC_LOGS_LOG_TYPE_MAX);
+            var severity = Fit(logType.Contains("ERROR") ? "ERROR" : "INFO", SYNC_LOGS_SEVERITY_MAX);
 
-            AppLogger.Log($"[SyncLog] {logType} ({severity}) records={recordsAffected} | {message}");
+            var rowErr = FindRowException(error);
+            string? relatedEntity = rowErr?.Table is { Length: > 0 } t ? Fit(t, SYNC_LOGS_RELATED_ENTITY_MAX) : null;
+            string? relatedUid = rowErr?.RelatedUid is { Length: > 0 and <= SYNC_LOGS_RELATED_UID_MAX } u ? u : null;
+            string? errorJson = error == null ? null : BuildErrorDetailsJson(error, step, lastPullTs, rowErr);
 
-            async Task InsertAsync(MySqlConnection conn, string msg)
+            AppLogger.Log($"[SyncLog] {type} ({severity}) records={recordsAffected}" +
+                          (relatedEntity != null ? $" related={relatedEntity}:{relatedUid}" : "") +
+                          $" | {message}");
+
+            async Task InsertAsync(MySqlConnection conn, string sql)
             {
-                await using var cmd = new MySqlCommand(SQL, conn);
+                await using var cmd = new MySqlCommand(sql, conn);
                 cmd.Parameters.AddWithValue("@uid", Guid.NewGuid().ToString());
-                cmd.Parameters.AddWithValue("@type", logType);
+                cmd.Parameters.AddWithValue("@type", type);
                 cmd.Parameters.AddWithValue("@sev", severity);
-                cmd.Parameters.AddWithValue("@msg", msg);
+                cmd.Parameters.AddWithValue("@msg", message);
                 cmd.Parameters.AddWithValue("@recs", recordsAffected);
+                cmd.Parameters.AddWithValue("@rent", (object?)relatedEntity ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@ruid", (object?)relatedUid ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@err", (object?)errorJson ?? DBNull.Value);
                 await cmd.ExecuteNonQueryAsync();
             }
 
@@ -889,17 +928,91 @@ namespace TruckScale.Pos.Sync
 
                 try
                 {
-                    await InsertAsync(conn, message);
+                    await InsertAsync(conn, SQL_EXTENDED);
                 }
-                catch (MySqlException ex) when (ex.Number == 1406 && message.Length > TRUNCATED_LEN) // Data too long
+                catch (MySqlException ex) when (IsSchemaMismatch(ex))
                 {
-                    AppLogger.Log($"[SyncLog] sync_logs.message too short for {message.Length} chars; inserting truncated copy.");
-                    await InsertAsync(conn, message[..TRUNCATED_LEN] + "…[full text in C:\\TruckScaleLogs]");
+                    AppLogger.Log($"[SyncLog] extended INSERT rejected ({FormatError(ex)}); retrying basic INSERT.");
+                    await InsertAsync(conn, SQL_BASIC);
                 }
             }
             catch (Exception ex)
             {
-                AppLogger.Log($"[SyncLog] FAILED to write sync_logs ({logType}): {FormatError(ex)}");
+                AppLogger.Log($"[SyncLog] FAILED to write sync_logs ({type}): {FormatError(ex)}");
+            }
+        }
+
+        private static string Fit(string value, int max) =>
+            value.Length <= max ? value : value[..max];
+
+        private static SyncRowException? FindRowException(Exception? ex)
+        {
+            for (var cur = ex; cur != null; cur = cur.InnerException)
+                if (cur is SyncRowException re) return re;
+            return null;
+        }
+
+        /// <summary>
+        /// error_details como JSON válido (lo exige el CHECK json_valid de la columna).
+        /// Se construye con JsonSerializer, que escapa comillas y saltos de línea.
+        /// Si algo falla, devuelve NULL en vez de texto crudo.
+        /// </summary>
+        private static string? BuildErrorDetailsJson(
+            Exception error, string? step, DateTime? lastPullTs, SyncRowException? rowErr)
+        {
+            try
+            {
+                var chain = new List<Dictionary<string, object?>>();
+                var cur = (Exception?)error;
+                for (int depth = 0; cur != null && depth < 5; depth++, cur = cur.InnerException)
+                {
+                    chain.Add(new Dictionary<string, object?>
+                    {
+                        ["type"] = cur.GetType().Name,
+                        ["mysql_number"] = cur is MySqlException mex ? mex.Number : null,
+                        ["message"] = cur.Message
+                    });
+                }
+
+                var payload = new Dictionary<string, object?>
+                {
+                    ["step"] = step,
+                    ["last_pull_ts"] = lastPullTs?.ToString("yyyy-MM-dd HH:mm:ss"),
+                    ["table"] = rowErr?.Table,
+                    ["row_key"] = rowErr?.RowKey,
+                    ["sale_uid"] = rowErr?.SaleUid,
+                    ["errors"] = chain,
+                    ["stack"] = error.StackTrace
+                };
+
+                var json = System.Text.Json.JsonSerializer.Serialize(payload);
+                using var _ = System.Text.Json.JsonDocument.Parse(json); // defensa: validar antes de enviar
+                return json;
+            }
+            catch
+            {
+                return null; // NULL pasa el CHECK; texto crudo no
+            }
+        }
+
+        /// <summary>
+        /// Ejecuta el INSERT/UPSERT de una fila del sync. Si falla, relanza envuelto en
+        /// SyncRowException con la tabla, la clave de la fila y su sale_uid (si la tiene),
+        /// para poder correlacionar el error con una venta. No cambia el flujo: la excepción
+        /// sigue abortando el paso igual que antes.
+        /// </summary>
+        private static async Task ExecuteRowAsync(
+            MySqlCommand cmd, string tableName, string pkColumn, Dictionary<string, object?> row)
+        {
+            try
+            {
+                await cmd.ExecuteNonQueryAsync();
+            }
+            catch (Exception ex)
+            {
+                string? rowKey = row.TryGetValue(pkColumn, out var k) ? k?.ToString() : null;
+                string? saleUid = row.TryGetValue("sale_uid", out var s) ? s?.ToString() : null;
+                throw new SyncRowException(tableName, rowKey, saleUid, ex);
             }
         }
 
