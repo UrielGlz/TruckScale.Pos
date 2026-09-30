@@ -1,7 +1,7 @@
 # Registro de bugs del POS (TruckScale.Pos)
 
 > **Índice maestro de bugs abiertos.** Se actualiza en cada sesión.
-> Última actualización: **2026-09-30** (sesión 6: E2 refutada, E replanteado; nuevo bug W).
+> Última actualización: **2026-09-30** (sesión 7: config legado investigado; log de arranque de configuración; ramas en GitHub).
 
 ## CHECKLIST
 
@@ -23,7 +23,9 @@ Los ids de esta tabla son los que se usan de aquí en adelante; entre paréntesi
 | CR (K) | Crédito consumido offline que no llega a MAIN | analizado — sin corregir | — | — | no | no |
 | H (A2) | Huérfanos totales (Business RECEIVED sin cliente) | descartado del POS — causa externa | — | — | — | — |
 | T (F) | Ticket 16862 sin venta | descartado del POS — sin explicación, externo | — | — | — | — |
-| X | Excepciones que se tragan (`ConfigManager.Load`, `GetCreditSnapshotAsync`, impresión, `TryAutoCompleteSaleAsync`, `GetQueueInfoAsync`) | analizado — listado, sin corregir | — | — | no | no |
+| X | Excepciones que se tragan (`ConfigManager.Load`, `GetCreditSnapshotAsync`, impresión, `TryAutoCompleteSaleAsync`, `GetQueueInfoAsync`) | analizado — listado, sin corregir (`ConfigManager.Load` y el timer ahora dejan rastro en el log) | — | — | no | no |
+| CFG | Log de arranque: qué config se leyó y a qué servidor/base apunta cada conexión | corregido | `fix/logging-visibility` | `e343373` | sí (PC de desarrollo, 3 casos) | no |
+| LEG | `config.json` legado junto al .exe (`PosConfigService`) + cadena fija `127.0.0.1:3306/localuser` en `GetLocalConn` | analizado — casi código muerto; solo afecta el intervalo del timer; recomendado eliminar | — | — | sí (3 casos) | no |
 | W | En producción, si el puerto serie falla al arrancar, el POS pasa **solo** a pesos simulados aleatorios y deja operar | abierto — nuevo, sin corregir | — | — | no | no |
 
 Otros registrados más abajo, fuera del checklist: D (tickets local desde 9-jun), G (ticket 7891 duplicado, parte de P), H histórico (COMPLETED con pago VOIDED 16047/16188), J (VOID no revierte crédito), L (update de chofer con 0 filas), S3 (pull incremental omite `updated_at` NULL).
@@ -36,7 +38,7 @@ Otros registrados más abajo, fuera del checklist: D (tickets local desde 9-jun)
 
 | Fase | Rama | Commit | Bugs | Estado |
 |------|------|--------|------|--------|
-| 0 | `fix/logging-visibility` | `df97361`, `4f7aadf` | M, E (visibilidad), apoyo a C | en revisión |
+| 0 | `fix/logging-visibility` | `df97361`, `4f7aadf`, `e343373` | M, E (visibilidad), apoyo a C, log de arranque de configuración | en revisión |
 | — | `tools/test-harness` | `d9bca68`, `7ced2c2` | entorno local + gancho `TS_FAULT` (Debug) para reproducir B/V | construido; pendiente de correr en tu PC |
 | 1 | `fix/save-sale-snapshot` | — | B, V, A | pendiente |
 | 2 | `fix/reweigh-and-flags` | — | R, I, A (match por nombre) | pendiente |
@@ -346,6 +348,50 @@ Candidatos, de más a menos probable:
 
 Consecuencia: el intervalo del sync (`sync.push_timer_minutes`) se lee de una base que puede no ser la de `LocalDbStrCon`; si esa lectura falla, se usa 5 minutos sin avisar. `CLAUDE.md` dice que `PosConfigService` "no debe expandirse"; queda en X (a limpiar, no urgente).
 
+#### Investigación a fondo del `config.json` legado (2026-09-30) — líneas de producción/`stable`
+
+**Quién lo lee.** Solo `PosConfigService.Load()` (`PosConfigService.cs:24-49`; ruta `AppContext.BaseDirectory\config.json`, línea 17-18). Sus **únicos** llamadores en todo el código:
+
+| Llamador | Qué saca | Qué hace con eso |
+|----------|----------|------------------|
+| `LoginWindow_Loaded` (`LoginWindow.xaml.cs:44`) | `MainDbStrCon` | prueba una conexión y asigna `_dbConfigured` (46-66). **`_dbConfigured` nunca se lee** en ningún lado (solo se asigna en 26, 51, 60, 65) → efecto nulo, salvo un intento de conexión al abrir el login si el archivo existiera. |
+| `MainWindow.GetLocalConn()` (3112-3116) → `InitializeSyncService` (2891) | `LocalDbStrCon` (o la cadena fija) | 1) el `if (IsNullOrWhiteSpace(localConn))` de 2893 **nunca** se cumple (la cadena fija nunca está vacía); 2) lee `sync.push_timer_minutes` con `conn.Open()` síncrono en el hilo de UI (2899-2911); si falla, `catch` vacío → **5 min**. **La conexión no se pasa al `SyncService`**, que usa `ConfigManager` (`SyncService.cs:51-52`). |
+| `MainWindow.GetLocalConn()` → `LoadVehicleTypesAsync` (3771) | idem | solo si falla la carga de `vehicle_types` desde MAIN; si también falla, siembra 4 tipos fijos (3773-3778). |
+
+**Nadie lo escribe.** `PosConfigService.Save` no tiene llamadores; `Ctrl+Alt+F8` escribe **solo** `C:\ProgramData\TruckScale\config.json` (`DbConfigWindow.xaml.cs:58` → `ConfigManager.Save`). En git nunca se versionó un `config.json` y el `.csproj` no copia ninguno a la salida. Historia: `GetLocalConn` es del 7-nov-2025 (`f7aa088`) y `PosConfigService` del 20-nov (`6d938fb`); `ConfigManager` llegó después y reemplazó a `PosConfigService` en todo, **menos en estos dos puntos que nunca se migraron**.
+
+**¿Existe en producción?** La app se publica como **archivo único autocontenido** (`Properties/PublishProfiles/FolderProfile.pubxml`: `PublishSingleFile=true`, `SelfContained=true`). No hay nada que genere ese archivo, así que en la báscula **no existe** salvo que alguien lo haya copiado a mano. Confirmación definitiva: la línea `[Config] config.json legado … existe=…` del nuevo log de arranque.
+
+**La cadena fija.** Sí, está escrita a mano en el código: `MainWindow.xaml.cs:3115` (en `fix/logging-visibility` pasa a la constante `PosConfigService.LegacyLocalFallback`, mismo valor): `Server=127.0.0.1;Port=3306;Database=truckscale;Uid=localuser;Pwd=localpass;SslMode=None;`. Se usa **siempre que el archivo legado no exista, no se pueda leer o no se pueda descifrar** (DPAPI de otro usuario → `catch` en `Load` → cadena vacía → fallback). O sea: en producción, **casi seguro se ha usado siempre**, y solo para leer el intervalo del timer (y, raramente, tipos de vehículo). Nadie lo notaba porque el error se tragaba.
+
+**Prueba realizada (build Debug de `fix/logging-visibility`, PC de desarrollo, 2026-09-30 10:40):**
+
+| Caso | `GetLocalConn()` termina usando |
+|------|---------------------------------|
+| sin `config.json` junto al .exe | `CADENA FIJA en codigo: server=127.0.0.1 port=3306 db=truckscale user=localuser` |
+| con `config.json` legado válido (servidores de prueba `.invalid`) | `legado: server=legacy-local.invalid port=3399 db=legacy_db user=legacy_user` |
+| con `config.json` legado dañado / cifrado por otro usuario | `CADENA FIJA en codigo: …` (el error se traga y cae al fallback) |
+
+En los tres casos MAIN/LOCAL reales (los del `ConfigManager`) no cambian. Ninguna contraseña apareció en el log. En esta PC no hay nada escuchando en `127.0.0.1:3306`, así que aquí el timer queda siempre en 5 min.
+
+**¿Explica bugs abiertos?**
+- **E (sync_logs dejó de escribirse): no.** `LogSyncEventAsync` y todo el push/pull usan `CreateLocalConnection()` → `ConfigManager.Current.LocalDbStrCon` (`SyncService.cs:52, 65-73`). El camino legado no participa.
+- **"La app parece funcionar pero no sincroniza": no.** A lo sumo cambia **cada cuánto** corre el timer (5 min en vez del valor de `settings`). El timer arranca igual. Si `ConfigManager` no tuviera LOCAL, `new SyncService()` lanzaría y quedaría `[Sync] Initialization failed` en el log.
+- Efecto real y menor: congela la UI al arrancar hasta el timeout de conexión (15 s por defecto) si `127.0.0.1:3306` no responde en vez de rechazar.
+
+**Recomendación:** es código prácticamente muerto. Eliminar `PosConfigService` y hacer que `GetLocalConn()` devuelva `ConfigManager.Current.LocalDbStrCon`; quitar el bloque de `LoginWindow_Loaded` y `_dbConfigured`. **Riesgo a revisar antes:** el timer empezaría a leer `sync.push_timer_minutes` de la LOCAL real, así que el sync podría pasar a correr con otra frecuencia en la báscula (la de `settings`, no los 5 min de hoy). Consultar antes `SELECT value FROM settings WHERE `key`='sync.push_timer_minutes';` en la LOCAL de la báscula. Fix de baja dificultad, en rama propia, cuando se decida.
+
+#### ⚠ La config real de la PC de desarrollo apunta a `lunisapp.com` (2026-09-30)
+El log de arranque en la PC del usuario mostró `C:\ProgramData\TruckScale\config.json` (modificado **2026-06-09 15:06:37**):
+- MAIN : `server=lunisapp.com port=3306 db=lunisapppudin_demo_scale user=lunisapppudin_test25`
+- LOCAL: `server=lunisapp.com port=3306 db=lunisapppudin_demo_scale_local user=lunisapppudin_test25`
+
+Preguntas abiertas:
+1. ¿Esas bases "demo" son las de producción o de pruebas? El nombre sugiere pruebas.
+2. **¿La báscula tiene su LOCAL también en `lunisapp.com`?** Si sí, el "modo offline" no es offline: MAIN y LOCAL están en el mismo servidor remoto y un corte de internet tumba ambas. Si no, ¿cuál de las dos LOCAL es la que se auditó para E, D y 16608?
+3. La fecha (9-jun 15:06, 14 min después del `synced_at` masivo de E) sugiere que la corrida del 9-jun salió de esta PC **contra estas bases**. Si la LOCAL auditada es `lunisapppudin_demo_scale_local`, E podría no ser un problema de la báscula sino de uso de esta PC.
+Se responde con el log de arranque en la báscula (`[Config] MAIN/LOCAL`).
+
 ### Bug W — Pesos simulados en producción si falla el puerto serie (nuevo, 2026-09-30)
 - **Versión:** ambas. **Estado:** abierto, sin corregir.
 - `TryAutoConnectAtBoot` (`MainWindow.xaml.cs:500-510`) intenta abrir el COM configurado (`settings.scale.com`, default `COM2`) y, **si falla por cualquier motivo** (cable suelto, puerto ocupado, driver), llama a `StartSimulatedReader()`: pesos **aleatorios** de 16,000-34,000 lb que se estabilizan solos. El comentario original dice `//TODO UG | IMPORTANTE QUITAR ESTO`.
@@ -500,3 +546,4 @@ Propuesta: los tres críticos de guardado/sync se corrigen en su fase (1550 y 45
 - **2026-09-29 — sesión 4.** Ajuste de Fase 0 con el esquema real de `sync_logs` (`4f7aadf`): `error_details` JSON válido o NULL, `message` completo, límites de columnas, `related_uid` = sale_uid en errores de fila, logs ya no disparan push. Descartado que el CHECK `json_valid` explique E en producción. Propuesta de entorno de pruebas documentada en `docs/entorno-pruebas.md` (rama `tools/test-harness`), sin código hasta aprobación.
 - **2026-09-29 — sesión 5.** Aprobado y construido el entorno de pruebas (`tools/test-harness`, `7ced2c2`): MariaDB 10.11.19 ×2 + Toxiproxy en Docker, scripts `tools/test-env/*`, gancho de fallas con doble candado (`#if DEBUG` + `TS_FAULT`; verificado que Release no lo contiene). Checklist agregado al inicio. E: descartados NOT NULL/tamaños/CHECK; nueva hipótesis E2 (el pull sobrescribe filas locales por `log_id`, mismo mecanismo que S2). Pendiente: correr B-auto en la PC del usuario (Docker no estaba corriendo en esta sesión, no se hizo prueba de humo de contenedores).
 - **2026-09-30 — sesión 6.** Consulta decisiva de E en LOCAL: `MAX(log_id)=102646` del 19-abr, top 20 con `synced_at = 2026-06-09 14:52:27` → **E2 refutada**; la tabla dejó de crecer el 19-abr. El DDL recibido era de MAIN. E replanteado ("¿por qué dejó de insertarse?") con candidatos E-a/E-b/E-c y una prueba barata con el log de archivo actual. Sin commits en git el 9-jun. Nuevo bug W (fallback automático a pesos simulados en producción). Simulador de consola del usuario: no se incorpora por ahora (ver `docs/entorno-pruebas.md` §7).
+- **2026-09-30 — sesión 7.** Worktree `C:\Repos\POS-stable` eliminado; se trabaja solo en `C:\Repos\POS`. `.claude/settings.local.json` deja de versionarse (`33f4292` en `tools/test-harness`, `038499b` en `fix/logging-visibility`). Investigado el `config.json` legado (`PosConfigService`): nadie lo escribe, casi seguro no existe en producción, `GetLocalConn()` usa la cadena fija `127.0.0.1:3306/localuser` solo para el intervalo del timer y un fallback de tipos de vehículo; **no explica E**. Log de arranque de configuración en `fix/logging-visibility` (`e343373`), probado en 3 casos. Hallazgo: la config de la PC de desarrollo apunta a `lunisapp.com` (bases `*_demo_scale` y `*_demo_scale_local`), modificada el 9-jun 15:06. Ramas `stable`, `fix/logging-visibility` y `tools/test-harness` subidas a GitHub.
