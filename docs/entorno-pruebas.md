@@ -99,7 +99,13 @@ nombre `NUL` → controlador **Generic / Text Only** → nombre de impresora **`
 Escribe MAIN → `127.0.0.1:3317` y LOCAL → `127.0.0.1:3327` (ambos por Toxiproxy), cifradas con DPAPI
 (`CurrentUser`, igual que `Security/CryptoHelper.cs`). **Ejecútalo con el mismo usuario de Windows que abrirá
 el POS**; un `config.json` cifrado por otro usuario o en otra PC no se puede descifrar.
-Alternativa manual: `Ctrl+Alt+F8` en el login (contraseña admin en `LoginWindow.xaml.cs:25`).
+Alternativa manual: `Ctrl+Alt+F8` en el login (contraseña admin en `LoginWindow.xaml.cs:25`); es lo que
+escribe este mismo archivo (`DbConfigWindow` → `ConfigManager.Save`).
+
+**Ojo, hay un segundo `config.json` legado** junto al `.exe` (`PosConfigService`), que nadie escribe. Sin él, el
+POS lee el intervalo del sync desde `127.0.0.1:3306` (cadena fija), que en este entorno no existe, y usa
+**5 minutos** en lugar del minuto de `seed-dev`. En las pruebas, dispara el sync con **`Ctrl+Alt+F9`** en vez de
+esperar al timer. Detalle en `docs/bugs-pos.md`, sección "Configuración: hay DOS `config.json`".
 
 ### 3.6 Primer arranque
 ```powershell
@@ -120,7 +126,7 @@ existe y el POS arranca su simulador de báscula (`StartSimulatedReader`, ya exi
 | `.\net.ps1 main slow -Ms 1500` | +1.5 s por respuesta: ventas online lentas (ensancha B online) |
 | `.\net.ps1 local slow -Ms 2000` | +2 s por respuesta en LOCAL (ensancha V) |
 | `.\net.ps1 main status` | estado actual |
-| Disparar sync | `Ctrl+Alt+F9` en el POS, o esperar 1 min |
+| Disparar sync | `Ctrl+Alt+F9` en el POS (el timer puede quedar en 5 min, ver §3.5) |
 
 Notas:
 - Con `hang`, **toda** operación contra MAIN tarda 8 s (cargar clientes, re-evaluar crédito). Prepara la
@@ -203,7 +209,7 @@ de `check.ps1` marcará la venta por identidad cruzada, que es justamente el bug
 
 ### F0-1 … F0-4 (Fase 0, sobre la rama `fix/logging-visibility`)
 Ver `docs/bugs-pos.md`. Equivalencias: "desconectar MAIN" = `.\net.ps1 main down`; "reconectar" =
-`.\net.ps1 main ok`; "ciclo del timer" = 1 min o `Ctrl+Alt+F9`. Para provocar `PULL_ERROR` a propósito:
+`.\net.ps1 main ok`; "ciclo del timer" = `Ctrl+Alt+F9`. Para provocar `PULL_ERROR` a propósito:
 `ALTER TABLE users ADD COLUMN ts_extra INT NULL; UPDATE users SET ts_extra = 1 WHERE username = 'dev';`
 **solo en MAIN (3316)** (el `UPDATE` hace que la fila entre en el pull incremental) → el pull intenta insertar
 esa columna en LOCAL → `Unknown column` con `step=users`. Para deshacer: `ALTER TABLE users DROP COLUMN ts_extra;`.

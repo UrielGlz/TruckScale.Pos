@@ -313,6 +313,7 @@ Candidatos, de más a menos probable:
   UNION ALL SELECT 'tickets',  COUNT(*), MIN(printed_at),  MAX(printed_at)  FROM tickets  WHERE synced_at = '2026-06-09 14:52:27';
   ```
 - Pregunta para quien trabajaba en `e024e8a`: ¿se corrió algo contra la LOCAL de la báscula el 9-jun por la tarde?
+- **Pista (2026-09-30):** en la PC de desarrollo del usuario, `C:\ProgramData\TruckScale\config.json` tiene fecha de modificación **2026-06-09 15:06**, 14 minutos después del `synced_at` masivo (14:52:27, hora del servidor de BD). Es compatible con que esa corrida la haya hecho un POS de desarrollo desde esa PC y luego se reconfigurara. No se leyó el contenido del archivo (cadenas de conexión); para ver a qué servidores apunta: `Ctrl+Alt+F8` en el login, o `tools\test-env\set-config.ps1` (que además lo respalda antes de sobrescribirlo).
 
 **Decisión:** no se invierte más aquí; el primer despliegue de la Fase 0 (o la revisión del log de archivo de hoy) lo responde.
 
@@ -336,6 +337,14 @@ Candidatos, de más a menos probable:
 
 ### Bug L — Actualizar chofer con 0 filas
 - Ambas versiones. `GetDriverByWeightUuidAsync` busca LOCAL primero; `UpdateDriverInfoWithFallbackAsync` (prod 2217) actualiza MAIN primero y devuelve 0 filas sin error si la fila está solo en LOCAL.
+
+### Configuración: hay DOS `config.json` (hallazgo 2026-09-30)
+| Archivo | Quién lo lee | Quién lo escribe | Para qué se usa |
+|---------|--------------|------------------|-----------------|
+| **`C:\ProgramData\TruckScale\config.json`** (`ConfigManager`, ruta `CommonApplicationData\TruckScale`) | casi todo: login, `SaveSaleAsync`, `SyncService`, `GetPrimaryConn` | **`Ctrl+Alt+F8`** en el login → `DbConfigWindow` → `ConfigManager.Save` (`DbConfigWindow.xaml.cs:58`) | es la configuración real |
+| `<carpeta del .exe>\config.json` (`PosConfigService`, legado; cifrado DPAPI sin prefijo `dpapi:`) | `LoginWindow_Loaded` (solo un indicador), `GetLocalConn()` (`MainWindow.xaml.cs:3112`) → lectura del intervalo del timer de sync (`InitializeSyncService`, ~2891) y fallback de tipos de vehículo (3771) | **nadie** (no hay llamadas a `PosConfigService.Save`) | si no existe, `GetLocalConn` usa la cadena fija `Server=127.0.0.1;Port=3306;Database=truckscale;Uid=localuser;Pwd=localpass` |
+
+Consecuencia: el intervalo del sync (`sync.push_timer_minutes`) se lee de una base que puede no ser la de `LocalDbStrCon`; si esa lectura falla, se usa 5 minutos sin avisar. `CLAUDE.md` dice que `PosConfigService` "no debe expandirse"; queda en X (a limpiar, no urgente).
 
 ### Bug W — Pesos simulados en producción si falla el puerto serie (nuevo, 2026-09-30)
 - **Versión:** ambas. **Estado:** abierto, sin corregir.
