@@ -2904,10 +2904,14 @@ namespace TruckScale.Pos
                     var result = cmd.ExecuteScalar();
                     if (result != null && int.TryParse(result.ToString(), out var parsed))
                         timerMinutes = Math.Max(1, parsed);
+                    AppendLog($"[Sync] sync.push_timer_minutes leido de {ConfigDiagnostics.Describe(localConn)} -> " +
+                              (result == null ? "setting no existe" : $"'{result}'") + $"; intervalo={timerMinutes} min");
                 }
-                catch
+                catch (Exception exTimer)
                 {
-                    // Si no existe el setting, usa default
+                    // Si no existe el setting, usa default (comportamiento sin cambios; ahora queda en el log)
+                    AppendLog($"[Sync] No se pudo leer sync.push_timer_minutes de {ConfigDiagnostics.Describe(localConn)} " +
+                              $"({exTimer.GetType().Name}: {exTimer.Message}); se usa el default de {timerMinutes} min");
                 }
 
                 _syncService = new SyncService();   // usa MainDbStrCon y LocalDbStrCon del config.json
@@ -3111,8 +3115,8 @@ namespace TruckScale.Pos
             if (!string.IsNullOrWhiteSpace(cfg.LocalDbStrCon))
                 return cfg.LocalDbStrCon;
 
-            // Fallback legacy
-            return "Server=127.0.0.1;Port=3306;Database=truckscale;Uid=localuser;Pwd=localpass;SslMode=None;";
+            // Fallback legacy (cadena fija; ver PosConfigService.LegacyLocalFallback)
+            return PosConfigService.LegacyLocalFallback;
         }
         private async Task LoadProductsAsync()
         {

@@ -56,6 +56,8 @@ namespace TruckScale.Pos
         {
             // Opcional: podrías exigir que al menos la principal pase el test antes de guardar
             ConfigManager.Save(MainConnText.Text, LocalConnText.Text);
+            AppLogger.Log($"[Config] config.json guardado con Ctrl+Alt+F8 en {ConfigManager.ConfigFilePath} | " +
+                          $"MAIN: {ConfigDiagnostics.Describe(MainConnText.Text)} | LOCAL: {ConfigDiagnostics.Describe(LocalConnText.Text)}");
             DialogResult = true;
             Close();
         }

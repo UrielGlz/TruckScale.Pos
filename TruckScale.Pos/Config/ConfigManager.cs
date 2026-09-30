@@ -16,8 +16,15 @@ namespace TruckScale.Pos.Config
 
         public static AppConfig Current { get; private set; } = new();
 
+        /// <summary>Ruta del config.json real (C:\ProgramData\TruckScale\config.json).</summary>
+        public static string ConfigFilePath => ConfigPath;
+
+        /// <summary>Error del último Load() (null si leyó bien o si el archivo no existe). Solo diagnóstico.</summary>
+        public static string? LastLoadError { get; private set; }
+
         public static void Load()
         {
+            LastLoadError = null;
             try
             {
                 if (!File.Exists(ConfigPath))
@@ -46,9 +53,11 @@ namespace TruckScale.Pos.Config
                         : AppConfig.DefaultLogRetentionDays
                 };
             }
-            catch
+            catch (Exception ex)
             {
                 // Si hay error al leer, mejor dejarlo vacío y que el admin configure
+                // (se conserva el comportamiento; el error queda disponible para el log de arranque)
+                LastLoadError = $"{ex.GetType().Name}: {ex.Message}";
                 Current = new AppConfig();
             }
         }

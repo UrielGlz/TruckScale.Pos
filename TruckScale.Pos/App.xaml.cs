@@ -33,6 +33,9 @@ namespace TruckScale.Pos
                 return;
             }
 
+            // Log de arranque: qué config se leyó, de qué ruta y a qué servidor/base apunta cada conexión
+            Config.ConfigDiagnostics.LogStartup();
+
             base.OnStartup(e);
         }
 

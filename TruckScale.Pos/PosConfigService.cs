@@ -12,10 +12,25 @@ namespace TruckScale.Pos
         public string? LocalDbStrCon { get; set; }
     }
 
+    /// <summary>
+    /// LEGADO. Lee un config.json JUNTO AL .EXE (no el de C:\ProgramData\TruckScale).
+    /// Nadie escribe ese archivo (Save no tiene llamadores). Hoy solo lo usan:
+    ///   - LoginWindow_Loaded (asigna _dbConfigured, que nunca se lee)
+    ///   - MainWindow.GetLocalConn() (intervalo del timer de sync y fallback de tipos de vehículo)
+    /// Si el archivo no existe, GetLocalConn usa LegacyLocalFallback (cadena fija).
+    /// Ver docs/bugs-pos.md, sección "Configuración: hay DOS config.json".
+    /// </summary>
     public static class PosConfigService
     {
         private static readonly string ConfigPath =
             Path.Combine(AppContext.BaseDirectory, "config.json");
+
+        /// <summary>Ruta del config.json legado (carpeta del ejecutable).</summary>
+        public static string LegacyConfigPath => ConfigPath;
+
+        /// <summary>Cadena fija que usa MainWindow.GetLocalConn() cuando el config legado no da LOCAL.</summary>
+        public const string LegacyLocalFallback =
+            "Server=127.0.0.1;Port=3306;Database=truckscale;Uid=localuser;Pwd=localpass;SslMode=None;";
 
         private const string MAIN_KEY = "main_db_str_con";
         private const string LOCAL_KEY = "local_db_str_con";
