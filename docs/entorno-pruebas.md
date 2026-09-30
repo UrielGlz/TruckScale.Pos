@@ -210,7 +210,19 @@ esa columna en LOCAL → `Unknown column` con `step=users`. Para deshacer: `ALTE
 
 ---
 
-## 7. Limitaciones conocidas
+## 7. Simulador de báscula: interno vs. simulador de consola por puerto serie
+
+- `StartSimulatedReader` (interno, activado con `scale.com = COM99`) **no pasa por el puerto serie**: llama
+  directo a `HandleCardinalRawGG` con tramas `%n <peso>lb GG`, siempre estables (`GG`), cada ~1.25 s.
+  Alcanza para B, V, A, R y el sync: esos bugs empiezan después de aceptar el peso.
+- **No** prueba: `SerialScaleReader`/`OnDataReceived`, el modo Demand (ENQ), tramas `GR` (en movimiento),
+  lecturas inestables, ruido, puerto que se cae a mitad de sesión. Todo eso importa para bugs de
+  estabilidad/aceptación de peso (p. ej. la histéresis del botón OK, `e1d637a`, revertida) y para el bug W.
+- **Decisión (2026-09-30):** no incorporar el simulador de consola por ahora, para no mantener dos cosas.
+  Se retoma cuando se trabaje en estabilidad de peso o en W; entonces se evalúa con un par de puertos
+  virtuales (p. ej. com0com: el simulador escribe en COM98 y el POS lee `scale.com = COM99`).
+
+## 8. Limitaciones conocidas
 - No se ha corrido todavía de punta a punta: requiere los dumps reales y Docker en ejecución.
 - `seed-dev.sql` asume columnas vistas en el código; puede requerir ajustes al esquema real.
 - La latencia/cuelgue es a nivel TCP; no simula errores SQL específicos.

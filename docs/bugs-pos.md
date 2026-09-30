@@ -1,7 +1,7 @@
 # Registro de bugs del POS (TruckScale.Pos)
 
 > **Índice maestro de bugs abiertos.** Se actualiza en cada sesión.
-> Última actualización: **2026-09-29** (sesión 5: entorno de pruebas construido, pendiente de correr).
+> Última actualización: **2026-09-30** (sesión 6: E2 refutada, E replanteado; nuevo bug W).
 
 ## CHECKLIST
 
@@ -12,7 +12,7 @@ Los ids de esta tabla son los que se usan de aquí en adelante; entre paréntesi
 |----|-----|--------|------|--------|--------------------|--------------------|
 | M | Retención de logs 2 días | corregido | `fix/logging-visibility` | `df97361` | no | no |
 | C | Visibilidad del sync (paso, tabla, filas, error completo; `error_details` JSON; `related_uid`; logs no disparan push) | corregido | `fix/logging-visibility` | `df97361`, `4f7aadf` | no | no |
-| E | `sync_logs` local sin escribir desde abril | abierto — causa por confirmar; hipótesis nueva E2 (el pull sobrescribe filas por `log_id`), ver sección E | — | — | no | no |
+| E | `sync_logs` local sin escribir desde el 19-abr 01:33:59 | abierto — E2 **refutada**; pregunta replanteada: ¿por qué dejó de insertarse? (candidatos: ciclo de sync detenido / INSERT tragado / otra base). Se responde con el log de archivo de hoy o con la Fase 0 | — | — | no | no |
 | B | Venta COMPLETED sin fila en `payments` (16608, 10270, 13875) | analizado — **reproducible** con `TS_FAULT=B` | — (repro en `tools/test-harness`) | repro `7ced2c2` | pendiente de correr | no |
 | V | Validación Business que corre después de insertar los pagos | analizado — **reproducible** con `TS_FAULT=V` | — (repro en `tools/test-harness`) | repro `7ced2c2` | pendiente de correr | no |
 | A | `customer_id` y `account_number` desincronizados | analizado | — | — | no | no |
@@ -24,6 +24,7 @@ Los ids de esta tabla son los que se usan de aquí en adelante; entre paréntesi
 | H (A2) | Huérfanos totales (Business RECEIVED sin cliente) | descartado del POS — causa externa | — | — | — | — |
 | T (F) | Ticket 16862 sin venta | descartado del POS — sin explicación, externo | — | — | — | — |
 | X | Excepciones que se tragan (`ConfigManager.Load`, `GetCreditSnapshotAsync`, impresión, `TryAutoCompleteSaleAsync`, `GetQueueInfoAsync`) | analizado — listado, sin corregir | — | — | no | no |
+| W | En producción, si el puerto serie falla al arrancar, el POS pasa **solo** a pesos simulados aleatorios y deja operar | abierto — nuevo, sin corregir | — | — | no | no |
 
 Otros registrados más abajo, fuera del checklist: D (tickets local desde 9-jun), G (ticket 7891 duplicado, parte de P), H histórico (COMPLETED con pago VOIDED 16047/16188), J (VOID no revierte crédito), L (update de chofer con 0 filas), S3 (pull incremental omite `updated_at` NULL).
 
@@ -280,20 +281,40 @@ Upsert: `INSERT … ON DUPLICATE KEY UPDATE` (757), copiando todas las columnas 
 #### Análisis con el esquema completo y `pendientes = 0` (sesión 5)
 - **Columnas obligatorias:** las únicas `NOT NULL` sin default son `log_uid` y `log_type`. **Ambos INSERT del código de producción las incluyen siempre**: `SyncService.LogSyncEventAsync` (`log_uid, log_type, severity, message, records_affected, created_at`, línea 821) y `DatabaseHelper.LogConnectionErrorAsync` (`log_uid, log_type, severity, message, created_at`, línea 119; además no tiene llamadores). Valores: `log_uid` = GUID de 36 caracteres, `log_type` ≤ 12. **Descartado** que un NOT NULL o un tamaño de columna tumbe el INSERT. El CHECK de `error_details` también quedó descartado (se inserta NULL).
 - **Lo que dice el `0` pendiente:** en producción `sync_logs` **sí** está en el push (línea 128) y el push marca `synced=1` sin verificar (S1). Por tanto `0 pendientes` es compatible con dos historias: (a) los INSERT no se intentan o fallan sin rastro, **o** (b) los INSERT funcionan y el push los marca `synced=1` en cada tick. El cero **no** distingue entre ambas.
-- **Hipótesis nueva E2 — el pull sobrescribe las filas nuevas por `log_id`:** `ShouldSkipAutoId` (producción, 769-779) **no** excluye `sync_logs.log_id`. Entonces:
-  - **Pull** (línea 450): trae filas de MAIN **con su `log_id`** y hace `INSERT … ON DUPLICATE KEY UPDATE` en LOCAL. Si ese `log_id` ya lo usa una fila local distinta, el UPSERT **reescribe esa fila local** con el contenido de MAIN (`log_type`, `message`, `created_at` viejo…), conservando solo su `log_uid` (la columna que el código trata como clave y excluye del UPDATE). Resultado: filas locales escritas después de abril terminan con fechas y mensajes de otra época → **"no hay filas desde abril" aunque se sigan escribiendo**.
-  - **Push** (línea 128): manda el `log_id` local a MAIN con `INSERT IGNORE`; si choca, se descarta y S1 la marca `synced=1` → pendientes = 0.
-  - Es el mismo mecanismo S2 que afecta a `tickets.ticket_id` (y explicaría también D y el ticket 16608 ausente en LOCAL).
-- **Prueba decisiva (solo lectura, en LOCAL):**
+- **~~Hipótesis E2 — el pull sobrescribe filas locales por `log_id`~~ — REFUTADA (2026-09-30).** Datos de LOCAL: `MAX(log_id) = 102646`, `created_at = 2026-04-19 01:33:59`; los 20 `log_id` más altos son todos del 19-abr y **todos** tienen `synced_at = 2026-06-09 14:52:27`. Si el pull sobrescribiera filas, habría `log_id` altos con fechas viejas; lo que hay es que **no existen `log_id` nuevos: la tabla dejó de crecer el 19-abr**. (El defecto de código sigue existiendo —`ShouldSkipAutoId` no excluye `sync_logs.log_id`— y queda dentro de P, pero **no** explica E.)
+- **Corrección de datos:** el DDL recibido (con `AUTO_INCREMENT=517471`) es de **MAIN**, no de LOCAL. LOCAL llegó a 102646.
+
+#### E replanteado: ¿por qué dejó de **insertarse** en LOCAL el 19-abr a las 01:33:59?
+Hechos del código de producción que acotan la pregunta:
+1. `LogSyncEventAsync` se llama al terminar **cada pull** (éxito o error, líneas 461/469) y cada push que llega a ejecutarse (144/158). El timer (`AutoSyncAsync`, 2954) corre el pull **en cada tick, sin condición**. Si el ciclo de sync de este POS estuviera corriendo contra esta base, habría al menos una fila por tick.
+2. Las filas del 19-abr quedaron con `synced=0` **siete semanas** (hasta el 9-jun). En producción `TotalPending` cuenta `sync_logs`, así que el push lo habría intentado en cada tick: **entre el 19-abr y el 9-jun ningún push llegó al paso `sync_logs`** (paso 7, después de axles, sales, lines, driver_info, tickets y signatures), o no corrió ningún push.
+3. La venta 16608 (26-sep, offline) **sí** está en esta base; `SaveSaleAsync` la escribió en LOCAL. Eso indica que **el POS usa esta base al menos para ventas**, lo que debilita (sin descartar, si hay más de una terminal) la hipótesis de "otra base".
+
+Candidatos, de más a menos probable:
+- **(E-a) El ciclo de sync dejó de ejecutarse.** `AutoSyncAsync` sale sin hacer nada si `_syncInProgress` es `true` (2960) y solo lo vuelve a `false` en su `finally` (3034). Una llamada que nunca termina deja el flag trabado hasta que se cierre la ventana; mientras, no hay push, pull ni logs. También deja de ejecutarse si falla la inicialización del sync (`_syncService == null`, 2934-2938). Ojo: al hacer logout/login se crea otra `MainWindow` con su propio timer y el `DispatcherTimer` de la ventana cerrada **no se detiene** (solo `StopScale()` en `OnClosed`); hay que tenerlo en cuenta al leer los logs (puede haber varios ciclos en paralelo).
+- **(E-b) El INSERT falla y el `catch {}` (839-842) se lo traga.** Ya se descartaron NOT NULL, tamaños y el CHECK. Quedaría algo del entorno (permisos del usuario de BD sobre `sync_logs`, tabla bloqueada/corrupta, disco). Con la Fase 0 aparece como `[SyncLog] FAILED to write sync_logs …`.
+- **(E-c) Base distinta.** Pendiente confirmar `LocalDbStrCon` (Ctrl+Alt+F8), pero el punto 3 la hace menos probable.
+
+**Prueba barata HOY, sin desplegar nada:** el código de producción ya escribe al log de archivo `[Sync] Auto-sync triggered by timer.` al inicio de cada ciclo (`AutoSyncAsync`) y `[Sync] PULL OK` / `[Sync] PULL ERROR: …` al final. En `C:\TruckScaleLogs\log_<hoy>.txt` de la báscula:
+- si **no** aparecen esas líneas cada N minutos → **E-a** (el ciclo no corre);
+- si aparecen (incluido `PULL …`) pero no hay filas nuevas en `sync_logs` → **E-b** (el INSERT falla en silencio);
+- si aparecen `[Sync] Initialization failed` → E-a por inicialización.
+
+#### ¿Qué pasó el 9-jun a las 14:52:27?
+- **Git:** no hay commits ese día (los más cercanos son `e024e8a` el 11-jun 16:47 y `7c80501` el 12-jun 17:04). El trabajo en curso esos días era justamente "ajuste para synced".
+- `synced_at` idéntico al segundo en muchas filas es **compatible con un push normal** (el push marca cada lote de hasta 50 con un solo `UPDATE … synced_at = NOW()`; una corrida de unos cientos de filas termina en ~1 s). Lo extraordinario no es la marca en bloque sino que **nada se subió en siete semanas y luego todo de golpe**: una sola corrida exitosa (¿manual con Ctrl+Alt+F9, un build de desarrollo apuntando a esta LOCAL durante el trabajo de `e024e8a`, o un `UPDATE` a mano?).
+- Consultas para acotarlo (LOCAL, solo lectura):
   ```sql
-  SELECT MAX(log_id), MAX(created_at), COUNT(*) FROM sync_logs;
-  SELECT log_id, log_uid, log_type, created_at, synced_at FROM sync_logs ORDER BY log_id DESC LIMIT 20;
+  SELECT synced_at, COUNT(*), MIN(created_at), MAX(created_at)
+  FROM sync_logs GROUP BY synced_at ORDER BY synced_at DESC LIMIT 10;
+  -- ¿Se subieron también ventas en esa misma corrida? Si sí, el push de datos también estuvo parado:
+  SELECT 'sales', COUNT(*), MIN(created_at), MAX(created_at) FROM sales    WHERE synced_at = '2026-06-09 14:52:27'
+  UNION ALL SELECT 'payments', COUNT(*), MIN(received_at), MAX(received_at) FROM payments WHERE synced_at = '2026-06-09 14:52:27'
+  UNION ALL SELECT 'tickets',  COUNT(*), MIN(printed_at),  MAX(printed_at)  FROM tickets  WHERE synced_at = '2026-06-09 14:52:27';
   ```
-  - Si el `AUTO_INCREMENT` (517471) sigue creciendo con el tiempo pero las filas de `log_id` más alto tienen `created_at` de abril o antes y `synced_at` reciente → **E2 confirmada**: sí se escribe, y el pull lo pisa.
-  - Si `MAX(log_id)` ≈ 517470 y no cambia de un día a otro → no se insertan filas (historia a): la dirá `[SyncLog] FAILED to write sync_logs …` con la Fase 0.
-  - Comparar además con MAIN: `SELECT log_id, log_uid, created_at FROM sync_logs WHERE log_id IN (<los 20 de arriba>);` — mismo `log_id`, distinto `log_uid`, mismo contenido ⇒ sobrescritura.
-- **Tensión con PU:** E2 exige que el pull llegue a la línea 450 (`sync_logs`), y la hipótesis de PU dice que aborta antes de la 429 (`customer_credit`). No pueden ser ambas ciertas en el mismo periodo. Si E2 se confirma, PU debe revisarse (quizá el pull funcionó hasta cierta fecha, o falla después de la 450). El `step=` del primer `PULL_ERROR` con la Fase 0 lo resuelve.
-- **Confirmar de qué base es el DDL** (el `AUTO_INCREMENT=517471` es por base).
+- Pregunta para quien trabajaba en `e024e8a`: ¿se corrió algo contra la LOCAL de la báscula el 9-jun por la tarde?
+
+**Decisión:** no se invierte más aquí; el primer despliegue de la Fase 0 (o la revisión del log de archivo de hoy) lo responde.
 
 ### Bug F — Ticket 16862 sin venta
 - **Ambas versiones:** no hay `FOREIGN_KEY_CHECKS` ni ningún `DELETE`/`TRUNCATE` en todo el código de producción (ni en master, ni en la historia git). El push usa `INSERT IGNORE`, que con la FK activa **descarta** el ticket huérfano (y S1 lo marcaría como subido), no lo inserta.
@@ -315,6 +336,13 @@ Upsert: `INSERT … ON DUPLICATE KEY UPDATE` (757), copiando todas las columnas 
 
 ### Bug L — Actualizar chofer con 0 filas
 - Ambas versiones. `GetDriverByWeightUuidAsync` busca LOCAL primero; `UpdateDriverInfoWithFallbackAsync` (prod 2217) actualiza MAIN primero y devuelve 0 filas sin error si la fila está solo en LOCAL.
+
+### Bug W — Pesos simulados en producción si falla el puerto serie (nuevo, 2026-09-30)
+- **Versión:** ambas. **Estado:** abierto, sin corregir.
+- `TryAutoConnectAtBoot` (`MainWindow.xaml.cs:500-510`) intenta abrir el COM configurado (`settings.scale.com`, default `COM2`) y, **si falla por cualquier motivo** (cable suelto, puerto ocupado, driver), llama a `StartSimulatedReader()`: pesos **aleatorios** de 16,000-34,000 lb que se estabilizan solos. El comentario original dice `//TODO UG | IMPORTANTE QUITAR ESTO`.
+- `_isSimulated` no bloquea nada en el flujo de venta (solo se usa en 446, 1766, 2608): el botón OK acepta el peso simulado, se guarda en `scale_session_axles` y se puede cobrar e imprimir el ticket. La única señal es el texto "Scale: Simulated".
+- **Riesgo:** tickets de báscula con pesos inventados. **Verificar:** buscar en los logs de archivo `Switching to simulated mode`; en BD no hay forma directa de distinguir un peso simulado.
+- **Fix propuesto (futuro):** en Release, si no abre el puerto, mostrar error y bloquear la aceptación de pesos; el simulador solo en Debug (lo usa el entorno de pruebas).
 
 ### Bug M — Retención de logs
 - Ambas versiones, `AppLogger.cs:40-49` idéntico: borra a los 2 días.
@@ -462,3 +490,4 @@ Propuesta: los tres críticos de guardado/sync se corrigen en su fase (1550 y 45
 - **2026-09-29 — sesión 3 (corrección).** Creada rama `stable` desde `1e04a54f` (worktree `C:\Repos\POS-stable`). Fase 0 en `fix/logging-visibility` (`df97361`): retención de logs 30 días configurable, sync con paso/tabla/filas y error completo, `LogSyncEventAsync` sin tragar errores. Inventario 0.3 de `catch` críticos. En revisión; no se sigue a Fase 1 hasta aprobación.
 - **2026-09-29 — sesión 4.** Ajuste de Fase 0 con el esquema real de `sync_logs` (`4f7aadf`): `error_details` JSON válido o NULL, `message` completo, límites de columnas, `related_uid` = sale_uid en errores de fila, logs ya no disparan push. Descartado que el CHECK `json_valid` explique E en producción. Propuesta de entorno de pruebas documentada en `docs/entorno-pruebas.md` (rama `tools/test-harness`), sin código hasta aprobación.
 - **2026-09-29 — sesión 5.** Aprobado y construido el entorno de pruebas (`tools/test-harness`, `7ced2c2`): MariaDB 10.11.19 ×2 + Toxiproxy en Docker, scripts `tools/test-env/*`, gancho de fallas con doble candado (`#if DEBUG` + `TS_FAULT`; verificado que Release no lo contiene). Checklist agregado al inicio. E: descartados NOT NULL/tamaños/CHECK; nueva hipótesis E2 (el pull sobrescribe filas locales por `log_id`, mismo mecanismo que S2). Pendiente: correr B-auto en la PC del usuario (Docker no estaba corriendo en esta sesión, no se hizo prueba de humo de contenedores).
+- **2026-09-30 — sesión 6.** Consulta decisiva de E en LOCAL: `MAX(log_id)=102646` del 19-abr, top 20 con `synced_at = 2026-06-09 14:52:27` → **E2 refutada**; la tabla dejó de crecer el 19-abr. El DDL recibido era de MAIN. E replanteado ("¿por qué dejó de insertarse?") con candidatos E-a/E-b/E-c y una prueba barata con el log de archivo actual. Sin commits en git el 9-jun. Nuevo bug W (fallback automático a pesos simulados en producción). Simulador de consola del usuario: no se incorpora por ahora (ver `docs/entorno-pruebas.md` §7).
