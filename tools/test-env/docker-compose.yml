@@ -1,0 +1,53 @@
+# Entorno de pruebas local del POS (ver docs/entorno-pruebas.md)
+#
+#   MAIN  directo  : 127.0.0.1:3316   (para consultas de verificación)
+#   LOCAL directo  : 127.0.0.1:3326
+#   MAIN  por proxy: 127.0.0.1:3317   <- el POS se conecta aquí
+#   LOCAL por proxy: 127.0.0.1:3327   <- el POS se conecta aquí
+#   Toxiproxy API  : 127.0.0.1:8474   (cortar, colgar, latencia)
+#
+# Uso: tools\test-env\up.ps1  (no hace falta llamar a docker compose a mano)
+
+name: truckscale-test
+
+services:
+  ts-main:
+    image: mariadb:${TS_MARIADB_TAG:-10.11.19}
+    container_name: ts-main
+    environment:
+      MARIADB_ROOT_PASSWORD: dev
+      MARIADB_DATABASE: ${TS_DB:-truckscale}
+    ports: ["127.0.0.1:3316:3306"]
+    volumes: ["ts-main-data:/var/lib/mysql"]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      retries: 40
+
+  ts-local:
+    image: mariadb:${TS_MARIADB_TAG:-10.11.19}
+    container_name: ts-local
+    environment:
+      MARIADB_ROOT_PASSWORD: dev
+      MARIADB_DATABASE: ${TS_DB:-truckscale}
+    ports: ["127.0.0.1:3326:3306"]
+    volumes: ["ts-local-data:/var/lib/mysql"]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      retries: 40
+
+  ts-toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    container_name: ts-toxiproxy
+    ports:
+      - "127.0.0.1:8474:8474"
+      - "127.0.0.1:3317:3317"
+      - "127.0.0.1:3327:3327"
+    depends_on:
+      ts-main:  { condition: service_healthy }
+      ts-local: { condition: service_healthy }
+
+volumes:
+  ts-main-data:
+  ts-local-data:

@@ -309,6 +309,10 @@ namespace TruckScale.Pos
             LoadKeypadConfig();
             BuildKeypadUI();
 
+#if DEBUG
+            AnnounceFaultMode();
+#endif
+
             if (PosSession.IsLoggedIn)
             {
                 var opName = string.IsNullOrWhiteSpace(PosSession.FullName)
@@ -4108,6 +4112,48 @@ namespace TruckScale.Pos
 
         const int STATUS_SALE_REFUNDED = 4;
 
+#if DEBUG
+        // =====================================================================
+        // GANCHO DE FALLAS PARA PRUEBAS — SOLO EXISTE EN BUILDS DEBUG
+        // Doble candado:
+        //   1) #if DEBUG: en Release (el build de la báscula) este código no se compila.
+        //   2) Variable de entorno TS_FAULT del PROCESO. No hay bandera en config.json ni en BD.
+        // Valores:
+        //   B -> justo después de abrir la conexión (antes de la transacción)
+        //   V -> justo después de insertar los pagos (antes de calcular businessAmount)
+        // En ambos puntos ejecuta lo mismo que hace la UI cuando una re-evaluación de crédito
+        // en vuelo devuelve "no permitido": UpdatePaymentMethodsVisibility(false), que vacía _pagos
+        // si Business está seleccionado. Así se reproduce la carrera sin depender de clics rápidos.
+        // Documentado en docs/entorno-pruebas.md §6.
+        // =====================================================================
+        private static readonly string _tsFault =
+            (Environment.GetEnvironmentVariable("TS_FAULT") ?? "").Trim().ToUpperInvariant();
+
+        private void AnnounceFaultMode()
+        {
+            if (_tsFault.Length == 0) return;
+            Title += $"   [TS_FAULT={_tsFault} — BUILD DE PRUEBAS]";
+            AppendLog($"[FAULT] Debug build with TS_FAULT={_tsFault}. Fault injection is ACTIVE.");
+        }
+
+        private void FaultPoint(string point)
+        {
+            bool fire = (_tsFault == "B" && point == "after-connection-open")
+                     || (_tsFault == "V" && point == "after-payments-insert");
+            if (!fire) return;
+
+            if (!string.Equals(_selectedPaymentId, BUSINESS_CODE, StringComparison.OrdinalIgnoreCase))
+            {
+                AppendLog($"[FAULT] TS_FAULT={_tsFault} at {point}: not applicable (selected payment '{_selectedPaymentId}', needs Business Account).");
+                return;
+            }
+
+            int before = _pagos.Count;
+            UpdatePaymentMethodsVisibility(canUseBusinessAccount: false);
+            AppendLog($"[FAULT] TS_FAULT={_tsFault} at {point}: UpdatePaymentMethodsVisibility(false) -> _pagos {before} -> {_pagos.Count}.");
+        }
+#endif
+
         private async Task<string> SaveSaleAsync()
         {
             // Validaciones previas
@@ -4171,6 +4217,10 @@ namespace TruckScale.Pos
                         exLocal);
                 }
             }
+
+#if DEBUG
+            FaultPoint("after-connection-open");   // TS_FAULT=B (solo Debug)
+#endif
 
             await using (conn)
             await using (var tx = await conn.BeginTransactionAsync())
@@ -4359,6 +4409,10 @@ namespace TruckScale.Pos
 
                         await cmd.ExecuteNonQueryAsync();
                     }
+
+#if DEBUG
+                    FaultPoint("after-payments-insert");   // TS_FAULT=V (solo Debug)
+#endif
 
                     // ====== UPDATE customer_credit (solo si hubo Business Account) ======
                     var businessAmount = _pagos
