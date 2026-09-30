@@ -11,7 +11,8 @@
 
 | Fase | Rama | Commit | Bugs | Estado |
 |------|------|--------|------|--------|
-| 0 | `fix/logging-visibility` | `df97361` | M, E (visibilidad), apoyo a C | en revisión |
+| 0 | `fix/logging-visibility` | `df97361`, `4f7aadf` | M, E (visibilidad), apoyo a C | en revisión |
+| — | `tools/test-harness` | ver `docs/entorno-pruebas.md` | entorno local para reproducir B/V | propuesta en revisión (sin código) |
 | 1 | `fix/save-sale-snapshot` | — | B, V, A | pendiente |
 | 2 | `fix/reweigh-and-flags` | — | R, I, A (match por nombre) | pendiente |
 | 3 | `fix/sync-push` | — | S1, S2, G | pendiente |
@@ -54,7 +55,7 @@ Estados de corrección usados abajo: `abierto` · `corregido en stable (rama/com
 | S3 | Pull incremental omite filas con `updated_at` NULL | solo prod | entendido | baja | medio |
 | K | Consumo de crédito offline nunca llega a MAIN (y el pull lo pisa en LOCAL) | ambas | entendido | media | alto |
 | D | `tickets` de LOCAL sin filas desde 9-jun | prod | entendido (parcial) | — | medio |
-| E | `sync_logs` sin escribir (MAIN 12-jun, LOCAL abril) | prod | en análisis · **visibilidad corregida en stable** (`fix/logging-visibility` `df97361`): los fallos del INSERT ya quedan en el log de archivo | baja | bajo |
+| E | `sync_logs` sin escribir (MAIN 12-jun, LOCAL abril) | prod | en análisis · **visibilidad corregida en stable** (`fix/logging-visibility` `df97361`+`4f7aadf`): los fallos del INSERT ya quedan en el log de archivo; `error_details` siempre JSON válido; `related_uid` con sale_uid; logs ya no disparan push. Descartado: el CHECK `json_valid` no es la causa en producción (ver sección Fase 0) | baja | bajo |
 | F | Ticket 16862 sin venta pese a FK | ambas | en análisis — no hay camino en el POS | ? | medio |
 | G | Ticket 7891 duplicado | ambas | entendido (mecanismo) | media | medio |
 | H | Ventas COMPLETED con pago VOIDED (16047, 16188) | prod (más probable) | en análisis | media | medio |
@@ -281,8 +282,19 @@ Upsert: `INSERT … ON DUPLICATE KEY UPDATE` (757), copiando todas las columnas 
 - **No cambia la lógica** del push ni del pull (mismas tablas, mismo orden, mismas llamadas). Solo agrega diagnóstico.
 - Push y pull registran el paso en curso y las filas por tabla. `PUSH_SUCCESS`/`PULL_SUCCESS` llevan el detalle (`sales:3 payments:3 …`); `PULL_SUCCESS` además el `last_pull_ts` previo.
 - `PUSH_ERROR`/`PULL_ERROR` llevan: `step=<tabla que falló>`, `last_pull_ts`, las tablas que sí se aplicaron y el error completo (tipo, número MySQL, inner exceptions). **Esto responde directamente a C:** el primer `PULL_ERROR` tras desplegar dirá en qué tabla y por qué falla el pull.
-- `LogSyncEventAsync` ya no se traga errores: cada evento se copia **siempre** al log de archivo (`[SyncLog] …`); si el `INSERT` en `sync_logs` falla, el error queda en el archivo (`[SyncLog] FAILED to write sync_logs …`), lo que resuelve la pregunta de E (LOCAL sin filas desde abril). Si el mensaje no cabe en la columna (MySQL 1406) reintenta con 250 caracteres. **No relanza**: un fallo al registrar no aborta el sync (decisión deliberada).
-- Pendiente de confirmar: tamaño real de `sync_logs.message` (`SHOW CREATE TABLE sync_logs;`). No se tocó el esquema.
+- `LogSyncEventAsync` ya no se traga errores: cada evento se copia **siempre** al log de archivo (`[SyncLog] …`); si el `INSERT` en `sync_logs` falla, el error queda en el archivo (`[SyncLog] FAILED to write sync_logs …`), lo que resuelve la pregunta de E (LOCAL sin filas desde abril). **No relanza**: un fallo al registrar no aborta el sync (decisión deliberada).
+
+#### Ajuste con el esquema real de `sync_logs` (commit `4f7aadf`)
+
+Esquema (SHOW CREATE TABLE, 2026-09-29): `message text`, `error_details longtext CHECK (json_valid(error_details))` (patrón típico de MariaDB para columnas JSON), `log_type varchar(20)`, `severity varchar(10)`, `related_entity varchar(50)`, `related_uid char(36)` (vacío en las ~517 mil filas históricas), `last_sync_error varchar(500)`.
+
+- **A.1 — ¿el CHECK `json_valid` tumba los INSERT desde abril? Descartado para producción.** El código de `1e04a54f` **nunca** escribe `error_details` (ni `LogSyncEventAsync` ni `DatabaseHelper.LogConnectionErrorAsync`); inserta NULL, y NULL pasa el CHECK. Quien sí escribía texto crudo ahí era `e024e8a` (master, 11-jun; `SQL_FULL` con fallback a `SQL_SHORT`), que no está en la báscula. La causa real de E sigue abierta; la dirá `[SyncLog] FAILED to write sync_logs …` en el primer despliegue. Otra candidata: alguna columna `NOT NULL` sin default que el INSERT no incluye (hace falta el `SHOW CREATE TABLE` completo para descartarla).
+- **Ahora:** `error_details` se genera con `JsonSerializer` (paso, tabla, clave de fila, sale_uid, cadena de excepciones con número MySQL, stack) y se valida con `JsonDocument.Parse` antes de enviarlo; si algo falla va NULL. Nunca texto crudo. Solo se llena en eventos de error.
+- **A.2:** `message` va completo (se quitó el truncado a 250).
+- **A.3:** `log_type`, `severity` y `related_entity` se recortan a 20/10/50. Los valores actuales ya cabían (`PUSH_SUCCESS`=12, `PULL_ERROR`=10, `ERROR`=5), así que **tampoco son la causa de E**. `last_sync_error` no se escribe: su semántica es "error al subir esta fila a MAIN" y el push lo excluye.
+- **A.4:** los errores de una fila concreta en push/pull se envuelven en `SyncRowException` (tabla, clave, sale_uid) y el `PUSH_ERROR`/`PULL_ERROR` llena `related_entity` = tabla y `related_uid` = sale_uid (o la clave de la fila si no pertenece a una venta, p. ej. `uuid_weight`). Consulta de correlación: `SELECT * FROM sync_logs WHERE related_uid = '<sale_uid>';`. Los eventos de resumen (SUCCESS) no tienen una venta única y quedan NULL.
+- Si las columnas extendidas no existen en alguna base o el CHECK rechaza el valor (1054/3819/4025), reintenta con el INSERT básico y lo anota en el archivo.
+- **A.5 — tráfico:** en producción `TotalPending` contaba `sync_logs`; cada push/pull escribe una fila de log ⇒ la fila dispara el siguiente push ⇒ **push en cada tick solo para subir sus propios logs** (bucle que probablemente explica las ~517 mil filas hasta abril, cuando el INSERT dejó de funcionar). Opciones: (a) excluir `sync_logs` del push por completo (lo que hizo master) — MAIN pierde los logs de la báscula; (b) **no dejar que los logs disparen el push, pero subirlos cuando haya datos reales que subir**. Se implementó **(b)**: `QueueInfo.TotalPending` ya no incluye `PendingLogs`; el paso `sync_logs` del push se conserva. Tráfico nuevo: ninguno sin ventas; con ventas, hasta 500 filas de log por push (límite existente de `GetPendingUidsAsync`). Riesgo a vigilar: si hay un backlog grande de logs con `synced=0`, se irá subiendo en bloques de 500 con cada push de datos. Verificar antes: `SELECT COUNT(*) FROM sync_logs WHERE synced=0 OR synced IS NULL;` en LOCAL.
 
 ### Fase 0.3 — `catch` que ocultan fallos en guardado de venta y sync (inventario, **sin cambios todavía**)
 
@@ -341,7 +353,13 @@ Propuesta: los tres críticos de guardado/sync se corrigen en su fase (1550 y 45
 2. Abrir `C:\TruckScaleLogs\log_<hoy>.txt` y buscar `[SyncLog]`.
 - **Esperado A (pull sigue fallando):** `[SyncLog] PULL_ERROR (ERROR) … | step=<tabla> | last_pull_ts=… | done: sites:0 … | [MySqlException #<número>] <mensaje>`. **Anotar `step` y el mensaje: es la causa de C.**
 - **Esperado B:** si aparece `[SyncLog] FAILED to write sync_logs …`, el mensaje explica por qué `sync_logs` local no se escribe desde abril (E).
-- En BD: si el INSERT funciona, filas nuevas en LOCAL `sync_logs` con `log_type` `PULL_ERROR`/`PUSH_SUCCESS` y el mismo texto (o truncado a 250). **No se modifica ninguna otra tabla más de lo que ya hacía el sync.**
+- En BD: si el INSERT funciona, filas nuevas en LOCAL `sync_logs` con `log_type` `PULL_ERROR`, `message` completo, `error_details` JSON (`SELECT JSON_VALUE(error_details,'$.step') FROM sync_logs ORDER BY created_at DESC LIMIT 5;`) y, si el error fue en una fila de venta, `related_entity`/`related_uid` llenos. **No se modifica ninguna otra tabla más de lo que ya hacía el sync.**
+
+### F0-4 — Los logs ya no disparan el push
+1. Sin hacer ventas, dejar el POS abierto 3 ciclos del timer.
+- **Esperado en el log:** cada ciclo `[Sync] Nothing to PUSH (queue FREE or 0 pending).` aunque haya filas nuevas en `sync_logs` con `synced=0`. Antes, esas filas provocaban `Pending to PUSH: N records` en cada ciclo.
+2. Hacer una venta offline y reconectar.
+- **Esperado:** `PUSH_SUCCESS … sync_logs:<n> …` — los logs pendientes suben junto con la venta.
 
 ### F0-3 — Push con detalle
 1. Desconectar MAIN, hacer una venta de contado, reconectar y esperar un ciclo.
@@ -400,3 +418,4 @@ Propuesta: los tres críticos de guardado/sync se corrigen en su fase (1550 y 45
 - **2026-09-29 — sesión 1.** Registro creado. Análisis sobre master (asumido en producción por error).
 - **2026-09-29 — sesión 2.** Confirmado que producción es `1e04a54f` (31-mar). Reanálisis con worktree temporal (eliminado al terminar). Hallazgos: `MainWindow.xaml.cs` es prácticamente idéntico (B, A, A2, R, I, J, L, M existen en producción); la validación Business **sí existe** en producción y sin interrupciones desde dic-2025; nuevo Bug V (la validación usa `_pagos` en vivo); **el pull existe en producción y falla**, probablemente antes de `customer_credit` (línea 429); nuevos S1 (push marca synced sin verificar), S2 (autoincrementales copiados) y S3 (incremental omite `updated_at` NULL), que master corrige salvo S3; master elimina el pull, así que **no debe desplegarse tal cual**.
 - **2026-09-29 — sesión 3 (corrección).** Creada rama `stable` desde `1e04a54f` (worktree `C:\Repos\POS-stable`). Fase 0 en `fix/logging-visibility` (`df97361`): retención de logs 30 días configurable, sync con paso/tabla/filas y error completo, `LogSyncEventAsync` sin tragar errores. Inventario 0.3 de `catch` críticos. En revisión; no se sigue a Fase 1 hasta aprobación.
+- **2026-09-29 — sesión 4.** Ajuste de Fase 0 con el esquema real de `sync_logs` (`4f7aadf`): `error_details` JSON válido o NULL, `message` completo, límites de columnas, `related_uid` = sale_uid en errores de fila, logs ya no disparan push. Descartado que el CHECK `json_valid` explique E en producción. Propuesta de entorno de pruebas documentada en `docs/entorno-pruebas.md` (rama `tools/test-harness`), sin código hasta aprobación.
