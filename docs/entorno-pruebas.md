@@ -1,279 +1,217 @@
 # Entorno de pruebas local del POS
 
 > Objetivo: reproducir en una PC de desarrollo los bugs del guardado de venta (B y V) y del sync,
-> **antes** de corregirlos, para poder comprobar después que el fix funciona.
-> Rama: `tools/test-harness` (desde `stable`). Estado: **propuesta en revisión** — este documento
-> describe lo que se puede hacer hoy sin código y lo que se propone construir.
-> Fecha: 2026-09-29. Código de referencia: `stable` = `1e04a54f` (producción).
+> **antes** de corregirlos, y comprobar después que el fix funciona.
+> Rama: `tools/test-harness` (desde `stable` = `1e04a54f`, producción).
+> Scripts: `tools/test-env/`. Última actualización: 2026-09-29.
 
 ---
 
-## 1. Respuestas previas (antes de construir nada)
-
-### ¿Qué tan acoplado está el guardado a la UI? ¿Se puede llamar `SaveSaleAsync` desde una prueba?
-
-**Muy acoplado. Hoy no se puede probar sin la UI.**
-
-- `SaveSaleAsync` (`MainWindow.xaml.cs:4111`) es un método **privado de la ventana** `MainWindow`.
-- Lee directamente controles y estado de la ventana: `ClienteRegCombo.SelectedItem` (4181), `_pagos`
-  (una `ObservableCollection` enlazada a la lista de pagos de la pantalla, 4298 y 4364),
-  `_driverLinked`, `_selectedProductId/Price/Code`, `_currentWeightUuid`, `_currentCashSessionUid`,
-  `_reweighSourceSaleUid`, `PaymentMethods` (vía `FindPaymentMethodIdByCode`), y llama a
-  `UpdateSyncStatusUI` y `AppendLog`.
-- Para instanciar `MainWindow` hace falta un hilo STA de WPF, los recursos XAML (MaterialDesign), el
-  `config.json` con DPAPI y conexión a BD en el constructor/Loaded (cash session, catálogos, puerto serie).
-- Conclusión: **para el código actual, la única forma de ejercitar el guardado es la UI**.
-- **Esto cambia con la Fase 1**: el fix propuesto (snapshot inmutable) separa naturalmente
-  "capturar el estado de la pantalla" de "escribir la venta". La parte que escribe quedará en una clase
-  sin dependencias de WPF que sí se puede probar automáticamente contra una MariaDB local.
-
-### ¿Hay tests hoy en la solución?
-
-**No.** `TruckScale.Pos.sln` tiene un solo proyecto (`TruckScale.Pos`). No hay proyecto de pruebas ni
-framework referenciado. Propuesta: **xUnit** (estándar en .NET 8, funciona con `dotnet test`) en un
-proyecto `TruckScale.Pos.Tests`, creado en la Fase 1 cuando exista algo testeable.
-
-### ¿Algo impide una segunda instancia del POS en la misma máquina?
-
-Sí, varias cosas — **pero no hace falta una segunda instancia** para reproducir B, V ni el sync.
-
-| Impedimento | Dónde | Efecto |
-|-------------|-------|--------|
-| Mutex global `Global\ScaleSoftware` | `App.xaml.cs:17-34` | la segunda instancia muestra "The application is already running" y se cierra. **Bloquea por diseño.** |
-| `config.json` en ruta fija | `C:\ProgramData\TruckScale\config.json` (`Config/ConfigManager.cs`) | todas las instancias de la máquina comparten conexiones |
-| `serial.txt` en ruta fija | `C:\TruckScale\serial.txt` (`SerialScaleReader.cs:127`) | idem |
-| Logs en ruta fija | `C:\TruckScaleLogs` (`AppLogger.cs`) | idem |
-| Puerto serie | exclusivo por naturaleza | en la PC de desarrollo no aplica: se usa el simulador |
-| Licencias | ninguna encontrada. El pad de firma Topaz (`Libs/SigPlusNET.dll`) es opcional; sin hardware la ventana de firma se cierra/omite (`catch` silencioso en 1536) | ninguno |
-
-### ¿Basta una prueba automatizada que dispare la condición de carrera para B y V?
-
-**Para demostrar el bug en el código actual: no de forma confiable con una prueba automatizada pura**,
-porque el código actual solo se ejecuta por la UI y la carrera depende de tiempos.
-Hay tres niveles, de menor a mayor esfuerzo:
-
-1. **Manual + ventana ensanchada (sin código).** Con MAIN "colgado" (8 s de espera) o latencia artificial,
-   la ventana de la carrera pasa de milisegundos a varios segundos: el operador tiene tiempo de sobra
-   para pulsar *Cash* o cambiar el combo. **Reproducible de forma confiable a mano.** Suficiente para B.
-   Para V también, con latencia en LOCAL (ver §4).
-2. **Inyección de fallas solo en Debug (propuesto, requiere tu aprobación).** Un gancho compilado
-   **únicamente en builds Debug** (`#if DEBUG`) que, si existe la variable de entorno
-   `TS_FAULT=clear-pagos-after-open` o `clear-pagos-during-payment-insert`, ejecuta en el punto exacto de
-   `SaveSaleAsync` lo mismo que hace la UI (`UpdatePaymentMethodsVisibility(false)`, que vacía `_pagos`).
-   Resultado: **B y V se reproducen el 100 % de las veces sin depender de la velocidad del operador.**
-   El build Release (el de la báscula) queda idéntico.
-3. **Pruebas automatizadas de invariantes (después de la Fase 1).** Sobre la clase extraída:
-   "ninguna venta cierra sin filas de pago", "`amount_paid` = suma de pagos insertados",
-   "`customer_id` y `sale_driver_info.account_number` coinciden". Estas pruebas no necesitan provocar la
-   carrera: el snapshot la hace imposible por construcción, y la prueba verifica el contrato.
-
-**Automatizar la UI (FlaUI/WinAppDriver) no se recomienda**: mucho esfuerzo y frágil para este caso.
-
-### ¿Cuál es el mínimo para reproducir B y V?
-
-| Bug | Mínimo indispensable |
-|-----|----------------------|
-| **B** | Una sola MariaDB local (copia de esquema + catálogos de LOCAL) + `config.json` en la PC de desarrollo con **MAIN apuntando a una IP que no responde** (p. ej. `10.255.255.1`). Cada venta espera 8 s antes de caer a LOCAL; durante esa espera se pulsa *Cash*. No hace falta Docker ni Toxiproxy. |
-| **V** | Lo mismo + **latencia en LOCAL** (Toxiproxy) para que cada `INSERT` tarde ~2 s, o el gancho Debug `clear-pagos-during-payment-insert`. La ventana de V (entre el `INSERT` del pago y el cálculo de `businessAmount`) es un solo round-trip: a mano sin latencia es casi imposible. |
-| Sync (F0-2, F0-3, S1, S2) | Dos bases (MAIN y LOCAL) + Toxiproxy para cortar/reconectar MAIN. |
-
----
-
-## 2. Qué ya existe y se reutiliza
-
-- **Simulador de báscula: ya existe, no hay que construir nada.** `MainWindow.StartSimulatedReader()`
-  (`MainWindow.xaml.cs:2602`) genera tramas Cardinal `%0 … GG` para los 3 ejes y el total cada ~1.25 s.
-  Se activa **solo** cuando falla la apertura del puerto serie al arrancar (`TryAutoConnectAtBoot`, 497-510).
-  El puerto se lee del setting de BD `scale.com` (default `COM2`, 6905). En una PC sin puertos COM el
-  modo simulado arranca solo. Si tu PC tiene un COM (Bluetooth, módem), pon `scale.com = COM99` en la copia
-  de `settings`.
-  En git no hay otro simulador (búsqueda por "simul/serial/emulat" en todo el historial).
-- **Sync manual:** `Ctrl+Alt+F9` en `MainWindow` abre el diálogo de sync (`ShowSyncDebugDialog`, 6437) y
-  ejecuta push + pull. El timer automático usa el setting `sync.push_timer_minutes` (mínimo 1).
-- **Config de BD:** `Ctrl+Alt+F8` en la ventana de login, con la contraseña de administrador definida en
-  `LoginWindow.xaml.cs:25` (`AdminConfigPassword`; no se reproduce aquí).
-
----
-
-## 3. Instalación paso a paso (PC de desarrollo, Windows)
-
-### 3.0 Antes de empezar — **proteger producción**
-1. Si tu PC ya tiene `C:\ProgramData\TruckScale\config.json`, **cópialo a un lugar seguro**: puede apuntar
-   a la MAIN de producción. Mientras pruebas, **ninguna** cadena de conexión debe apuntar a producción.
-2. Respalda `C:\TruckScaleLogs\` si existe.
-
-### 3.1 Software
-| Herramienta | Uso | Nota |
-|-------------|-----|------|
-| .NET 8 SDK | compilar/ejecutar | `dotnet --version` ≥ 8 |
-| Docker Desktop (WSL2) | dos MariaDB aisladas | alternativa: MariaDB instalada con dos puertos/instancias |
-| Cliente MariaDB (`mariadb`, `mariadb-dump`) | importar/exportar | viene con MariaDB Server o HeidiSQL |
-| Toxiproxy (server + cli, binarios Windows de GitHub `Shopify/toxiproxy`) | cortar MAIN, colgarla 8 s, latencia | no se instala: son dos `.exe` |
-
-### 3.2 Versión de base de datos
-El `CHECK (json_valid(...))` de `sync_logs.error_details` indica **MariaDB**. Confirmar en ambas bases:
-`SELECT VERSION();` y usar la **misma versión** en Docker (`mariadb:<major.minor>`).
-
-### 3.3 Obtener esquema y catálogos (lo ejecuta quien tenga acceso; **solo lectura**)
-> Contiene datos personales de choferes y clientes si se exportan ventas. Recomendado: **solo esquema +
-> catálogos**, sin ventas. Las ventas de prueba se generan en tu PC.
+## 0. Resumen rápido (cuando ya está instalado)
 
 ```powershell
-# ESQUEMA completo (tablas, vistas, triggers, rutinas) de cada base
-mariadb-dump -h <host_main>  -u <usuario_lectura> -p --single-transaction --no-data --routines --triggers <db> > main_schema.sql
-mariadb-dump -h <host_local> -u <usuario_lectura> -p --single-transaction --no-data --routines --triggers <db> > local_schema.sql
-
-# CATÁLOGOS (datos) — mismos en ambas bases
-$cat = "sites status_catalogo tax_rates products customers customer_credit vehicle_types driver_products license_states payment_methods number_sequences users settings pos_terminals void_reasons"
-mariadb-dump -h <host_main> -u <usuario_lectura> -p --single-transaction --no-create-info --skip-triggers <db> $cat.Split(' ') > catalogs.sql
-
-# Quitar DEFINER (si no, falla la importación de triggers/vistas con otro usuario)
-foreach ($f in 'main_schema.sql','local_schema.sql') {
-  (Get-Content $f) -replace 'DEFINER=`[^`]+`@`[^`]+`','' | Set-Content $f -Encoding utf8
-}
+cd <repo>\tools\test-env
+.\up.ps1                      # MariaDB MAIN + LOCAL + Toxiproxy
+.\seed-dev.ps1                # restablece usuario dev, settings y saldos de clientes de prueba
+.\net.ps1 main ok             # red normal
+.\run-pos.ps1 -Fault B        # POS Debug con el gancho del bug B activo
+#   ... hacer una venta Business con el cliente "TS TEST POSTPAID" ...
+.\check.ps1 main              # ver la venta sin pago
 ```
-Notas: MAIN y LOCAL **no tienen el mismo esquema** (LOCAL agrega `synced`, `synced_at`, `sync_attempts`,
-`last_sync_error`); por eso se exportan por separado. El trigger `trg_ticket_apply_prepaid_credit` solo
-existe en MAIN y viene en `main_schema.sql`.
 
-### 3.4 Levantar las dos bases
+---
+
+## 1. Respuestas de diseño
+
+| Pregunta | Respuesta |
+|----------|-----------|
+| ¿Se puede llamar `SaveSaleAsync` desde una prueba? | **No hoy.** Es privado de `MainWindow` y lee controles y estado de la ventana (`ClienteRegCombo`, `_pagos`, `_driverLinked`, `_selectedProduct*`, `_currentWeightUuid`, `_currentCashSessionUid`…). Solo se ejercita por la UI. La Fase 1 lo separa y lo hace testeable. |
+| ¿Hay tests? | No. Un solo proyecto en la solución. Se propone xUnit (`TruckScale.Pos.Tests`) en la Fase 1. |
+| ¿Segunda instancia del POS? | Imposible por diseño: mutex global `Global\ScaleSoftware` (`App.xaml.cs:17`) y rutas fijas (`C:\ProgramData\TruckScale\config.json`, `C:\TruckScale\serial.txt`, `C:\TruckScaleLogs`). No hace falta. |
+| ¿Basta una prueba automatizada de la carrera? | Para el código actual, lo confiable es el **gancho de fallas Debug** (§5): reproduce B y V el 100 % de las veces. La reproducción manual con Toxiproxy (§6) confirma que la carrera ocurre también sin gancho. |
+| Mínimo para B | Una MariaDB con la copia de LOCAL + `config.json` con MAIN colgada. El entorno completo lo automatiza. |
+
+---
+
+## 2. Qué incluye
+
+| Archivo | Qué hace |
+|---------|----------|
+| `docker-compose.yml` | `ts-main` (3316), `ts-local` (3326) con **MariaDB 10.11.19** (misma versión que producción), `ts-toxiproxy` (API 8474, proxies 3317→MAIN y 3327→LOCAL). Datos en volúmenes Docker. |
+| `ts-common.ps1` | Funciones compartidas (SQL vía `docker exec`, API de Toxiproxy por HTTP; no hace falta instalar cliente MariaDB ni toxiproxy-cli). |
+| `up.ps1` / `down.ps1 [-Purge]` | Levantar / detener (y borrar datos) |
+| `import.ps1` | Importa esquema de MAIN, esquema de LOCAL y catálogos (quita `DEFINER`) |
+| `seed-dev.sql` / `seed-dev.ps1` | Usuario `dev`/`dev123`, `scale.com=COM99` (fuerza simulador), sync cada 1 min, impresora `TS-NULL`, clientes de prueba 990001 (POSTPAID, $1000) y 990002 (PREPAID, $500). Re-ejecutable: **restablece los saldos** entre corridas. |
+| `set-config.ps1 [-Restore]` | Escribe `C:\ProgramData\TruckScale\config.json` apuntando al entorno, cifrado con DPAPI como el POS. **Respalda siempre** el existente y muestra a qué servidor apuntaba. |
+| `net.ps1 <main\|local> <ok\|down\|hang\|slow\|status> [-Ms n]` | Controla la red entre el POS y cada base |
+| `run-pos.ps1 [-Fault none\|B\|V]` | Compila en Debug y abre el POS; `TS_FAULT` solo para ese proceso |
+| `check.sql` / `check.ps1 [main\|local\|both]` | Invariantes: ventas sin pago, `amount_paid` ≠ suma de pagos, Business sin cliente, identidad cruzada, saldos de prueba, últimas ventas |
+
+---
+
+## 3. Instalación paso a paso (una sola vez)
+
+### 3.0 Proteger producción
+- `set-config.ps1` respalda tu `config.json` actual y te dice a qué servidor apuntaba. Si ves la IP de
+  producción, **ese respaldo es tu config real**: guárdalo. Para volver: `.\set-config.ps1 -Restore`.
+- Mientras pruebes, ninguna cadena debe apuntar a producción. Los scripts solo escriben en
+  `127.0.0.1:3316/3317/3326/3327`.
+
+### 3.1 Requisitos
+- Windows 10/11 con **Docker Desktop** (backend WSL2) **en ejecución**.
+- **.NET 8 SDK** (`dotnet --version`).
+- Nada más: el cliente MariaDB y Toxiproxy corren dentro de los contenedores.
+
+### 3.2 Exportar esquema y catálogos (una persona con acceso, **solo lectura**)
+Solo esquema + catálogos; **sin ventas** (tienen datos personales de choferes). Base: `<db>`.
 ```powershell
-docker run -d --name ts-main  -p 3316:3306 -e MARIADB_ROOT_PASSWORD=dev -e MARIADB_DATABASE=<db> mariadb:<version>
-docker run -d --name ts-local -p 3326:3306 -e MARIADB_ROOT_PASSWORD=dev -e MARIADB_DATABASE=<db> mariadb:<version>
-
-Get-Content main_schema.sql  | mariadb -h 127.0.0.1 -P 3316 -u root -pdev <db>
-Get-Content local_schema.sql | mariadb -h 127.0.0.1 -P 3326 -u root -pdev <db>
-Get-Content catalogs.sql     | mariadb -h 127.0.0.1 -P 3316 -u root -pdev <db>
-Get-Content catalogs.sql     | mariadb -h 127.0.0.1 -P 3326 -u root -pdev <db>
+mariadb-dump -h <host_main>  -u <lector> -p --single-transaction --no-data --routines --triggers <db> > main_schema.sql
+mariadb-dump -h <host_local> -u <lector> -p --single-transaction --no-data --routines --triggers <db> > local_schema.sql
+mariadb-dump -h <host_main>  -u <lector> -p --single-transaction --no-create-info --skip-triggers <db> `
+  sites status_catalogo tax_rates products customers customer_credit vehicle_types driver_products `
+  license_states payment_methods number_sequences users settings pos_terminals void_reasons > catalogs.sql
 ```
+MAIN y LOCAL se exportan por separado porque LOCAL tiene columnas de sync (`synced`, …) y MAIN tiene el
+trigger `trg_ticket_apply_prepaid_credit`.
 
-### 3.5 Ajustes de datos para desarrollo (en **ambas** copias)
-```sql
--- Usuario de pruebas (login: dev / dev123). El POS compara SHA-256 en hexadecimal.
-INSERT INTO users (username, full_name, role_code, password_hash, password_algo, is_active)
-VALUES ('dev', 'Dev Tester', '<role_code de un cajero>', SHA2('dev123', 256), 'SHA256', 1);
--- (ajusta columnas NOT NULL adicionales según tu esquema)
-
--- Forzar simulador de báscula y sync cada minuto
-UPDATE settings SET value = 'COM99' WHERE `key` = 'scale.com';
-UPDATE settings SET value = '1'     WHERE `key` = 'sync.push_timer_minutes';
-
--- Impresora que no imprime (ver 3.7)
-UPDATE settings SET value = 'TS-NULL' WHERE `key` = 'tickets.printer_name';
-
--- Dos clientes de prueba con crédito: uno POSTPAID con saldo y uno PREPAID con ≥ $12
--- (usar clientes existentes del catálogo o insertar en customers + customer_credit)
-```
-
-### 3.6 Toxiproxy (cortar y ralentizar)
+### 3.3 Levantar e importar
 ```powershell
-.\toxiproxy-server.exe                       # dejar corriendo en otra consola
-.\toxiproxy-cli.exe create -l 127.0.0.1:3317 -u 127.0.0.1:3316 main
-.\toxiproxy-cli.exe create -l 127.0.0.1:3327 -u 127.0.0.1:3326 local
+cd <repo>\tools\test-env
+$env:TS_DB = '<db>'            # nombre real de la base (default 'truckscale'); en la misma consola
+.\up.ps1
+.\import.ps1 -MainSchema C:\dumps\main_schema.sql -LocalSchema C:\dumps\local_schema.sql -Catalogs C:\dumps\catalogs.sql
+.\seed-dev.ps1
 ```
-El POS se conecta a **3317 (MAIN)** y **3327 (LOCAL)**, nunca directo a 3316/3326.
+Si `seed-dev.ps1` falla por una columna `NOT NULL` que no conozco, agrégala en `seed-dev.sql` y repite.
+Revisa también que `sql_mode` y `time_zone` coincidan con producción:
+`SELECT @@sql_mode, @@time_zone;` en producción y en `127.0.0.1:3316`.
 
-### 3.7 Impresora nula (evita papel y diálogos)
-Si no hay impresora configurada válida, el POS usa "Microsoft Print to PDF" (abre un diálogo de guardar)
-y luego la predeterminada del sistema (**imprime papel**) — `MainWindow.xaml.cs:4668-4705`.
-Crear una impresora que descarta todo:
-1. Configuración → Impresoras → Agregar manualmente → "Agregar impresora local" → **Crear un puerto nuevo:
-   Local Port** → nombre del puerto `NUL`.
-2. Controlador: **Generic / Text Only**. Nombre de la impresora: `TS-NULL`.
+### 3.4 Impresora nula (evita papel y diálogos)
+Sin una impresora válida el POS usa "Microsoft Print to PDF" (abre diálogo) y luego la predeterminada
+(**imprime papel**) — `MainWindow.xaml.cs:4668-4705`. Crear una que descarta todo:
+Configuración → Impresoras → Agregar manualmente → impresora local → **Crear puerto nuevo: Local Port**,
+nombre `NUL` → controlador **Generic / Text Only** → nombre de impresora **`TS-NULL`**.
 
-### 3.8 `config.json` en tu PC (DPAPI)
-`config.json` guarda las cadenas **cifradas con DPAPI, alcance CurrentUser** (`Security/CryptoHelper.cs`):
-solo las puede descifrar **el mismo usuario de Windows en la misma máquina**. **No se puede copiar el
-de la báscula.** Se genera desde el propio POS:
-1. Compilar y ejecutar `stable` (o la rama a probar): `dotnet run --project TruckScale.Pos/TruckScale.Pos.csproj`.
-2. En el login: `Ctrl+Alt+F8` → contraseña admin → capturar:
-   - MAIN: `Server=127.0.0.1;Port=3317;Database=<db>;Uid=root;Pwd=dev;SslMode=None;`
-   - LOCAL: `Server=127.0.0.1;Port=3327;Database=<db>;Uid=root;Pwd=dev;SslMode=None;Connection Timeout=5;`
-3. Guardar. (El POS fuerza `ConnectionTimeout=8` en MAIN — `MainWindow.xaml.cs:865` — sin importar lo que
-   pongas; esa es la ventana del bug B.)
-4. Opcional, en texto plano dentro del mismo `config.json`: `"log_retention_days": 30` (con la Fase 0).
-5. Login `dev` / `dev123`, abrir caja.
-
----
-
-## 4. Provocar las condiciones
-
-| Condición | Comando | Qué pasa en el POS |
-|-----------|---------|--------------------|
-| MAIN **caída rápida** (rechaza) | `toxiproxy-cli toggle main` | `OpenAsync` falla al instante → cae a LOCAL sin espera. **No** reproduce la ventana de B. |
-| MAIN **colgada 8 s** (ventana de B) | `toxiproxy-cli toxic add -t timeout -a timeout=0 -n hang main` | la conexión se abre pero nunca responde → el POS espera el `ConnectionTimeout=8` y cae a LOCAL. **Esta es la condición de 16608.** |
-| Alternativa sin Toxiproxy | MAIN = `Server=10.255.255.1;...` en `config.json` | IP no enrutable → 8 s por conexión. Para volver hay que reconfigurar. |
-| Reconectar MAIN | `toxiproxy-cli toxic remove -n hang main` (o `toggle main` de nuevo) | siguiente operación va a MAIN |
-| Disparar sync | `Ctrl+Alt+F9` o esperar 1 min (`sync.push_timer_minutes=1`) | push + pull; resultado en `C:\TruckScaleLogs\log_<hoy>.txt` |
-| Latencia en LOCAL (ensancha V) | `toxiproxy-cli toxic add -t latency -a latency=2000 -n slow local` | cada comando a LOCAL tarda +2 s; los `INSERT` de pago dejan ventanas de segundos |
-| Latencia en MAIN (ensancha B online) | `toxiproxy-cli toxic add -t latency -a latency=1500 -n slow main` | ventas online con varios segundos entre el inicio y el `INSERT` de pagos |
-| Quitar latencia | `toxiproxy-cli toxic remove -n slow local` | — |
-
----
-
-## 5. Escenarios con mínimos pasos manuales
-
-Consultas de verificación (correr en la base donde se guardó la venta: 3316 MAIN o 3326 LOCAL):
-```sql
--- Ventas cerradas sin pago (bug B)
-SELECT s.sale_uid, s.total, s.amount_paid FROM sales s
-LEFT JOIN payments p ON p.sale_uid = s.sale_uid
-WHERE s.sale_status_id = 2 AND p.payment_uid IS NULL;
-
--- amount_paid distinto de la suma de pagos (bug B/V)
-SELECT s.sale_uid, s.amount_paid, COALESCE(SUM(p.amount),0) AS pagos
-FROM sales s LEFT JOIN payments p ON p.sale_uid = s.sale_uid
-GROUP BY s.sale_uid HAVING s.amount_paid <> pagos;
-
--- Pago Business sin consumo de crédito (bug V): comparar updated_at
-SELECT c.customer_id, c.updated_at, c.current_balance, c.available_credit FROM customer_credit c WHERE c.customer_id IN (<ids de prueba>);
-
--- Identidad (bug A)
-SELECT s.sale_uid, s.customer_id, c.account_number AS cuenta_de_customer_id, d.account_number AS cuenta_en_driver_info
-FROM sales s LEFT JOIN customers c ON c.id_customer = s.customer_id
-LEFT JOIN sale_driver_info d ON d.sale_uid = s.sale_uid
-WHERE NOT (s.customer_id <=> (SELECT id_customer FROM customers WHERE account_number = d.account_number));
+### 3.5 Config del POS
+```powershell
+.\set-config.ps1
 ```
+Escribe MAIN → `127.0.0.1:3317` y LOCAL → `127.0.0.1:3327` (ambos por Toxiproxy), cifradas con DPAPI
+(`CurrentUser`, igual que `Security/CryptoHelper.cs`). **Ejecútalo con el mismo usuario de Windows que abrirá
+el POS**; un `config.json` cifrado por otro usuario o en otra PC no se puede descifrar.
+Alternativa manual: `Ctrl+Alt+F8` en el login (contraseña admin en `LoginWindow.xaml.cs:25`).
 
-### B-2 local — venta offline sin pago (reproduce 16608)
-1. `toxiproxy-cli toxic add -t timeout -a timeout=0 -n hang main`
-2. En el POS: OK (peso simulado estable) → registrar chofer → WEIGH → cliente POSTPAID → *Business Account* → *Done*.
-3. **Durante los 8 s** en que el POS espera a MAIN: pulsar *Cash* (o cambiar el combo a "Select Business Account").
-4. Esperado con el código actual (`stable`): la venta queda en **LOCAL (3326)** con `amount_paid=12`, **sin
-   filas en `payments`**, `customer_credit` del cliente sin cambios; aparece en la primera consulta.
-5. `toxiproxy-cli toxic remove -n hang main`, `Ctrl+Alt+F9`: la venta sube a MAIN sin pago.
-
-### B-1 local — online con latencia
-1. `toxiproxy-cli toxic add -t latency -a latency=1500 -n slow main`
-2. Mismos pasos; tras *Done* pulsar *Cash* dentro de los ~5-10 s siguientes.
-3. Esperado: igual que B-2 pero en **MAIN (3316)**.
-
-### V local — pago Business sin validar ni consumir crédito
-1. `toxiproxy-cli toxic add -t latency -a latency=2000 -n slow local` y MAIN colgada (hang) para forzar LOCAL.
-2. Cliente PREPAID con saldo → *Business Account* → *Done*.
-3. Esperar a que termine la espera de MAIN (8 s) y, **en los ~2-4 s siguientes** (mientras se insertan
-   venta, línea y pago), pulsar *Cash*.
-4. Esperado: fila en `payments` (method 3) **presente** y `customer_credit` **sin cambios**. Con el gancho
-   Debug (§6) no hace falta el paso 3.
-
-### F0-1 / F0-2 / F0-3 / F0-4 (Fase 0)
-Igual que en `docs/bugs-pos.md` (rama `fix/logging-visibility`), con estas equivalencias:
-- "desconectar MAIN" = `toxiproxy-cli toggle main`; "reconectar" = `toggle main` otra vez.
-- "esperar un ciclo del timer" = 1 min o `Ctrl+Alt+F9`.
-- Para ver `PULL_ERROR` a propósito: renombrar una columna en la copia LOCAL de una tabla del pull (p. ej.
-  `ALTER TABLE users RENAME COLUMN full_name TO full_name_x;` **solo en 3326**) y esperar un ciclo. El log
-  debe decir `step=users` y `Unknown column`.
+### 3.6 Primer arranque
+```powershell
+.\run-pos.ps1
+```
+Login `dev` / `dev123`, abrir caja (cualquier monto). Debe verse "Scale: Simulated": el puerto `COM99` no
+existe y el POS arranca su simulador de báscula (`StartSimulatedReader`, ya existente en el código).
 
 ---
 
-## 6. Lo que se propone construir (pendiente de aprobación)
+## 4. Condiciones de red (`net.ps1`)
 
-| # | Qué | Dónde | Toca código de la app | Para qué |
-|---|-----|-------|-----------------------|----------|
-| 1 | Scripts PowerShell: `up.ps1` (contenedores + proxies), `import.ps1`, `main-hang.ps1`/`main-ok.ps1`, `latency.ps1 <ms> <main\|local>`, `check.sql` (consultas de §5) | `tools/test-env/` | no | reducir los pasos manuales a 1-2 comandos |
-| 2 | Gancho de fallas **solo Debug** (`#if DEBUG` + `TS_FAULT`) en `SaveSaleAsync`: `clear-pagos-after-open`, `clear-pagos-during-payment-insert`, `change-customer-after-open` | `MainWindow.xaml.cs` | sí, pero excluido del build Release | reproducir B, V y A de forma determinista, antes y después del fix |
-| 3 | Proyecto `TruckScale.Pos.Tests` (xUnit) con pruebas de invariantes contra la MariaDB de Docker | nuevo proyecto | no (prueba la clase que extraiga la Fase 1) | verificación automática del fix |
+| Comando | Efecto en el POS |
+|---------|------------------|
+| `.\net.ps1 main ok` | normal |
+| `.\net.ps1 main down` | conexión **rechazada**: el POS falla **al instante** y cae a LOCAL. No abre la ventana de B. |
+| `.\net.ps1 main hang` | conexión aceptada pero sin respuesta: el POS espera **8 s** (`ConnectionTimeout=8` forzado en `MainWindow.xaml.cs:865`) y cae a LOCAL. **Es la condición del ticket 16608.** |
+| `.\net.ps1 main slow -Ms 1500` | +1.5 s por respuesta: ventas online lentas (ensancha B online) |
+| `.\net.ps1 local slow -Ms 2000` | +2 s por respuesta en LOCAL (ensancha V) |
+| `.\net.ps1 main status` | estado actual |
+| Disparar sync | `Ctrl+Alt+F9` en el POS, o esperar 1 min |
 
-Decisión que necesito: si apruebas el #2, la Fase 1 debería salir de una rama que ya tenga el gancho
-(para comparar el mismo escenario antes/después). Propuesta: `tools/test-harness` → se mergea a `stable`
-(el gancho no existe en Release) y `fix/save-sale-snapshot` sale de ahí.
+Notas:
+- Con `hang`, **toda** operación contra MAIN tarda 8 s (cargar clientes, re-evaluar crédito). Prepara la
+  venta con `main ok` y activa `hang` justo antes de pulsar *Done*.
+- El POS reutiliza conexiones del pool. Si tras activar `hang` la primera operación no tarda ~8 s,
+  repítela: la segunda ya abre conexión nueva.
+
+---
+
+## 5. Gancho de fallas (solo Debug) — reproducción determinista de B y V
+
+### 5.1 Doble candado
+1. **Compilación:** el código está dentro de `#if DEBUG` (`MainWindow.xaml.cs`, métodos `AnnounceFaultMode` y
+   `FaultPoint`, y dos llamadas en `SaveSaleAsync`). En **Release no existe**: verificado que la cadena
+   `TS_FAULT` no aparece en `bin\Release\...\TruckScale.Pos.dll`. El build de la báscula es Release.
+2. **Variable de entorno `TS_FAULT` del proceso.** No hay bandera en `config.json`, en `settings` ni en
+   ningún archivo: sin la variable, el build Debug se comporta normal. `run-pos.ps1` la pasa **solo al
+   proceso del POS** (`ProcessStartInfo`), no a la consola ni al sistema.
+- Cuando está activo, el título de la ventana dice `[TS_FAULT=B — BUILD DE PRUEBAS]` y el log registra
+  `[FAULT] … ACTIVE` al abrir y `[FAULT] … _pagos 1 -> 0` al disparar.
+- **Nunca** definas `TS_FAULT` a nivel de usuario o sistema (`setx`).
+
+### 5.2 Qué hace
+En el punto indicado ejecuta lo mismo que la UI cuando una re-evaluación de crédito en vuelo devuelve
+"no permitido": `UpdatePaymentMethodsVisibility(false)`, que **vacía `_pagos`** si está seleccionado Business
+(`MainWindow.xaml.cs` 6722-6729 en producción). No inventa un camino: fuerza el orden de eventos real.
+
+| `TS_FAULT` | Punto | Reproduce |
+|------------|-------|-----------|
+| `B` | después de abrir la conexión, antes de la transacción (entre la lectura de `recibido` y la relectura de `_pagos`) | venta COMPLETED, `amount_paid = total`, **sin filas en `payments`**, crédito sin tocar (16608, 10270, 13875) |
+| `V` | después de insertar los pagos, antes de calcular `businessAmount` | pago Business **insertado**, validación de cliente y consumo de crédito **saltados** |
+
+Si la venta no es Business, el gancho no hace nada y lo registra (`not applicable`).
+
+---
+
+## 6. Escenarios
+
+Antes de cada corrida: `.\seed-dev.ps1` (restablece saldos) y `.\net.ps1 main ok`.
+Pasos comunes de venta (**V0**): OK en el peso simulado estable → *Search driver* → capturar nombre y placas
+→ **en el mismo modal elegir el cliente TS TEST POSTPAID** → guardar chofer → *WEIGH* → método
+**Business Account**.
+(Elegir el cliente **antes** de guardar el chofer evita mezclar el bug A: si se elige después, el chequeo 4
+de `check.ps1` marcará la venta por identidad cruzada, que es justamente el bug A.)
+
+### B-auto — bug B con gancho (el principal; online)
+1. `.\run-pos.ps1 -Fault B`
+2. V0 → *Done* (cerrar la ventana de firma si aparece).
+3. `.\check.ps1 main`
+- **Esperado con el código actual (falla visible):**
+  - Chequeo 1 y 2: la venta aparece; `amount_paid = 12.00`, `suma_pagos = 0`.
+  - Chequeo 5: `customer_credit.updated_at` del 990001 **no** cambia; `current_balance` sigue en 0.
+  - Chequeo 6: `n_pagos = 0`.
+  - Log: `[FAULT] TS_FAULT=B at after-connection-open: … _pagos 1 -> 0`, `[SaveSale] Sale … saved in MAIN_DB`,
+    y **no** aparece `[CustomerCredit] Updating credit`.
+- **Esperado después del fix de Fase 1:** misma corrida, pero con 1 pago Business y crédito actualizado
+  (o la venta rechazada) — `check.ps1` sin filas en 1 y 2.
+
+### B-auto-offline — igual que 16608
+1. `.\run-pos.ps1 -Fault B`, V0.
+2. `.\net.ps1 main hang` → *Done* (tarda ~8 s).
+3. `.\check.ps1 local` — la venta está en **LOCAL** sin pagos.
+4. `.\net.ps1 main ok`, `Ctrl+Alt+F9` → `.\check.ps1 main` — la venta subió a MAIN sin pago.
+
+### B-manual — sin gancho (demuestra que la carrera es real)
+1. `.\run-pos.ps1` (sin falla), V0.
+2. `.\net.ps1 main hang` → *Done* → **durante los 8 s de espera** pulsar **Cash**.
+3. `.\check.ps1 local` — mismo resultado que B-auto-offline.
+
+### V-auto
+1. `.\run-pos.ps1 -Fault V`; V0 con **TS TEST PREPAID** (Business queda RECEIVED) → *Done*.
+2. `.\check.ps1 main`
+- **Esperado (falla visible):** chequeo 6: `n_pagos = 1` (`3:6:12.00`), pero chequeo 5: `available_credit` del
+  990002 sigue en **500.00** (no se descontó) y el log no tiene `[CustomerCredit] Updating credit`.
+
+### V-manual
+1. `.\run-pos.ps1`, V0 con PREPAID, `.\net.ps1 main hang`, `.\net.ps1 local slow -Ms 2000`.
+2. *Done*; cuando terminen los 8 s de MAIN, en los ~2-4 s siguientes pulsar **Cash**. Requiere práctica; por
+   eso existe V-auto.
+
+### F0-1 … F0-4 (Fase 0, sobre la rama `fix/logging-visibility`)
+Ver `docs/bugs-pos.md`. Equivalencias: "desconectar MAIN" = `.\net.ps1 main down`; "reconectar" =
+`.\net.ps1 main ok`; "ciclo del timer" = 1 min o `Ctrl+Alt+F9`. Para provocar `PULL_ERROR` a propósito:
+`ALTER TABLE users ADD COLUMN ts_extra INT NULL; UPDATE users SET ts_extra = 1 WHERE username = 'dev';`
+**solo en MAIN (3316)** (el `UPDATE` hace que la fila entre en el pull incremental) → el pull intenta insertar
+esa columna en LOCAL → `Unknown column` con `step=users`. Para deshacer: `ALTER TABLE users DROP COLUMN ts_extra;`.
+
+---
+
+## 7. Limitaciones conocidas
+- No se ha corrido todavía de punta a punta: requiere los dumps reales y Docker en ejecución.
+- `seed-dev.sql` asume columnas vistas en el código; puede requerir ajustes al esquema real.
+- La latencia/cuelgue es a nivel TCP; no simula errores SQL específicos.
+- El pad de firma Topaz no está: la ventana de firma se cierra/omite.
